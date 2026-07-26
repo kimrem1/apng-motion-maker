@@ -1,0 +1,17 @@
+# 저장소 안에서는 LF 로 통일한다. 체크아웃할 때는 각 OS 에 맞게 나간다.
+* text=auto eol=lf
+
+# 배치 파일은 CRLF 여야 안전하다. Windows 의 cmd 가 LF 만 있는 파일을
+# 줄 단위로 읽을 때 마지막 줄을 놓치는 경우가 있다.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# PowerShell 스크립트는 UTF-8 BOM 이 필요하다 (Windows PowerShell 5.1 이
+# BOM 없는 .ps1 을 ANSI 로 읽어 한글이 깨진다). 줄바꿈도 CRLF 로 둔다.
+*.ps1 text eol=crlf
+
+*.ico binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.gif binary

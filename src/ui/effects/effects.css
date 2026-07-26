@@ -1,0 +1,258 @@
+/*
+ * 이펙트 스택 스타일.
+ *
+ * 끈 이펙트는 색만 흐리게 하지 않는다. 왼쪽 표시선까지 함께 지운다. 상태를 색 하나로만
+ * 나타내면 색각 이상 사용자에게는 아무 표시도 없는 것과 같다.
+ * 배지 클래스(mm-badge, is-warn, is-cost-*)는 프리셋 갤러리와 공유한다. 같은 뜻의
+ * 표시는 앱 전체에서 같은 모양이어야 한다.
+ */
+
+.mm-fx-stack {
+  min-width: 0;
+}
+
+.mm-fx-empty,
+.mm-fx-note {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.mm-fx-note {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+}
+
+/* --------------------------------------------------------------------------
+ * 목록
+ * ------------------------------------------------------------------------ */
+
+.mm-fx-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mm-fx-row {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+/* 켜져 있음을 왼쪽 선으로도 나타낸다. 체크박스 하나에만 기대지 않는다. */
+.mm-fx-row::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.mm-fx-row.is-off::before {
+  background: transparent;
+}
+
+.mm-fx-row.is-off .mm-fx-name-text {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.mm-fx-row.is-open {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.mm-fx-row.is-dragging-row {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1);
+  opacity: 0.9;
+}
+
+/* --------------------------------------------------------------------------
+ * 머리줄
+ * ------------------------------------------------------------------------ */
+
+.mm-fx-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-3);
+}
+
+.mm-fx-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 24px;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+}
+
+.mm-fx-grip:active {
+  cursor: grabbing;
+}
+
+.mm-fx-name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 2px var(--sp-1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.mm-fx-name:hover {
+  background: var(--surface-hover);
+}
+
+.mm-fx-name svg {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+
+.mm-fx-name-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mm-fx-badges {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.mm-fx-order {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0;
+}
+
+/* --------------------------------------------------------------------------
+ * 펼친 몸통
+ * ------------------------------------------------------------------------ */
+
+.mm-fx-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.mm-fx-hint {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.mm-fx-param {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+
+.mm-fx-param .mm-field-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mm-fx-param-control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mm-fx-param .mm-field-hint {
+  grid-column: 1 / -1;
+}
+
+.mm-fx-param .mm-input,
+.mm-fx-param .mm-select,
+.mm-fx-param .mm-input-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.mm-fx-range-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.mm-fx-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.mm-fx-range-value {
+  flex: 0 0 auto;
+  min-width: 40px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.mm-fx-color-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mm-fx-color-text {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* --------------------------------------------------------------------------
+ * 추가 메뉴
+ * ------------------------------------------------------------------------ */
+
+.mm-fx-add {
+  display: flex;
+}
+
+.mm-fx-add .mm-select {
+  width: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-fx-row,
+  .mm-fx-name svg {
+    transition: none;
+  }
+}

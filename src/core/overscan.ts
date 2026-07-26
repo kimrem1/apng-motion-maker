@@ -1,0 +1,513 @@
+/**
+ * 오버스캔 / 세이프존 솔버.
+ *
+ * 문제: 이미지를 움직이거나 돌리면 캔버스 모서리가 빈다. 500px 캔버스에서 45도만 돌려도
+ * 네 모서리가 전부 투명해진다(실측 확인). 이걸 막으려면 배율을 미리 키워 둬야 한다.
+ *
+ * 핵심 정의: cover 기준 배율 s0 = max(W/Iw, H/Ih) 일 때가 k = 1.0 이고,
+ * 그 상태가 "이미지가 캔버스를 최소로 덮는" 지점이다. 그래서 안전 판정이
+ * "전 구간 k >= 1" 이라는 한 줄로 끝난다.
+ *
+ * 세 가지를 특히 조심한다.
+ *
+ * 1. **키프레임 값만 검사하면 틀린다.** back / spring / elastic 이징은 값이 [v0, v1] 밖으로
+ *    벗어난다. scale 1.0 -> 1.2 에 오버슈트를 걸면 중간에 1.25 까지 갔다 온다.
+ *    그래서 반드시 시간축 샘플링으로 최대화한다.
+ * 2. **솔버는 채널 결합이 끝난 뒤에 돈다**. 프리셋마다 따로 계산하면
+ *    합쳐졌을 때 이동량이 커져 다시 캔버스가 빈다.
+ * 3. **결과는 시간에 따라 변하지 않는 상수 배율이다.** 프레임마다 다른 보정을 걸면
+ *    사용자가 만든 속도감이 뭉개진다. 전 구간 최댓값 하나를 곱한다.
+ */
+
+import type { CompositionSnapshot, Layer, ResolvedTransform, SafeZonePolicy } from './types.ts'
+import { baseFitScale, buildLayerMatrix } from './transform.ts'
+import { resolveLayerTransformWithParents } from './evaluate.ts'
+import { modifierPeak } from '@/motions/generators.ts'
+
+/** 서브픽셀 리샘플링 때문에 s = s_min 정확히에서 가장자리에 반투명 1px 라인이 생긴다. */
+const DEFAULT_MARGIN = 0.005
+
+/** 균등 샘플 수. 키프레임 시각과 출력 프레임 시각을 여기에 합집합으로 더한다. */
+const DEFAULT_SAMPLES = 240
+
+/** 이 배율을 넘으면 원본이 부족하다고 보고 배경 채우기를 제안한다. */
+export const UPSCALE_SUGGEST_THRESHOLD = 1.05
+
+/**
+ * 담기 배율의 하한. 이보다 더 줄여야 하는 상황은 담기로 풀 수 없다.
+ *
+ * 이동이 캔버스 반쪽을 넘어가면 배율을 아무리 낮춰도 그림이 프레임 밖에 있다.
+ * 그때는 0 에 수렴하는 배율이 나오는데, 점으로 사라지는 것보다 조금 잘리는 편이
+ * 낫다. 여기서 끊고 진단으로 알린다.
+ */
+const CONTAIN_MIN_SCALE = 0.2
+
+export interface OverscanNeed {
+  /**
+   * 이 레이어에 어떤 솔버가 걸렸는가.
+   *   cover   캔버스를 덮어야 한다. correction >= 1
+   *   contain 원본이 잘리면 안 된다. correction <= 1
+   *   none    아무도 개입하지 않는다. correction === 1
+   */
+  mode: 'cover' | 'contain' | 'none'
+  /** 담기가 하한에 걸려 여전히 잘리는가. contain 일 때만 의미가 있다. */
+  clipped: boolean
+  /** 캔버스를 채우기 위해 필요한 절대 배율의 최댓값 */
+  sRequired: number
+  /** s0 대비 필요한 상대 배율. 1 이하면 솔버가 개입하지 않는다. */
+  kRequired: number
+  /** 현재 애니메이션이 실제로 만드는 최대 상대 배율 */
+  kMax: number
+  /** 트랙에 곱해야 하는 보정 계수. 1 이면 보정 없음. */
+  correction: number
+  /** 보정 후 실제 샘플링 배율. 1 을 넘으면 원본을 확대하게 된다. */
+  usedScale: number
+  /** 화질 손실 없이 가려면 필요한 원본 긴 변 픽셀 수 */
+  recommendedSourcePx: number
+  /** 원본이 부족한가 */
+  needsUpscale: boolean
+  /** 어느 시각에서 최댓값이 나왔는가. 타임라인 마커용. */
+  worstFrame: number
+}
+
+/**
+ * 한 시점의 변환에서 캔버스를 덮는 데 필요한 절대 배율.
+ *
+ * 회전이 있으면 이미지 로컬 좌표계로 넘어가 캔버스를 -θ 회전시킨 AABB 를 쓴다.
+ *   W' = |W cosθ| + |H sinθ|,  H' = |W sinθ| + |H cosθ|
+ *   tx' =  tx cosθ + ty sinθ,  ty' = -tx sinθ + ty cosθ
+ *   s_min = max( (W' + 2|tx'|) / Iw , (H' + 2|ty'|) / Ih )
+ *
+ * skew 는 정확한 해가 복잡하다. tan 만큼 폭이 늘어나는 것으로 보수적으로 근사한다.
+ * 과하게 잡히는 쪽이라 캔버스가 비는 일은 없다.
+ */
+export function requiredScaleAt(
+  canvasW: number,
+  canvasH: number,
+  imageW: number,
+  imageH: number,
+  t: ResolvedTransform,
+): number {
+  if (imageW <= 0 || imageH <= 0) return 1
+
+  const rad = (t.rotate * Math.PI) / 180
+  const c = Math.abs(Math.cos(rad))
+  const s = Math.abs(Math.sin(rad))
+
+  const wPrime = canvasW * c + canvasH * s
+  const hPrime = canvasW * s + canvasH * c
+
+  const cosR = Math.cos(rad)
+  const sinR = Math.sin(rad)
+  const txPrime = Math.abs(t.translateX * cosR + t.translateY * sinR)
+  const tyPrime = Math.abs(-t.translateX * sinR + t.translateY * cosR)
+
+  // skew 보정. 기울인 만큼 반대 축 길이가 밀려 들어온다.
+  const lim = 89.5
+  const kx = Math.abs(Math.tan((Math.min(lim, Math.abs(t.skewX)) * Math.PI) / 180))
+  const ky = Math.abs(Math.tan((Math.min(lim, Math.abs(t.skewY)) * Math.PI) / 180))
+
+  const needW = (wPrime + hPrime * kx + 2 * txPrime) / imageW
+  const needH = (hPrime + wPrime * ky + 2 * tyPrime) / imageH
+  return Math.max(needW, needH)
+}
+
+/** 이 레이어가 오버스캔 대상인가. */
+export function isSolverTarget(layer: Layer, policy: SafeZonePolicy): boolean {
+  if (policy === 'allowEmpty') return false
+  if (!layer.fillsCanvas) return false
+  if (!layer.visible) return false
+  // contain / none 은 애초에 캔버스를 채울 의도가 아니다.
+  return layer.fit === 'cover' || layer.fit === 'fill'
+}
+
+/**
+ * 이 레이어가 담기 대상인가.
+ *
+ * 채우기와 배타다. 채우기가 켜져 있으면 그쪽이 이긴다. 두 솔버가 같은 레이어에
+ * 걸리면 하나는 배율을 올리고 하나는 내려 결과가 정의되지 않는다.
+ */
+export function isContainTarget(layer: Layer): boolean {
+  if (!layer.keepInside) return false
+  if (layer.fillsCanvas) return false
+  if (!layer.visible) return false
+  // 일부러 화면 밖으로 나가는 모션에는 개입하지 않는다.
+  return !layer.motionExitsFrame
+}
+
+/**
+ * 검사할 시각 목록.
+ * 균등 샘플만 쓰면 오버슈트의 꼭짓점을 놓칠 수 있고, 키프레임만 쓰면 그 사이를 놓친다.
+ * 출력 프레임 시각도 넣어야 "실제로 저장될 그림"에서 비는 일이 없다.
+ */
+export function sampleFrames(doc: CompositionSnapshot, layer: Layer, count = DEFAULT_SAMPLES): number[] {
+  const last = Math.max(1, doc.timeline.durationFrames - 1)
+  const set = new Set<number>()
+
+  for (let i = 0; i <= count; i += 1) set.add((i / count) * last)
+  for (let f = 0; f <= last; f += 1) set.add(f)
+  for (const track of layer.tracks) {
+    for (const key of track.keys) {
+      set.add(key.f)
+      // 오버슈트 꼭짓점은 키 직후에 온다. 세그먼트 앞쪽을 촘촘히 본다.
+      set.add(key.f + 0.25)
+      set.add(key.f + 0.5)
+    }
+  }
+
+  return [...set].filter((f) => f >= 0 && f <= last).sort((a, b) => a - b)
+}
+
+/**
+ * 모디파이어(흔들림/자글자글)가 더할 수 있는 이론적 최대 변위.
+ *
+ * 실측하지 않고 상수로 더한다. 시드를 바꿀 때마다 배율이 달라지면
+ * 사용자 눈에는 이유 없이 그림 크기가 흔들리는 것으로 보인다.
+ */
+export function modifierHeadroom(layer: Layer): { translate: number; rotateDeg: number } {
+  let translate = 0
+  let rotateDeg = 0
+  for (const m of layer.modifiers) {
+    // 상한 계산은 생성기와 한 곳에서만 정의한다. 두 벌이 되면 언젠가 갈라지고,
+    // 그 결과는 "가끔 캔버스가 비는" 재현 불가 버그다.
+    const peak = modifierPeak(m)
+    if (m.target === 'translateX' || m.target === 'translateY') translate = Math.max(translate, peak)
+    else if (m.target === 'rotate') rotateDeg = Math.max(rotateDeg, peak)
+  }
+  return { translate, rotateDeg }
+}
+
+export interface SolveOptions {
+  policy?: SafeZonePolicy
+  marginRatio?: number
+  sampleCount?: number
+}
+
+/**
+ * 한 시점에서 이미지가 캔버스 안에 들어가려면 배율에 얼마를 곱해야 하는가.
+ * 1 이상이면 이미 들어가 있다는 뜻이다.
+ *
+ * 보정은 배율 채널에만 곱한다. 즉 **형상은 줄어들고 위치는 그대로다.** 그래서
+ * 모서리 좌표를 배율 c 의 함수로 쓰면 corner(c) = pos + c * D 라는 1차식이 되고,
+ * 축마다 부등식 두 개를 풀면 c 가 닫힌 형태로 나온다. 이분 탐색이 필요 없다.
+ *
+ * pos 와 D 를 손으로 유도하지 않는다. 배율만 0 으로 둔 매트릭스를 한 번 더 만들면
+ * 형상이 한 점으로 collapse 되어 이동 성분만 남는다. 그것이 pos 다. 회전 / 기울임 /
+ * 앵커 / fit 기준 배율을 여기서 다시 계산하지 않으므로 렌더러와 어긋날 수 없다.
+ */
+function containScaleAt(
+  canvasW: number,
+  canvasH: number,
+  imageW: number,
+  imageH: number,
+  t: ResolvedTransform,
+): number {
+  const full = buildLayerMatrix(t, 'none', canvasW, canvasH, imageW, imageH)
+  const origin = buildLayerMatrix(
+    { ...t, scaleX: 0, scaleY: 0 },
+    'none',
+    canvasW,
+    canvasH,
+    imageW,
+    imageH,
+  )
+  const posX = origin[6]!
+  const posY = origin[7]!
+
+  const halfW = canvasW / 2
+  const halfH = canvasH / 2
+
+  let c = Infinity
+  // 유닛 사각형의 네 꼭짓점. buildLayerMatrix 의 입력 좌표계와 같다.
+  const corners: [number, number][] = [
+    [0, 0],
+    [1, 0],
+    [0, 1],
+    [1, 1],
+  ]
+  for (const [u, v] of corners) {
+    const dx = full[0]! * u + full[3]! * v + full[6]! - posX
+    const dy = full[1]! * u + full[4]! * v + full[7]! - posY
+
+    // posX + c*dx <= halfW  그리고  posX + c*dx >= -halfW
+    if (dx > 1e-9) c = Math.min(c, (halfW - posX) / dx)
+    else if (dx < -1e-9) c = Math.min(c, (-halfW - posX) / dx)
+
+    if (dy > 1e-9) c = Math.min(c, (halfH - posY) / dy)
+    else if (dy < -1e-9) c = Math.min(c, (-halfH - posY) / dy)
+  }
+
+  // 중심이 이미 프레임 밖이면 어떤 양수 배율로도 담기지 않는다.
+  if (!Number.isFinite(c) || c < 0) return 0
+  return c
+}
+
+export interface ContainNeed {
+  /** 배율 채널에 곱할 값. 1 이면 손대지 않는다. */
+  correction: number
+  /** 하한에 걸려 여전히 잘리는가 */
+  clipped: boolean
+  /** 가장 많이 벗어난 시각. 타임라인 마커용. */
+  worstFrame: number
+}
+
+/**
+ * 레이어 하나가 전 구간에서 프레임 안에 들어가는 배율을 푼다.
+ *
+ * 오버스캔과 같은 이유로 키프레임 값만 보면 안 된다. back / spring 이징은 값이
+ * [v0, v1] 밖으로 넘어가고, 흔들림 모디파이어는 키프레임에 아예 없다.
+ */
+export function solveLayerContain(
+  doc: CompositionSnapshot,
+  layer: Layer,
+  imageW: number,
+  imageH: number,
+  options: SolveOptions = {},
+): ContainNeed {
+  const idle: ContainNeed = { correction: 1, clipped: false, worstFrame: 0 }
+  if (imageW <= 0 || imageH <= 0) return idle
+
+  const margin = options.marginRatio ?? doc.safeZone.marginRatio ?? DEFAULT_MARGIN
+  const canvasW = doc.canvas.w
+  const canvasH = doc.canvas.h
+
+  // fit 기준 배율은 담기 계산에도 그대로 들어가야 한다. containScaleAt 은 fit 을
+  // 'none' 으로 부르므로 여기서 미리 곱해 넘긴다.
+  const base = baseFitScale(layer.fit, canvasW, canvasH, imageW, imageH)
+  const frames = sampleFrames(doc, layer, options.sampleCount ?? doc.safeZone.sampleCount)
+
+  let worst = Infinity
+  let worstFrame = 0
+
+  /*
+   * 채우기 솔버와 달리 모디파이어 헤드룸을 더하지 않는다.
+   *
+   * resolveLayerTransformWithParents 가 돌려주는 변환에는 그 프레임의 흔들림 값이
+   * **이미 들어 있다.** 거기에 이론적 최대 진폭을 또 더하면 40px 흔들림이 80px 로
+   * 계산되어 필요한 것보다 훨씬 작게 담긴다. 채우기 쪽에서는 과하게 잡아도 이미지가
+   * 조금 커질 뿐이라 눈에 띄지 않지만, 담기에서는 그림이 눈에 띄게 쪼그라든다.
+   *
+   * 헤드룸 없이도 정확한 이유는 표본이 실제로 그려질 프레임을 전부 포함하기
+   * 때문이다. sampleFrames 는 0 부터 durationFrames-1 까지 정수 프레임을 모두 넣고,
+   * 렌더러는 secToFrame 으로 정수 프레임만 그린다. 즉 여기서 재는 값이 곧 화면에
+   * 나올 값이다.
+   */
+  for (const f of frames) {
+    const t = resolveLayerTransformWithParents(doc, layer, f)
+    const probe: ResolvedTransform = {
+      ...t,
+      scaleX: base.sx * t.scaleX,
+      scaleY: base.sy * t.scaleY,
+    }
+    const c = containScaleAt(canvasW, canvasH, imageW, imageH, probe)
+    if (c < worst) {
+      worst = c
+      worstFrame = f
+    }
+  }
+
+  /*
+   * 딱 맞게 들어가는 경우를 "이미 들어간다" 로 친다.
+   *
+   * cos(90도) 는 0 이 아니라 6.1e-17 이다. 그래서 90도로 돌린 정사각형의 대각선이
+   * 1 을 아주 미세하게 넘고, 엄격하게 비교하면 담기가 발동해 마진만큼 0.5% 를
+   * 깎는다. 아무것도 넘치지 않는 그림이 이유 없이 작아지는 것으로 보인다.
+   */
+  if (!Number.isFinite(worst) || worst >= 1 - 1e-6) return idle
+
+  // worst 는 "딱 맞게 들어가는" 배율이다. 서브픽셀 리샘플링이 가장자리 1px 를
+  // 깎을 수 있으므로 마진만큼 더 안으로 넣는다.
+  const wanted = worst * (1 - margin)
+  const correction = Math.max(CONTAIN_MIN_SCALE, wanted)
+  return { correction, clipped: correction > wanted + 1e-9, worstFrame }
+}
+
+/**
+ * 레이어 하나의 오버스캔 요구량을 푼다.
+ * 반환값의 correction 을 scale 채널에 곱하면 전 구간에서 캔버스가 차게 된다.
+ */
+export function solveLayerOverscan(
+  doc: CompositionSnapshot,
+  layer: Layer,
+  imageW: number,
+  imageH: number,
+  options: SolveOptions = {},
+): OverscanNeed {
+  const policy = options.policy ?? doc.safeZone.policy
+  const margin = options.marginRatio ?? doc.safeZone.marginRatio ?? DEFAULT_MARGIN
+  const canvasW = doc.canvas.w
+  const canvasH = doc.canvas.h
+
+  const base = baseFitScale(layer.fit, canvasW, canvasH, imageW, imageH)
+  const s0 = Math.max(base.sx, base.sy)
+
+  const idle: OverscanNeed = {
+    mode: 'none',
+    clipped: false,
+    sRequired: s0,
+    kRequired: 1,
+    kMax: 1,
+    correction: 1,
+    usedScale: s0,
+    recommendedSourcePx: Math.max(canvasW, canvasH),
+    needsUpscale: false,
+    worstFrame: 0,
+  }
+
+  if (!isSolverTarget(layer, policy) || imageW <= 0 || imageH <= 0) return idle
+
+  const headroom = modifierHeadroom(layer)
+  const frames = sampleFrames(doc, layer, options.sampleCount ?? doc.safeZone.sampleCount)
+
+  let sRequired = 0
+  let kMax = 0
+  let worstFrame = 0
+  /**
+   * 프레임마다 "필요 배율 / 실제 배율" 을 재고 그 최댓값을 쓴다.
+   *
+   * 전역 최댓값끼리 나누면(sRequired / kMax) 틀린다. 필요 배율이 가장 큰 프레임과
+   * 실제 배율이 가장 큰 프레임이 다르면 보정이 모자란다. 예를 들어 숨쉬기 흔들림은
+   * 배율이 1 아래로 내려가는 구간이 있는데, 줌이 함께 있으면 kMax 가 커서
+   * 보정이 1 로 떨어지고 정작 축소 구간에서 가장자리가 빈다.
+   */
+  let maxRatio = 1
+
+  for (const f of frames) {
+    // 부모의 이동까지 반영한 유효 변환을 써야 한다.
+    // 자기 트랙만 보면 패럴랙스 레이어가 실제보다 덜 움직이는 것으로 계산된다.
+    const t = resolveLayerTransformWithParents(doc, layer, f)
+
+    // 모디파이어 여유분을 최악으로 더한다.
+    const probe: ResolvedTransform = {
+      ...t,
+      translateX: Math.abs(t.translateX) + headroom.translate,
+      translateY: Math.abs(t.translateY) + headroom.translate,
+      rotate: Math.abs(t.rotate) + headroom.rotateDeg,
+    }
+
+    const need = requiredScaleAt(canvasW, canvasH, imageW, imageH, probe)
+    if (need > sRequired) {
+      sRequired = need
+      worstFrame = f
+    }
+    // 실제 배율은 축별로 다를 수 있다. 작은 쪽이 빈 곳을 만든다.
+    const actual = Math.min(base.sx * t.scaleX, base.sy * t.scaleY)
+    const k = s0 > 0 ? actual / s0 : 1
+    if (k > kMax) kMax = k
+
+    if (actual > 1e-9) {
+      const ratio = need / actual
+      if (ratio > maxRatio) maxRatio = ratio
+    }
+  }
+
+  if (sRequired <= 0) return idle
+
+  const kRequired = (sRequired / s0) * (1 + margin)
+  // 사용자가 만든 상대 비율은 보존하고 절대 배율만 위로 민다.
+  // 프레임별 최악 비율을 쓰므로 축소 구간이 있는 프리셋도 전 구간이 찬다.
+  const correction = Math.max(1, maxRatio * (1 + margin))
+  const usedScale = sRequired * (1 + margin) * Math.max(1, correction / Math.max(kMax, 1e-6))
+  const longSide = Math.max(canvasW, canvasH)
+
+  return {
+    mode: 'cover',
+    clipped: false,
+    sRequired,
+    kRequired,
+    kMax,
+    correction,
+    usedScale,
+    recommendedSourcePx: Math.ceil(longSide * kRequired),
+    needsUpscale: usedScale > 1,
+    worstFrame,
+  }
+}
+
+export type OverscanMap = ReadonlyMap<string, OverscanNeed>
+
+/**
+ * 컴포지션 전체를 푼다. 결과는 문서가 바뀔 때만 다시 계산하면 된다.
+ * 240샘플 x 레이어 수 만큼 트랙을 평가하므로 프레임마다 부르면 안 된다.
+ *
+ * 레이어마다 솔버는 하나만 돈다. 채우기가 켜져 있으면 오버스캔, 담기가 켜져 있으면
+ * 담기다. 둘 다 켜는 것은 스토어가 막는다.
+ */
+export function solveOverscan(
+  doc: CompositionSnapshot,
+  imageSize: (assetId: string) => { width: number; height: number } | undefined,
+  options: SolveOptions = {},
+): OverscanMap {
+  const out = new Map<string, OverscanNeed>()
+  for (const layer of doc.layers) {
+    if (!layer.assetId) continue
+    const size = imageSize(layer.assetId)
+    if (!size) continue
+
+    const cover = solveLayerOverscan(doc, layer, size.width, size.height, options)
+    if (cover.mode === 'cover' || !isContainTarget(layer)) {
+      out.set(layer.id, cover)
+      continue
+    }
+
+    const contain = solveLayerContain(doc, layer, size.width, size.height, options)
+
+    /*
+     * 프리셋이 세기 최대치로 재 둔 기준값이 있으면 그쪽이 이긴다.
+     *
+     * 지금 세기로 푼 값을 그대로 쓰면 모션의 극단이 항상 프레임에 딱 맞아, 세기를
+     * 올려도 그림이 훑는 범위가 그대로다. 기준값을 쓰면 그림 크기가 세기와 무관하게
+     * 고정되고 움직임의 크기만 달라진다.
+     *
+     * 그래도 둘 중 작은 쪽을 쓴다. PRO 에서 키프레임을 프리셋의 최대치보다 크게
+     * 손보면 기준값만으로는 잘림을 못 막는다.
+     */
+    const reference = layer.containScale
+    const correction = Math.min(
+      contain.correction,
+      typeof reference === 'number' && reference > 0 ? reference : 1,
+    )
+    if (correction >= 1) {
+      out.set(layer.id, cover)
+      continue
+    }
+    out.set(layer.id, {
+      ...cover,
+      mode: 'contain',
+      clipped: contain.clipped,
+      correction,
+      worstFrame: contain.worstFrame,
+    })
+  }
+  return out
+}
+
+/**
+ * 사용자에게 보여줄 진단.
+ * 원칙은 하나다. 원인이 아니라 처방을 말한다.
+ * "실제 배율 1.2 -> 1.34 (자동 보정됨)" 같은 문구는 비개발자에게 의미가 없다.
+ */
+export interface OverscanDiagnosis {
+  level: 'ok' | 'notice' | 'warn'
+  message: string
+  /** 배경 채우기를 제안할 상황인가 */
+  suggestBackgroundFill: boolean
+}
+
+export function diagnose(need: OverscanNeed, sourceLongSide: number): OverscanDiagnosis {
+  if (!need.needsUpscale) {
+    return { level: 'ok', message: '', suggestBackgroundFill: false }
+  }
+  if (need.usedScale > UPSCALE_SUGGEST_THRESHOLD) {
+    return {
+      level: 'warn',
+      message: `이 움직임을 쓰려면 원본이 ${need.recommendedSourcePx}px 이상이면 좋습니다. 지금 원본은 ${sourceLongSide}px 이라 살짝 흐려질 수 있어요.`,
+      suggestBackgroundFill: true,
+    }
+  }
+  return {
+    level: 'notice',
+    message: '가장자리가 아주 살짝 흐려질 수 있어요.',
+    suggestBackgroundFill: false,
+  }
+}

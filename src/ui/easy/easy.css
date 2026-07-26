@@ -1,0 +1,437 @@
+/*
+ * EASY 모드 스타일.
+ *
+ * EASY 는 "덜 보여주는 PRO" 가 아니라 **다른 화면**이다. 타임라인도 인스펙터도 없고,
+ * 화면의 세로 절반 이상을 결과물이 차지한다. 그래서 셸 그리드를 상속하지 않고
+ * 이 파일 안에서 3열을 직접 만든다.
+ *
+ * 색과 간격은 tokens.css 의 토큰만 쓴다. 여기서 새 색을 정의하지 않는다.
+ */
+
+/* --------------------------------------------------------------------------
+ * 셸
+ * ------------------------------------------------------------------------ */
+
+.mm-easy {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr) 268px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'head head head'
+    'left center right';
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* 온보딩(STEP 0)은 화면 전체를 쓴다. 옆 패널이 보이면 무엇을 먼저 할지 흐려진다. */
+.mm-easy.is-onboarding {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'center';
+}
+
+.mm-easy-head {
+  grid-area: head;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.mm-easy-head-spacer {
+  flex: 1;
+}
+
+.mm-easy-left {
+  grid-area: left;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--sp-4);
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/*
+ * 세기/속도 노브는 오른쪽 [빠른 설정] 이 소유한다.
+ * PresetGallery 는 PRO 와 공유하는 컴포넌트라 자기 노브를 항상 그린다. 같은 값을 두 번
+ * 보여주면 사용자는 둘이 다른 것이라고 읽는다. 컴포넌트를 고치지 않고 여기서만 감춘다.
+ */
+.mm-easy-left .mm-preset-knobs {
+  display: none;
+}
+
+.mm-easy-center {
+  grid-area: center;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mm-easy-stage {
+  flex: 1;
+  min-height: 0;
+}
+
+.mm-easy-right {
+  grid-area: right;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--sp-4);
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* --------------------------------------------------------------------------
+ * 중앙 - 캔버스 아래 조작 줄
+ * ------------------------------------------------------------------------ */
+
+.mm-easy-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.mm-easy-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.mm-easy-check-hint {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.mm-easy-export-dock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* --------------------------------------------------------------------------
+ * 오른쪽 - 빠른 설정
+ * ------------------------------------------------------------------------ */
+
+.mm-easy-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.mm-easy-group > legend {
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+}
+
+.mm-easy-slider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.mm-easy-slider:disabled {
+  opacity: 0.45;
+}
+
+/* 슬라이더 양 끝 라벨. 숫자 대신 말로 읽힌다. */
+.mm-easy-ends {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.mm-easy-radio {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.mm-easy-radio input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.mm-easy-link {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.mm-easy-link:hover {
+  color: var(--text);
+}
+
+.mm-easy-pro {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.mm-easy-note {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.mm-easy-banner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.mm-easy-status {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+/* --------------------------------------------------------------------------
+ * 온보딩 STEP 0
+ * ------------------------------------------------------------------------ */
+
+.mm-onb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-6);
+  height: 100%;
+  min-height: 0;
+  padding: var(--sp-6);
+  overflow-y: auto;
+  text-align: center;
+}
+
+.mm-onb-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  width: min(520px, 100%);
+  padding: var(--sp-6);
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.mm-onb-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.mm-onb-or {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+}
+
+.mm-onb-pick {
+  min-height: 40px;
+  padding: 0 var(--sp-6);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.mm-onb-formats {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.mm-onb-kbd {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.mm-onb-samples {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.mm-onb-samples-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-4);
+}
+
+.mm-onb-sample {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 108px;
+  padding: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard);
+}
+
+.mm-onb-sample:hover:not(:disabled) {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.mm-onb-sample:disabled {
+  opacity: 0.5;
+}
+
+/* 샘플은 투명 배경 이미지다. 체커보드 위에 올려야 그 사실이 바로 보인다. */
+.mm-onb-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--r-md);
+}
+
+.mm-onb-privacy {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+.mm-onb-privacy svg {
+  flex: none;
+  color: var(--text-faint);
+}
+
+/* --------------------------------------------------------------------------
+ * 빠른 내보내기
+ * ------------------------------------------------------------------------ */
+
+.mm-qexp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mm-qexp-btn {
+  position: relative;
+  overflow: hidden;
+  min-height: 44px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+/* 채움 막대는 커스텀 프로퍼티가 아니라 실제 요소 폭으로 그린다. */
+.mm-qexp-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  transition: width var(--dur-fast) linear;
+}
+
+.mm-qexp-btn:disabled.is-busy {
+  opacity: 1;
+}
+
+.mm-qexp-label {
+  position: relative;
+  z-index: 1;
+}
+
+.mm-qexp-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.mm-qexp-facts {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+ * 반응형
+ * ------------------------------------------------------------------------ */
+
+@media (max-width: 1023px) {
+  .mm-easy {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(280px, 1fr) auto auto;
+    grid-template-areas:
+      'head'
+      'center'
+      'left'
+      'right';
+    height: auto;
+    min-height: 100%;
+  }
+
+  .mm-easy-left,
+  .mm-easy-right {
+    border-right: 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    overflow-y: visible;
+  }
+
+  .mm-easy-pro {
+    margin-top: 0;
+  }
+}

@@ -1,0 +1,60 @@
+name: Deploy to GitHub Pages
+
+# main 에 밀어 넣으면 자동으로 빌드해서 배포한다.
+# 수동으로 돌리고 싶으면 Actions 탭에서 Run workflow 를 누른다.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 배포는 한 번에 하나만. 진행 중인 것을 취소하지 않는다.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 소스 내려받기
+        uses: actions/checkout@v4
+
+      - name: Node 준비
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: 테스트
+        run: npm test
+
+      - name: 빌드
+        run: npm run build
+        # GitHub Pages 는 https://<사용자>.github.io/<저장소>/ 로 서비스한다.
+        # 저장소 이름을 여기서 넣어 주므로 vite.config.ts 에 이름을 박아 둘 필요가 없다.
+        # 저장소 이름을 바꿔도 이 워크플로가 알아서 따라간다.
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}/
+
+      - name: Pages 설정
+        uses: actions/configure-pages@v5
+
+      - name: 결과물 업로드
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: 배포
+        id: deployment
+        uses: actions/deploy-pages@v5

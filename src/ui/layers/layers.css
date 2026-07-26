@@ -1,0 +1,335 @@
+/*
+ * 레이어 시스템 UI 전용 스타일.
+ *
+ * tokens.css / app.css 는 건드리지 않는다. 여기 클래스는 전부 .mm-lyr- 접두어를 쓴다.
+ * app.css 에 이미 .mm-layer-* 가 있어서(구 SourcePanel) 이름이 겹치면 서로를 덮어쓴다.
+ *
+ * 규칙 두 가지를 특히 지킨다.
+ *   1. 드래그 중인 행은 트랜지션 0. 손가락보다 늦게 따라오면 싸구려다.
+ *   2. 선택 상태를 색 하나로만 표시하지 않는다. 테두리 + 배경 + 좌측 마커를 같이 쓴다.
+ *      색각 이상이나 저대비 화면에서도 선택이 보여야 한다.
+ */
+
+/* --------------------------------------------------------------------------
+ * 목록
+ * ------------------------------------------------------------------------ */
+
+.mm-lyr-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* 드래그 중에는 텍스트가 잡히면 안 된다. 커서도 전역으로 고정한다. */
+.mm-lyr-list.is-dragging {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.mm-lyr-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px 32px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-lyr-row:hover {
+  background: var(--surface-hover);
+}
+
+/* 선택 = 테두리 + 배경 + 좌측 마커. 색 하나에만 의존하지 않는다. */
+.mm-lyr-row.is-selected,
+.mm-lyr-row[aria-selected='true'] {
+  border-color: var(--accent);
+  background: var(--surface-active);
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.mm-lyr-row.is-hidden .mm-lyr-name {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.mm-lyr-row.is-hidden .mm-lyr-thumb {
+  opacity: 0.4;
+}
+
+/* 잠금은 좌측 마커를 점선으로 바꿔 색 없이도 구분되게 한다. */
+.mm-lyr-row.is-locked {
+  border-style: dashed;
+}
+
+.mm-lyr-row.is-dragging-row {
+  opacity: 0.5;
+}
+
+/* --------------------------------------------------------------------------
+ * 드롭 위치 인디케이터
+ * ------------------------------------------------------------------------ */
+
+.mm-lyr-row.is-drop-before::before,
+.mm-lyr-row.is-drop-after::after {
+  content: '';
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--bg);
+  pointer-events: none;
+}
+
+.mm-lyr-row.is-drop-before::before {
+  top: -4px;
+}
+
+.mm-lyr-row.is-drop-after::after {
+  bottom: -4px;
+}
+
+/* --------------------------------------------------------------------------
+ * 행 내부
+ * ------------------------------------------------------------------------ */
+
+.mm-lyr-grip {
+  display: flex;
+  grid-row: 1 / 3;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  color: var(--text-faint);
+  cursor: grab;
+  /* 세로 드래그를 브라우저 스크롤에 뺏기지 않는다. */
+  touch-action: none;
+}
+
+.mm-lyr-grip:hover {
+  color: var(--text);
+}
+
+.mm-lyr-list.is-dragging .mm-lyr-grip {
+  cursor: grabbing;
+}
+
+.mm-lyr-thumb {
+  grid-row: 1 / 3;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+.mm-lyr-name {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.mm-lyr-name-input {
+  grid-column: 3;
+  grid-row: 1;
+  min-height: 22px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.mm-lyr-actions {
+  display: flex;
+  grid-column: 4;
+  grid-row: 1;
+  align-items: center;
+  gap: 0;
+}
+
+.mm-lyr-actions .mm-icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+/* 행 안에서만 쓰는 작은 셀렉트. 인스펙터의 셀렉트보다 한 단계 작다. */
+.mm-lyr-blend {
+  grid-column: 3 / 5;
+  grid-row: 2;
+  width: auto;
+  min-height: 20px;
+  padding: 0 var(--sp-1);
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.mm-lyr-blend:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* --------------------------------------------------------------------------
+ * 비었을 때 / 도움말 / 오류
+ * ------------------------------------------------------------------------ */
+
+.mm-lyr-empty {
+  padding: var(--sp-5) var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  text-align: center;
+}
+
+.mm-lyr-help {
+  margin-top: var(--sp-3);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.mm-lyr-add {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.mm-lyr-errors {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.mm-lyr-errors-head {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.mm-lyr-errors ul {
+  margin: var(--sp-1) 0 0;
+  padding: 0;
+}
+
+.mm-lyr-errors li {
+  overflow-wrap: anywhere;
+}
+
+.mm-lyr-errors-close {
+  margin-top: var(--sp-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-decoration: underline;
+}
+
+/* --------------------------------------------------------------------------
+ * 레이어 속성 (인스펙터 조각)
+ * ------------------------------------------------------------------------ */
+
+.mm-lyr-note {
+  margin-top: var(--sp-2);
+  padding: var(--sp-2);
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+
+/* 진단 배지. 레벨은 색 + 기호 + 문구 셋으로 구분한다. */
+.mm-lyr-diag {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+}
+
+.mm-lyr-diag.is-warn {
+  border-color: var(--warn);
+}
+
+.mm-lyr-diag-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mm-lyr-diag-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.mm-lyr-diag.is-warn .mm-lyr-diag-badge,
+.mm-lyr-diag.is-warn .mm-lyr-diag-label {
+  color: var(--warn);
+}
+
+.mm-lyr-diag.is-notice .mm-lyr-diag-badge,
+.mm-lyr-diag.is-notice .mm-lyr-diag-label {
+  color: var(--text-muted);
+}
+
+.mm-lyr-diag-label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.mm-lyr-diag-text {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}
+
+.mm-lyr-range-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.mm-lyr-range {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.mm-lyr-range:disabled {
+  opacity: 0.45;
+}
+
+.mm-lyr-range-value {
+  flex: none;
+  min-width: 34px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: right;
+}

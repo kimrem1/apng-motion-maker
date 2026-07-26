@@ -1,0 +1,589 @@
+/*
+ * 앱 셸 레이아웃.
+ * 스테이지 하단에 타임라인 도크가 붙는다.
+ */
+
+/* --------------------------------------------------------------------------
+ * 셸 그리드
+ * ------------------------------------------------------------------------ */
+
+.mm-app {
+  display: grid;
+  grid-template-columns: var(--panel-left-w) minmax(0, 1fr) var(--panel-right-w);
+  grid-template-rows: var(--toolbar-h) minmax(0, 1fr);
+  grid-template-areas:
+    'toolbar toolbar toolbar'
+    'source  stage   inspector';
+  height: 100dvh;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.mm-app-toolbar {
+  grid-area: toolbar;
+  min-width: 0;
+}
+
+.mm-app-source {
+  grid-area: source;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+.mm-app-stage {
+  grid-area: stage;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mm-app-inspector {
+  grid-area: inspector;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+}
+
+/* 1024px 미만은 패널을 접어 세로로 쌓는다. */
+@media (max-width: 1023px) {
+  .mm-app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--toolbar-h) minmax(240px, 1fr) auto auto;
+    grid-template-areas:
+      'toolbar'
+      'stage'
+      'source'
+      'inspector';
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .mm-app-source,
+  .mm-app-inspector {
+    border-right: 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .mm-panel-body {
+    max-height: 320px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+ * 패널 공통
+ * ------------------------------------------------------------------------ */
+
+.mm-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.mm-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  height: 34px;
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mm-panel-body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--sp-4);
+}
+
+.mm-panel-foot {
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+.mm-section {
+  padding-bottom: var(--sp-5);
+  margin-bottom: var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.mm-section:last-child {
+  padding-bottom: 0;
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+
+.mm-section-title {
+  margin-bottom: var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mm-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.mm-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+
+.mm-note {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+/* --------------------------------------------------------------------------
+ * 툴바
+ * ------------------------------------------------------------------------ */
+
+.mm-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--sp-4);
+  height: 100%;
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.mm-toolbar-left,
+.mm-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.mm-toolbar-right {
+  justify-content: flex-end;
+}
+
+.mm-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-right: var(--sp-4);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.mm-brand-mark {
+  color: var(--accent);
+}
+
+.mm-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--sp-2);
+  background: var(--border);
+}
+
+/* 세그먼트 토글 */
+.mm-segment {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+
+.mm-segment-item {
+  min-height: 24px;
+  padding: 0 var(--sp-4);
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-segment-item:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* 선택 상태는 색만으로 표시하지 않는다. 배경 + 테두리 둘 다 바꾼다. */
+.mm-segment-item[aria-checked='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.mm-segment-item:disabled,
+.mm-segment-item[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mm-segment-item[aria-disabled='true']:hover {
+  color: var(--text-muted);
+}
+
+/* --------------------------------------------------------------------------
+ * 스테이지
+ * ------------------------------------------------------------------------ */
+
+.mm-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.mm-stage-viewport {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  overflow: hidden;
+}
+
+/*
+ * 타임라인 도크. 스테이지가 남은 높이를 갖고 타임라인은 고정 높이를 갖는다.
+ * 그래프 에디터가 열리면 같은 자리를 차지하므로 높이를 조금 더 준다.
+ */
+.mm-timeline-dock {
+  flex: 0 0 auto;
+  height: 220px;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface-1, var(--bg));
+  overflow: hidden;
+}
+
+@media (max-height: 760px) {
+  .mm-timeline-dock {
+    height: 168px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .mm-timeline-dock {
+    height: 190px;
+  }
+}
+
+.mm-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: center;
+  padding: var(--sp-6);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.mm-empty-title {
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.mm-empty-sub {
+  font-size: var(--fs-sm);
+}
+
+/* 스테이지 하단 알림 배너. 모달을 쓰지 않는다. */
+.mm-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin: 0 var(--sp-5) var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.mm-banner.is-error {
+  border-color: var(--danger);
+}
+
+.mm-banner-text {
+  min-width: 0;
+  white-space: pre-line;
+}
+
+/* --------------------------------------------------------------------------
+ * 드롭 오버레이
+ * ------------------------------------------------------------------------ */
+
+.mm-dropzone {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 14, 0.66);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+.mm-dropzone-card {
+  padding: var(--sp-6) calc(var(--sp-6) * 2);
+  border: 2px dashed var(--accent);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  box-shadow: var(--shadow-2);
+}
+
+/* --------------------------------------------------------------------------
+ * 소스 패널 (레이어 목록)
+ * ------------------------------------------------------------------------ */
+
+.mm-layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.mm-layer-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-layer-item:hover {
+  background: var(--surface-hover);
+}
+
+/* 선택 = 테두리 + 배경 + 좌측 마커. 색 하나에만 의존하지 않는다. */
+.mm-layer-item.is-selected {
+  border-color: var(--accent);
+  background: var(--surface-active);
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.mm-layer-item.is-hidden .mm-layer-name {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.mm-layer-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.mm-layer-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mm-layer-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mm-thumb {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+.mm-empty-hint {
+  padding: var(--sp-5) var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  text-align: center;
+}
+
+.mm-error {
+  margin-top: var(--sp-3);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+  white-space: pre-line;
+}
+
+/* --------------------------------------------------------------------------
+ * 인스펙터
+ * ------------------------------------------------------------------------ */
+
+.mm-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.mm-fieldset > legend {
+  padding: 0;
+}
+
+.mm-color-row {
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.mm-radio-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
+.mm-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.mm-radio input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* 기준점 3x3 그리드 */
+.mm-anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  grid-template-rows: repeat(3, 26px);
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  width: max-content;
+}
+
+.mm-anchor-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.mm-anchor-cell:hover {
+  background: var(--surface-hover);
+}
+
+.mm-anchor-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+/* 선택 셀은 테두리 + 배경 + 점 크기까지 바뀐다. */
+.mm-anchor-cell[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.mm-anchor-cell[aria-pressed='true'] .mm-anchor-dot {
+  width: 9px;
+  height: 9px;
+  background: var(--accent);
+}
+
+/* 인스펙터의 속성 한 줄: 애니메이션 토글 + 숫자 입력 */
+.mm-anim-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
+
+.mm-anim-row > :last-child {
+  min-width: 0;
+  flex: 1;
+}
+
+/* --------------------------------------------------------------------------
+ * 좌측 도크 (레이어 + 모션 프리셋)
+ * ------------------------------------------------------------------------ */
+
+.mm-left-dock {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+/* 레이어 목록은 내용만큼, 프리셋 갤러리가 남은 높이를 갖는다. */
+.mm-left-dock > .mm-lyr-panel {
+  flex: 0 1 auto;
+  min-height: 120px;
+  max-height: 45%;
+  border-right: 0;
+}
+
+.mm-left-dock > .mm-preset-gallery {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 1023px) {
+  .mm-left-dock {
+    border-right: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .mm-left-dock > .mm-lyr-panel {
+    max-height: 240px;
+  }
+}

@@ -1,0 +1,132 @@
+/*
+ * 이미지 다듬기 패널 스타일.
+ *
+ * 공용 토큰과 컨트롤(mm-btn, mm-input, mm-checker ...)은 tokens.css 에 있다.
+ * 여기에는 이 패널에서만 쓰는 것만 둔다. export.css 와 같은 규칙이다.
+ */
+
+.mm-prep-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.mm-prep-bgbar {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+/*
+ * 배경 스위처. 14.A1 의 릴리즈 게이트다.
+ * 체커보드만 보면 흰 테두리가 남았는지 알 수 없다. 흰 배경 위에서 봐야
+ * 디스필이 제대로 됐는지 판단할 수 있고, 검은 배경 위에서 봐야 반투명
+ * 가장자리에 검은 테두리가 생기는지 알 수 있다.
+ */
+.mm-prep-chip {
+  min-width: 32px;
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-prep-chip:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.mm-prep-chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.mm-prep-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.mm-prep-stage[data-bg='white'] {
+  background: #ffffff;
+}
+
+.mm-prep-stage[data-bg='black'] {
+  background: #000000;
+}
+
+.mm-prep-stage[data-bg='gray'] {
+  background: #808080;
+}
+
+.mm-prep-canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+.mm-prep-canvas.is-picking {
+  cursor: crosshair;
+}
+
+.mm-prep-range {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.mm-prep-value {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-prep-key {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+}
+
+.mm-prep-swatch {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+}
+
+.mm-prep-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.mm-prep-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.mm-prep-actions > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.mm-prep-warn {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--warn);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}

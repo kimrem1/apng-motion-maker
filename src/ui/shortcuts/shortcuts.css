@@ -1,0 +1,351 @@
+/*
+ * 커맨드 팔레트 / 단축키 도움말 스타일.
+ *
+ * 공용 토큰과 컨트롤(mm-btn, mm-icon-btn, mm-scroll, mm-visually-hidden)은 tokens.css 에 있다.
+ * 여기에는 단축키 화면에만 쓰는 것만 둔다.
+ *
+ * z-index 는 내보내기 모달(100)보다 위다(120). 다른 모달이 떠 있으면 단축키가 잠기지만,
+ * 그래도 팔레트가 열렸다면 사용자가 명시적으로 부른 것이므로 가려지면 안 된다.
+ */
+
+/* --------------------------------------------------------------------------
+ * 키캡
+ * ------------------------------------------------------------------------ */
+
+.mm-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+ * 커맨드 팔레트
+ * ------------------------------------------------------------------------ */
+
+.mm-cmdk-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: clamp(var(--sp-5), 12vh, 140px) var(--sp-5) var(--sp-5);
+  background: rgba(6, 8, 14, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.mm-cmdk {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(600px, 100%);
+  max-height: min(70dvh, 560px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.mm-cmdk-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-faint);
+}
+
+.mm-cmdk-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-lg);
+  line-height: 1.4;
+}
+
+.mm-cmdk-input::placeholder {
+  color: var(--text-faint);
+}
+
+.mm-cmdk-input:focus {
+  outline: none;
+}
+
+/* 포커스는 입력에 머무르므로 카드 전체에 포커스 링을 준다.
+   그래야 키보드 사용자가 어디에 갇혀 있는지 안다. */
+.mm-cmdk:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.mm-cmdk-list {
+  min-height: 0;
+  margin: 0;
+  padding: var(--sp-2);
+  list-style: none;
+  overflow-y: auto;
+}
+
+.mm-cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: background var(--dur-instant) var(--ease-standard);
+}
+
+/* 선택 = 색 + 두꺼운 외곽선 + 왼쪽 막대. 색만으로 구분하지 않는다. */
+.mm-cmdk-item.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.mm-cmdk-item.is-off {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mm-cmdk-cat {
+  flex: none;
+  width: 52px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  text-align: right;
+}
+
+.mm-cmdk-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.mm-cmdk-label {
+  color: var(--text);
+  font-size: var(--fs-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mm-cmdk-hint {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mm-cmdk-hint.is-reason {
+  color: var(--warn);
+}
+
+.mm-cmdk-keys {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+}
+
+.mm-cmdk-empty {
+  padding: var(--sp-6) var(--sp-4);
+  color: var(--text-faint);
+  font-size: var(--fs-md);
+  text-align: center;
+}
+
+.mm-cmdk-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.mm-cmdk-foot .mm-kbd {
+  margin-right: 3px;
+}
+
+/* --------------------------------------------------------------------------
+ * 단축키 도움말
+ * ------------------------------------------------------------------------ */
+
+.mm-help-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  background: rgba(6, 8, 14, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.mm-help {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(720px, 100%);
+  max-height: min(88dvh, 820px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.mm-help-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.mm-help-title {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+
+.mm-help-sub {
+  flex: 1 1 auto;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.mm-help-sub .mm-kbd {
+  margin-right: 3px;
+}
+
+.mm-help-body {
+  min-height: 0;
+  padding: var(--sp-5);
+  overflow-y: auto;
+  /* 두 단으로 흘린다. 세로로 길면 스크롤만 하다 끝난다. */
+  columns: 2;
+  column-gap: var(--sp-6);
+}
+
+@media (max-width: 720px) {
+  .mm-help-body {
+    columns: 1;
+  }
+}
+
+.mm-help-group {
+  /* 카테고리가 단 경계에서 잘리면 읽기가 끊긴다. */
+  break-inside: avoid;
+  margin-bottom: var(--sp-5);
+}
+
+.mm-help-cat {
+  margin-bottom: var(--sp-2);
+  padding-bottom: var(--sp-1);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.mm-help-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mm-help-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-2) 0;
+}
+
+.mm-help-row.is-off {
+  opacity: 0.55;
+}
+
+.mm-help-name {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.mm-help-reason {
+  color: var(--warn);
+  font-size: var(--fs-xs);
+}
+
+.mm-help-binding {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mm-help-alt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mm-help-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.mm-help-or {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.mm-help-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+
+.mm-help-note {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+/* --------------------------------------------------------------------------
+ * 모션 축소
+ * ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .mm-cmdk-item {
+    transition: none;
+  }
+}

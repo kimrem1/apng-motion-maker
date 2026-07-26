@@ -1,0 +1,619 @@
+/*
+ * 내보내기 다이얼로그 / 결과 패널 스타일.
+ *
+ * 공용 토큰과 컨트롤(mm-btn, mm-input, mm-checker ...)은 tokens.css 에 있다.
+ * 여기에는 내보내기 화면에만 쓰는 것만 둔다.
+ */
+
+/* --------------------------------------------------------------------------
+ * 모달
+ * ------------------------------------------------------------------------ */
+
+.mm-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5);
+  background: rgba(6, 8, 14, 0.62);
+  backdrop-filter: blur(2px);
+}
+
+.mm-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(760px, 100%);
+  max-height: min(88dvh, 860px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+}
+
+.mm-modal:focus {
+  outline: none;
+}
+
+.mm-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+
+.mm-modal-title {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+
+.mm-modal-body {
+  min-height: 0;
+  padding: var(--sp-5);
+}
+
+.mm-modal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+
+/* --------------------------------------------------------------------------
+ * 용도 라디오
+ * ------------------------------------------------------------------------ */
+
+.mm-purpose-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.mm-purpose {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-purpose:hover {
+  background: var(--surface-hover);
+}
+
+/* 선택은 색 하나에 의존하지 않는다. 테두리 + 배경 + 좌측 마커를 함께 바꾼다. */
+.mm-purpose[data-selected='true'] {
+  border-color: var(--accent);
+  background: var(--surface-active);
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+.mm-purpose.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.mm-purpose.is-disabled:hover {
+  background: var(--surface-raised);
+}
+
+.mm-purpose input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.mm-purpose-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mm-purpose-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+/* 실제 포맷명은 부제로 작게 */
+.mm-purpose-format {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+
+.mm-purpose-desc {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+/* 용량 등급. 색 하나에 의존하지 않게 글자도 함께 바꾼다. */
+.mm-purpose-weight {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.mm-purpose-weight[data-weight='light'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.mm-purpose-weight[data-weight='normal'] {
+  color: var(--text-muted);
+}
+
+.mm-purpose-weight[data-weight='heavy'] {
+  border-color: var(--warn);
+  color: var(--text);
+}
+
+.mm-spec-note {
+  margin-top: var(--sp-3);
+}
+
+/* --------------------------------------------------------------------------
+ * 세부 설정
+ * ------------------------------------------------------------------------ */
+
+.mm-custom-grid {
+  margin-top: var(--sp-4);
+}
+
+.mm-range {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+ * 요약 / 경고
+ * ------------------------------------------------------------------------ */
+
+.mm-summary,
+.mm-result-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-3);
+  margin: 0;
+}
+
+.mm-summary > div,
+.mm-result-facts > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mm-summary dt,
+.mm-result-facts dt {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+}
+
+.mm-summary dd,
+.mm-result-facts dd {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-warn-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.mm-callout {
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-left-width: 3px;
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+.mm-callout.is-warn {
+  border-color: var(--warn);
+  color: var(--text);
+}
+
+/* 경고 안에 행동 버튼이 붙는 경우 (문서 변경 후 다시 만들기) */
+.mm-callout .mm-btn-row {
+  margin-top: var(--sp-2);
+}
+
+/* --------------------------------------------------------------------------
+ * 진행률 버튼
+ * ------------------------------------------------------------------------ */
+
+.mm-export-btn {
+  position: relative;
+  min-width: 170px;
+  overflow: hidden;
+}
+
+.mm-export-btn-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--accent);
+  transition: width var(--dur-fast) linear;
+}
+
+/* 진행 중에도 글자는 또렷해야 한다. disabled 의 흐림 처리를 되돌린다. */
+.mm-export-btn.is-busy:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+.mm-export-btn-label {
+  position: relative;
+  z-index: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+ * 결과 패널
+ * ------------------------------------------------------------------------ */
+
+.mm-result {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 260px);
+  gap: var(--sp-5);
+  align-items: start;
+}
+
+@media (max-width: 719px) {
+  .mm-result {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.mm-result-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.mm-result-bgbar {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.mm-bg-chip {
+  min-width: 34px;
+  min-height: 26px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-bg-chip:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.mm-bg-chip[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.mm-result-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  padding: var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+}
+
+/* 배경 스위처. 체커보드만으로는 흰 배경에서 생기는 검은 테두리를 못 잡는다. */
+.mm-result-stage[data-bg='white'] {
+  background: #ffffff;
+}
+
+.mm-result-stage[data-bg='black'] {
+  background: #000000;
+}
+
+.mm-result-stage[data-bg='gray'] {
+  background: #808080;
+}
+
+.mm-result-img {
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.mm-result-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.mm-result-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.mm-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.mm-btn-row .mm-btn {
+  flex: 1 1 auto;
+  padding: 0 var(--sp-3);
+}
+
+/* --------------------------------------------------------------------------
+ * 목표 용량 맞추기
+ * ------------------------------------------------------------------------ */
+
+.mm-target {
+  padding: var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+}
+
+.mm-target-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.mm-target-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mm-target-input {
+  width: 110px;
+  flex: 0 0 auto;
+}
+
+.mm-plan {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+
+.mm-plan-changes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-left: var(--sp-5);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+/* 조정 전후를 나란히. 좁은 화면에서는 표가 넘치지 않게 스크롤한다. */
+.mm-plan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-plan-table th,
+.mm-plan-table td {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.mm-plan-table thead th {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.mm-plan-table tbody th {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.mm-plan-table td {
+  color: var(--text-muted);
+}
+
+/* 조정 후 열이 결론이다. 눈이 먼저 가야 한다. */
+.mm-plan-table .mm-plan-after {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+ * 브라우저 지원 진단
+ * ------------------------------------------------------------------------ */
+
+.mm-support {
+  margin-top: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+}
+
+.mm-support-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mm-support-sub {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.mm-support-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-3);
+}
+
+.mm-support-samples {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-4);
+}
+
+.mm-support-sample {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
+.mm-support-sample img,
+.mm-support-blank {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  /* 8px 원본을 40px 로 키운다. 보간하면 색 비교가 흐려진다. */
+  image-rendering: pixelated;
+}
+
+.mm-support-blank {
+  display: block;
+  background: var(--surface-hover);
+}
+
+.mm-support-legend {
+  flex: 1 1 200px;
+  min-width: 160px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.mm-support-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mm-support-item {
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+
+.mm-support-item[data-verdict='ok'] {
+  border-left-color: var(--accent);
+}
+
+.mm-support-item[data-verdict='warn'] {
+  border-left-color: var(--warn);
+}
+
+.mm-support-item[data-verdict='fail'] {
+  border-left-color: var(--danger);
+}
+
+.mm-support-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-1);
+}
+
+.mm-support-badge {
+  padding: 1px var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.mm-support-title {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+}
+
+.mm-support-headline {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.mm-support-detail {
+  margin: var(--sp-1) 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+}

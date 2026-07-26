@@ -1,0 +1,10 @@
+# 검색 노출을 원하지 않는다.
+#
+# 다만 이 파일 하나로는 부족하다. 크롤러는 robots.txt 를 도메인 루트에서 읽는데
+# GitHub Pages 프로젝트 사이트는 <사용자>.github.io/<저장소>/ 하위 경로라
+# 이 파일이 그 자리에 놓이지 않는다. 실제로 막는 것은 index.html 의
+# <meta name="robots" content="noindex, nofollow"> 다.
+#
+# 이 파일은 나중에 사용자 사이트나 커스텀 도메인으로 옮겼을 때를 위한 것이다.
+User-agent: *
+Disallow: /

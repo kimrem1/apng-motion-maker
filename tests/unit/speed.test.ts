@@ -1,0 +1,195 @@
+/**
+ * 속도 노브.
+ *
+ * 이 파일이 지키는 것은 네 가지다.
+ *   1. 속도를 내리면 실제로 길어진다. 어느 지점부터 멈추지 않는다.
+ *   2. 속도를 왕복하면 원래 길이로 돌아온다.
+ *   3. 자동으로 고르는 fps 는 올라가지 않고, GIF 에서 정확한 값만 쓴다.
+ *   4. 슬라이더 눈금 변환이 왕복해도 같은 값이다.
+ *
+ * 1번과 2번은 실제로 깨져 있었다. 속도 클램프가 일곱 군데에 흩어져 있어 0.5 아래가
+ * 통째로 무시됐고(56종 전부 x0.5 와 x0.05 가 같은 결과), 기준선을 프레임으로 되짚어
+ * 왕복마다 길이가 줄었다.
+ */
+
+import { describe, expect, it } from 'vitest'
+
+import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
+import { FRAMES_MAX, GIF_EXACT_FPS, SPEED_MAX, SPEED_MIN, type AssetRef } from '@/core/types.ts'
+import { MOTION_PRESETS } from '@/motions/registry.ts'
+import { baselineFps, baselineSec, fpsForDuration } from '@/motions/apply.ts'
+import { useDocumentStore } from '@/state/document.ts'
+import { usePresetUiStore } from '@/state/presetUi.ts'
+import { useUiStore } from '@/state/ui.ts'
+import { applyPresetToDocument } from '@/state/presetActions.ts'
+import { SPEED_STEP, pFromSpeed, speedFromP } from '@/state/speedScale.ts'
+
+const SIZE = 500
+
+function reset(): void {
+  resetIdCounter()
+  const doc = createEmptyProject()
+  const asset: AssetRef = {
+    id: 'a1', name: 'p.png', storeKey: 'm', naturalW: SIZE, naturalH: SIZE, hasAlpha: true,
+  }
+  doc.assets.push(asset)
+  const layer = createImageLayer(asset, 0)
+  doc.layers.push(layer)
+  doc.canvas.w = SIZE
+  doc.canvas.h = SIZE
+  useDocumentStore.getState().replaceDocument(doc)
+  useUiStore.setState({ selectedLayerId: layer.id })
+  usePresetUiStore.setState({ appliedId: null, strength: 0.5, speed: 1 })
+}
+
+function applyAt(presetId: string, speed: number) {
+  usePresetUiStore.getState().setSpeed(speed)
+  applyPresetToDocument(presetId)
+  const d = useDocumentStore.getState().doc
+  return {
+    frames: d.timeline.durationFrames,
+    fps: d.timeline.fps,
+    sec: d.timeline.durationFrames / d.timeline.fps,
+  }
+}
+
+describe('속도 눈금 변환', () => {
+  it('왕복하면 같은 값이다', () => {
+    for (const s of [SPEED_MIN, 0.2, 0.5, 1, 1.5, SPEED_MAX]) {
+      expect(speedFromP(pFromSpeed(s))).toBeCloseTo(s, 9)
+    }
+  })
+
+  it('양 끝과 보통 지점이 제자리에 있다', () => {
+    expect(speedFromP(0)).toBeCloseTo(SPEED_MIN, 9)
+    expect(speedFromP(1)).toBeCloseTo(SPEED_MAX, 9)
+    // 느린 쪽이 트랙의 대부분을 차지해야 미세 조정이 된다.
+    expect(pFromSpeed(1)).toBeGreaterThan(0.7)
+  })
+
+  it('한 칸은 어디서든 같은 비율이다', () => {
+    // 로그 눈금의 목적이 이것이다. 선형이면 느린 쪽 한 칸이 빠른 쪽의 스무 배가 된다.
+    const lo = speedFromP(SPEED_STEP) / speedFromP(0)
+    const hi = speedFromP(1) / speedFromP(1 - SPEED_STEP)
+    expect(lo).toBeCloseTo(hi, 6)
+  })
+
+  it('범위 밖 입력을 잘라 낸다', () => {
+    expect(speedFromP(-1)).toBeCloseTo(SPEED_MIN, 9)
+    expect(speedFromP(2)).toBeCloseTo(SPEED_MAX, 9)
+    expect(pFromSpeed(0)).toBeCloseTo(pFromSpeed(1), 9)
+    expect(pFromSpeed(Number.NaN)).toBeCloseTo(pFromSpeed(1), 9)
+  })
+})
+
+describe('fps 자동 선택', () => {
+  it('GIF 에서 정확한 값만 고른다', () => {
+    // 12 / 15 / 24 / 30 은 100/N 이 정수가 아니라 재생 속도가 조용히 어긋난다.
+    for (const sec of [0.5, 1.2, 3, 6, 9, 12]) {
+      expect(GIF_EXACT_FPS as readonly number[]).toContain(fpsForDuration(sec, 50))
+    }
+  })
+
+  it('천장을 넘지 않는다', () => {
+    // "느리게" 를 요구했는데 fps 가 오르면 프레임 수와 파일 크기가 두 배가 된다.
+    expect(fpsForDuration(0.5, 25)).toBeLessThanOrEqual(25)
+    expect(fpsForDuration(0.1, 20)).toBeLessThanOrEqual(20)
+    expect(fpsForDuration(1, 10)).toBeLessThanOrEqual(10)
+  })
+
+  it('프레임 상한 안에 담기는 가장 높은 값을 고른다', () => {
+    // 25fps 로 4.8초가 정확히 120프레임이다. 그보다 길면 내려가야 한다.
+    expect(fpsForDuration(4.8, 50)).toBe(25)
+    expect(fpsForDuration(6, 50)).toBe(20)
+    expect(fpsForDuration(9.6, 50)).toBe(12.5)
+    expect(fpsForDuration(12, 50)).toBe(10)
+  })
+
+  it('어느 값으로도 안 담기면 가장 낮은 fps 로 버틴다', () => {
+    // 12초가 이 제품의 상한이다. 그 위는 프레임 상한에서 잘린다.
+    expect(fpsForDuration(30, 25)).toBe(10)
+  })
+})
+
+describe('기준선', () => {
+  it('없으면 지금 타임라인에서 초로 읽는다', () => {
+    reset()
+    const doc = useDocumentStore.getState().doc
+    expect(baselineSec(doc)).toBeCloseTo(doc.timeline.durationFrames / doc.timeline.fps, 9)
+    expect(baselineFps(doc)).toBe(doc.timeline.fps)
+  })
+
+  it('적용하면 문서에 초와 fps 가 함께 남는다', () => {
+    reset()
+    applyAt('zoom.slowIn', 1)
+    const ref = useDocumentStore.getState().doc.presetRef
+    expect(ref?.baseSec).toBeGreaterThan(0)
+    expect(ref?.baseFps).toBeGreaterThan(0)
+  })
+
+  it('속도를 바꿔도 기준선은 그대로다', () => {
+    reset()
+    applyAt('zoom.slowIn', 1)
+    const first = useDocumentStore.getState().doc.presetRef?.baseSec
+    applyAt('zoom.slowIn', 0.2)
+    expect(useDocumentStore.getState().doc.presetRef?.baseSec).toBeCloseTo(first!, 9)
+  })
+})
+
+describe('속도가 실제로 길이를 바꾼다', () => {
+  for (const id of ['zoom.slowIn', 'slide.panLR', 'fade.in', 'shake.camera', 'glitch.slice']) {
+    it(`${id} 는 느리게 할수록 길어진다`, () => {
+      reset(); const fast = applyAt(id, 2).sec
+      reset(); const normal = applyAt(id, 1).sec
+      reset(); const slow = applyAt(id, 0.5).sec
+      reset(); const slowest = applyAt(id, SPEED_MIN).sec
+
+      expect(normal).toBeGreaterThan(fast)
+      expect(slow).toBeGreaterThan(normal)
+      // 예전에는 0.5 아래가 통째로 무시돼 여기서 같은 값이 나왔다.
+      expect(slowest).toBeGreaterThan(slow)
+    })
+  }
+
+  it('가장 느린 설정은 예전 최대치보다 훨씬 길다', () => {
+    // 고치기 전에는 어떤 프리셋도 2.4초를 넘지 못했다.
+    let longest = 0
+    for (const p of MOTION_PRESETS) {
+      reset()
+      longest = Math.max(longest, applyAt(p.id, SPEED_MIN).sec)
+    }
+    expect(longest).toBeGreaterThan(10)
+  })
+
+  it('프레임 상한을 절대 넘지 않는다', () => {
+    for (const p of MOTION_PRESETS) {
+      reset()
+      expect(applyAt(p.id, SPEED_MIN).frames).toBeLessThanOrEqual(FRAMES_MAX)
+    }
+  })
+})
+
+describe('속도 왕복', () => {
+  it('56종 전부 원래 길이로 돌아온다', () => {
+    // 기준선을 프레임으로 되짚으면 여기서 무너진다. 상한에 잘린 프레임은 곱셈으로
+    // 되돌아오지 않고, fps 가 내려간 뒤에는 같은 프레임 수가 다른 시간을 뜻한다.
+    const drifted: string[] = []
+    for (const p of MOTION_PRESETS) {
+      reset()
+      const start = applyAt(p.id, 1).sec
+      applyAt(p.id, SPEED_MIN)
+      applyAt(p.id, SPEED_MAX)
+      applyAt(p.id, 0.25)
+      const end = applyAt(p.id, 1).sec
+      if (Math.abs(start - end) > 1e-6) drifted.push(`${p.id} ${start.toFixed(3)} -> ${end.toFixed(3)}`)
+    }
+    expect(drifted).toEqual([])
+  })
+
+  it('같은 속도를 여러 번 눌러도 길이가 흘러가지 않는다', () => {
+    reset()
+    const once = applyAt('zoom.slowIn', 0.3).sec
+    applyAt('zoom.slowIn', 0.3)
+    expect(applyAt('zoom.slowIn', 0.3).sec).toBeCloseTo(once, 9)
+  })
+})
