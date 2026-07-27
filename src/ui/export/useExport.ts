@@ -196,15 +196,14 @@ export function useExport(): UseExportResult {
 
       if (!aliveRef.current) return
 
-      // Uint8Array 를 그대로 넘기면 SharedArrayBuffer 백킹일 때 타입이 맞지 않는다.
-      // 뷰의 실제 구간만 잘라 새 ArrayBuffer 로 만든다.
-      const buffer = output.bytes.slice().buffer as ArrayBuffer
-      const blob = new Blob([buffer], { type: output.mime })
+      // 파이프라인이 이미 Blob 으로 준다. 여기서 다시 바이트로 만들면 GB 단위
+      // 결과에서 사본이 하나 더 생겨 탭이 죽는다.
+      const blob = output.blob
       const presetName = presetNameOf(doc)
 
       setResult({
         blob,
-        byteLength: output.bytes.length,
+        byteLength: output.byteLength,
         mime: output.mime,
         extension: output.extension,
         fileName: buildExportFileName({

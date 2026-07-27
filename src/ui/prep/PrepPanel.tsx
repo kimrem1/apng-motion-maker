@@ -23,8 +23,9 @@ import {
   useId,
   useRef,
   useState,
-  // DOM 의 MouseEvent 와 이름이 겹친다. 별칭으로 구분한다.
+  // DOM 의 MouseEvent / PointerEvent 와 이름이 겹친다. 별칭으로 구분한다.
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react'
 
 import type { AssetPrep, AssetRef } from '@/core/types.ts'
@@ -41,16 +42,25 @@ import {
 } from '@/imageprep/bgRemove.ts'
 import {
   ASPECT_PRESETS,
-  autoTrimAlpha,
+  CROP_HANDLES,
+  CROP_MIN_SIZE,
+  applyCropDrag,
+  autoTrimContent,
   cropBitmap,
   fitRectToAspect,
+  roundRect,
+  type CropHandle,
   type CropRect,
 } from '@/imageprep/crop.ts'
 import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
+import { NumberField } from '@/ui/widgets/Field.tsx'
+import { ensurePrepOriginal } from './prepOriginals.ts'
 
 import './prep.css'
+
+export { ensurePrepOriginal, releasePrepOriginal } from './prepOriginals.ts'
 
 /** 미리보기 긴 변. 슬라이더를 끌 때마다 전체 해상도를 돌리면 손가락보다 느려진다. */
 const PREVIEW_MAX = 320
@@ -58,6 +68,22 @@ const PREVIEW_MAX = 320
 const PREVIEW_DEBOUNCE_MS = 140
 
 const FEATHER_MAX = 8
+
+/** 크롭 핸들을 잡았다고 볼 반경(화면 픽셀). 손가락으로도 잡을 수 있어야 한다. */
+const HANDLE_GRAB_PX = 12
+/** 이만큼(화면 픽셀) 움직이기 전에는 드래그로 보지 않는다. 클릭이 상자를 만들면 안 된다. */
+const DRAG_SLOP_PX = 3
+
+/** 진행 중인 크롭 드래그. 렌더마다 새로 만들면 안 되므로 ref 에 둔다. */
+interface CropDragState {
+  mode: 'create' | 'edit'
+  handle: CropHandle
+  /** edit 일 때 드래그 시작 시점의 상자. create 면 null. */
+  start: CropRect | null
+  ox: number
+  oy: number
+  moved: boolean
+}
 
 type PreviewBg = 'checker' | 'white' | 'black' | 'gray'
 
@@ -67,52 +93,6 @@ const BACKGROUNDS: readonly { id: PreviewBg; label: string }[] = [
   { id: 'black', label: '검' },
   { id: 'gray', label: '회' },
 ]
-
-// ---------------------------------------------------------------------------
-// 원본 보관소
-// ---------------------------------------------------------------------------
-
-/**
- * 원본 비트맵 보관소.
- *
- * **어디에 보관하는가**: 이 모듈의 모듈 스코프 Map 이다. 문서 스토어에 넣으면
- * undo 스택이 픽셀을 붙잡아 수백 MB 가 되고, assetRegistry 에
- * 넣으면 id 가 하나뿐이라 원본과 처리 결과를 동시에 들 수 없다.
- *
- * 반드시 **사본**을 보관한다. assetRegistry.set 은 교체되는 이전 비트맵을
- * close 하므로, 원본 인스턴스를 그대로 들고 있으면 첫 [적용] 순간 우리 원본이
- * 닫혀서 되돌리기가 영원히 불가능해진다.
- *
- * IndexedDB 영속화가 들어오면 이 Map 은 그쪽으로 옮겨간다. 새로고침하면
- * 원본이 사라지므로 지금은 세션 동안만 되돌릴 수 있다.
- */
-const prepOriginals = new Map<string, ImageBitmap>()
-
-export async function ensurePrepOriginal(assetId: string): Promise<ImageBitmap> {
-  const kept = prepOriginals.get(assetId)
-  if (kept) return kept
-
-  const current = assetRegistry.get(assetId)
-  if (!current) throw new Error('이 이미지의 픽셀을 찾지 못했습니다.')
-
-  const copy = await cloneBitmap(current)
-  // await 사이에 다른 호출이 먼저 넣었을 수 있다. 먼저 들어간 쪽을 정본으로 둔다.
-  const raced = prepOriginals.get(assetId)
-  if (raced) {
-    copy.close()
-    return raced
-  }
-  prepOriginals.set(assetId, copy)
-  return copy
-}
-
-/** 레이어를 지울 때 호출자가 정리할 수 있게 열어 둔다. */
-export function releasePrepOriginal(assetId: string): void {
-  const kept = prepOriginals.get(assetId)
-  if (!kept) return
-  kept.close()
-  prepOriginals.delete(assetId)
-}
 
 // ---------------------------------------------------------------------------
 // 작은 유틸
@@ -229,8 +209,12 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   const [aspectId, setAspectId] = useState('free')
   const [background, setBackground] = useState<PreviewBg>('checker')
   const [picking, setPicking] = useState(false)
+  /** 자른 크기에 캔버스를 맞출 것인가. 이게 꺼져 있으면 여백이 결과물에 그대로 남는다. */
+  const [fitCanvas, setFitCanvas] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** 실패는 아니지만 알려야 하는 것. 빨간 에러로 띄우면 뭘 잘못한 줄 안다. */
+  const [notice, setNotice] = useState<string | null>(null)
   const [applied, setApplied] = useState<{ w: number; h: number } | null>(null)
   /** 미리보기 재그리기를 강제하는 값. 비트맵은 ref 에 있어서 상태 비교로는 안 잡힌다. */
   const [previewTick, setPreviewTick] = useState(0)
@@ -238,6 +222,12 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   const [sourceRev, setSourceRev] = useState(0)
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  /**
+   * 크롭 적용 직전의 캔버스 크기. 되돌리기가 캔버스까지 원상복구하기 위해 기억한다.
+   * 픽셀만 되돌리고 캔버스를 두면 원본이 잘린 프레임 안에 갇힌다.
+   */
+  const canvasBeforeRef = useRef<{ w: number; h: number } | null>(null)
+  const dragRef = useRef<CropDragState | null>(null)
   /** 미리보기용 축소 원본. */
   const previewSrcRef = useRef<ImageBitmap | null>(null)
   /** 스포이드가 읽는 축소 원본 픽셀. 처리 결과가 아니라 원본에서 뽑아야 한다. */
@@ -266,9 +256,12 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   useEffect(() => {
     let alive = true
     setError(null)
+    setNotice(null)
     setApplied(null)
     setCropRect(null)
     setAspectId('free')
+    canvasBeforeRef.current = null
+    dragRef.current = null
 
     void (async () => {
       try {
@@ -375,21 +368,146 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
       return
     }
 
-    if (!cropRect || natural.w === 0) return
-    // 크롭 영역 표시. 바깥을 어둡게 덮지 않는다. 덮으면 알파 확인이 막힌다.
-    const s = canvas.width / natural.w
-    ctx.save()
-    ctx.strokeStyle = '#3d7dff'
-    ctx.lineWidth = 1
-    ctx.setLineDash([4, 3])
-    ctx.strokeRect(
-      Math.round(cropRect.x * s) + 0.5,
-      Math.round(cropRect.y * s) + 0.5,
-      Math.max(1, Math.round(cropRect.w * s) - 1),
-      Math.max(1, Math.round(cropRect.h * s) - 1),
-    )
-    ctx.restore()
-  }, [previewTick, sourceRev, enabled, cropRect, natural.w, background])
+    // 크롭 상자는 캔버스에 그리지 않고 DOM 오버레이로 얹는다. 미리보기 캔버스는
+    // 320px 짜리를 CSS 로 줄여 보여주므로, 여기에 그린 선과 핸들은 뭉개진다.
+  }, [previewTick, sourceRev, enabled, background])
+
+  // --- 크롭 드래그 -----------------------------------------------------------
+
+  const ratio = ASPECT_PRESETS.find((p) => p.id === aspectId)?.ratio ?? null
+  const bounds: CropRect = { x: 0, y: 0, w: natural.w, h: natural.h }
+
+  /** 프레임 안의 포인터 위치를 자연 좌표로 바꾼다. */
+  function toNatural(e: ReactPointerEvent<HTMLDivElement>): { x: number; y: number } | null {
+    const box = e.currentTarget.getBoundingClientRect()
+    if (box.width === 0 || box.height === 0 || natural.w === 0 || natural.h === 0) return null
+    return {
+      x: ((e.clientX - box.left) / box.width) * natural.w,
+      y: ((e.clientY - box.top) / box.height) * natural.h,
+    }
+  }
+
+  /**
+   * 어느 핸들을 잡았는가.
+   *
+   * 판정은 **화면 픽셀**로 한다. 자연 좌표로 하면 4000px 원본에서는 허용 반경이
+   * 40px 이 되어 상자 전체가 핸들이 되고, 300px 원본에서는 3px 이 되어 아무것도
+   * 못 잡는다.
+   */
+  function hitHandle(
+    rect: CropRect,
+    at: { x: number; y: number },
+    pxPerNatural: number,
+  ): CropHandle | null {
+    const grab = HANDLE_GRAB_PX / Math.max(1e-6, pxPerNatural)
+    const nearL = Math.abs(at.x - rect.x) <= grab
+    const nearR = Math.abs(at.x - (rect.x + rect.w)) <= grab
+    const nearT = Math.abs(at.y - rect.y) <= grab
+    const nearB = Math.abs(at.y - (rect.y + rect.h)) <= grab
+    const insideX = at.x >= rect.x - grab && at.x <= rect.x + rect.w + grab
+    const insideY = at.y >= rect.y - grab && at.y <= rect.y + rect.h + grab
+
+    if (nearL && nearT) return 'nw'
+    if (nearR && nearT) return 'ne'
+    if (nearL && nearB) return 'sw'
+    if (nearR && nearB) return 'se'
+    if (nearL && insideY) return 'w'
+    if (nearR && insideY) return 'e'
+    if (nearT && insideX) return 'n'
+    if (nearB && insideX) return 's'
+    if (at.x > rect.x && at.x < rect.x + rect.w && at.y > rect.y && at.y < rect.y + rect.h) {
+      return 'move'
+    }
+    return null
+  }
+
+  function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
+    // 스포이드가 켜져 있으면 클릭은 색 고르기다. 크롭이 가로채면 안 된다.
+    if (picking || disabled || natural.w === 0) return
+    const at = toNatural(e)
+    if (!at) return
+    const box = e.currentTarget.getBoundingClientRect()
+    const pxPerNatural = box.width / natural.w
+
+    const handle = cropRect ? hitHandle(cropRect, at, pxPerNatural) : null
+    dragRef.current = handle
+      ? { mode: 'edit', handle, start: cropRect!, ox: at.x, oy: at.y, moved: false }
+      : { mode: 'create', handle: 'se', start: null, ox: at.x, oy: at.y, moved: false }
+
+    // 캡처를 못 잡아도 드래그는 계속돼야 한다. 포인터가 이미 사라진 경우
+    // (합성 이벤트, 일부 펜 입력) 브라우저가 던진다.
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      /* 캡처 없이 진행한다 */
+    }
+    e.preventDefault()
+  }
+
+  function handlePointerMove(e: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = dragRef.current
+    if (!drag) return
+    const at = toNatural(e)
+    if (!at) return
+    const dx = at.x - drag.ox
+    const dy = at.y - drag.oy
+
+    const box = e.currentTarget.getBoundingClientRect()
+    const pxPerNatural = box.width / Math.max(1, natural.w)
+    // 손 떨림으로 크롭이 생기지 않게 한다. 판정은 화면 픽셀이다.
+    if (!drag.moved && Math.hypot(dx, dy) * pxPerNatural < DRAG_SLOP_PX) return
+    drag.moved = true
+
+    if (drag.mode === 'create') {
+      // 끄는 방향으로 모서리를 정한다. 방향을 바꾸면 잡은 모서리도 따라 바뀐다.
+      const handle = `${dy < 0 ? 'n' : 's'}${dx < 0 ? 'w' : 'e'}` as CropHandle
+      setCropRect(
+        applyCropDrag({
+          start: { x: drag.ox, y: drag.oy, w: 0, h: 0 },
+          handle,
+          dx,
+          dy,
+          bounds,
+          ratio,
+        }),
+      )
+      return
+    }
+
+    setCropRect(applyCropDrag({ start: drag.start!, handle: drag.handle, dx, dy, bounds, ratio }))
+  }
+
+  function handlePointerUp(e: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = dragRef.current
+    dragRef.current = null
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+    } catch {
+      /* 이미 놓았다 */
+    }
+    if (!drag || !drag.moved) return
+    // 드래그가 끝난 순간에만 정수로 확정한다. 진행 중에 반올림하면 상자가 덜덜 떤다.
+    setCropRect((prev) => (prev ? roundRect(prev, natural.w, natural.h) : prev))
+  }
+
+  /** 숫자 입력으로 상자를 고친다. 키보드만 쓰는 사용자의 유일한 경로다. */
+  function setCropField(key: 'x' | 'y' | 'w' | 'h', value: number): void {
+    if (natural.w === 0) return
+    const base = cropRect ?? { x: 0, y: 0, w: natural.w, h: natural.h }
+    const next = { ...base, [key]: Math.round(value) }
+    if (ratio !== null) {
+      if (key === 'w') next.h = next.w / ratio
+      else if (key === 'h') next.w = next.h * ratio
+    }
+    // 경계 밖으로 나가면 잘라 낸다. w/h 를 먼저 가둔 뒤 x/y 를 민다.
+    next.w = clamp(next.w, CROP_MIN_SIZE, natural.w)
+    next.h = clamp(next.h, CROP_MIN_SIZE, natural.h)
+    next.x = clamp(next.x, 0, natural.w - next.w)
+    next.y = clamp(next.y, 0, natural.h - next.h)
+    setCropRect(roundRect(next, natural.w, natural.h))
+  }
 
   // --- 동작 -----------------------------------------------------------------
 
@@ -415,6 +533,7 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   async function withBusy(label: string, run: () => Promise<void>): Promise<void> {
     setBusy(label)
     setError(null)
+    setNotice(null)
     try {
       await run()
     } catch (err) {
@@ -468,13 +587,28 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
       // 알파는 실측한다. 배경 제거를 껐어도 크롭이 투명 영역을 잘라냈을 수 있다.
       const hasAlpha = probeAlpha(result)
       assetRegistry.set(asset.id, result)
+      const store = useDocumentStore.getState()
       // 픽셀과 문서를 같은 동작 안에서 맞춘다. 어긋나면 오버스캔이 옛 크기를 쓴다.
-      useDocumentStore.getState().updateAssetPrep(asset.id, {
+      store.updateAssetPrep(asset.id, {
         width: result.width,
         height: result.height,
         hasAlpha,
         prep: buildPrepRecord(),
       })
+      /*
+       * 캔버스를 안 따라가면 크롭이 "안 되는" 것처럼 보인다.
+       *
+       * 에셋만 잘리고 캔버스가 원래 크기로 남으면, 잘라낸 여백이 그대로 프레임의
+       * 빈 공간이 되어 결과 파일에 그대로 실린다. 사용자 눈에는 버튼을 눌렀는데
+       * 아무것도 안 잘린 것과 구별되지 않는다. 그래서 기본으로 같이 맞춘다.
+       */
+      if (cropRect && fitCanvas) {
+        const doc = store.doc
+        canvasBeforeRef.current = { w: doc.canvas.w, h: doc.canvas.h }
+        store.setCanvasSize(result.width, result.height)
+      } else {
+        canvasBeforeRef.current = null
+      }
       setApplied({ w: result.width, h: result.height })
     })
   }
@@ -484,11 +618,18 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
       const original = await ensurePrepOriginal(asset.id)
       const hasAlpha = probeAlpha(original)
       assetRegistry.set(asset.id, await cloneBitmap(original))
-      useDocumentStore.getState().updateAssetPrep(asset.id, {
+      const store = useDocumentStore.getState()
+      store.updateAssetPrep(asset.id, {
         width: original.width,
         height: original.height,
         hasAlpha,
       })
+      // 적용할 때 캔버스를 같이 바꿨으면 그것도 돌려놓는다.
+      const before = canvasBeforeRef.current
+      if (before) {
+        store.setCanvasSize(before.w, before.h)
+        canvasBeforeRef.current = null
+      }
       setApplied(null)
     })
   }
@@ -496,25 +637,33 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   function handleAutoTrim(): void {
     void withBusy('여백 찾기', async () => {
       const original = await ensurePrepOriginal(asset.id)
-      // 여백 판정은 알파로 한다. 배경 제거를 켠 상태면 그 결과에서 찾아야 맞다.
+      // 여백 판정은 알파를 먼저 본다. 배경 제거를 켠 상태면 그 결과에서 찾아야 맞다.
       let probe = original
       let temp: ImageBitmap | null = null
       if (settings.enabled) {
         temp = await removeBackground(original, toOptions(settings))
         probe = temp
       }
-      const rect = await autoTrimAlpha(probe)
+      // 알파로 못 줄이면 단색 여백을 잡는다. 불투명 JPG 에서 이게 없으면
+      // 버튼이 아무 일도 안 하는 것처럼 보인다.
+      const rect = await autoTrimContent(probe)
       if (temp) temp.close()
-      setCropRect(rect)
+      if (rect.w >= natural.w && rect.h >= natural.h) {
+        // 전체 사각형이면 자를 것이 없다. 그대로 상자를 씌우면 "됐다" 로 오해한다.
+        setNotice('잘라낼 여백을 찾지 못했습니다. 가장자리까지 그림이 차 있습니다.')
+        return
+      }
+      setCropRect(roundRect(rect, natural.w, natural.h))
       setAspectId('free')
+      setNotice(null)
     })
   }
 
-  function handleAspect(id: string, ratio: number | null): void {
+  function handleAspect(id: string, nextRatio: number | null): void {
     setAspectId(id)
-    if (ratio === null) return
-    const bounds: CropRect = { x: 0, y: 0, w: natural.w, h: natural.h }
-    setCropRect(fitRectToAspect(cropRect ?? bounds, ratio, bounds))
+    // '자유' 는 지금 상자를 그대로 둔다. 비율만 풀린다.
+    if (nextRatio === null) return
+    setCropRect(fitRectToAspect(cropRect ?? bounds, nextRatio, bounds))
   }
 
   const disabled = busy !== null
@@ -543,17 +692,54 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
           }
           data-bg={background}
         >
-          <canvas
-            ref={canvasRef}
-            className={picking ? 'mm-prep-canvas is-picking' : 'mm-prep-canvas'}
-            width={1}
-            height={1}
-            role="img"
-            aria-label="배경 제거 미리보기"
-            onClick={handlePick}
-          />
+          {/*
+            프레임이 포인터를 전부 받는다. 오버레이 자식은 pointer-events: none 이라
+            핸들 위에서도 좌표 계산이 한 곳에서만 일어난다.
+          */}
+          <div
+            className="mm-prep-frame"
+            data-picking={picking}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+          >
+            <canvas
+              ref={canvasRef}
+              className={picking ? 'mm-prep-canvas is-picking' : 'mm-prep-canvas'}
+              width={1}
+              height={1}
+              role="img"
+              aria-label="배경 제거 미리보기"
+              onClick={handlePick}
+            />
+            {cropRect && natural.w > 0 && natural.h > 0 ? (
+              <div
+                className="mm-prep-crop"
+                aria-hidden="true"
+                style={{
+                  left: `${(cropRect.x / natural.w) * 100}%`,
+                  top: `${(cropRect.y / natural.h) * 100}%`,
+                  width: `${(cropRect.w / natural.w) * 100}%`,
+                  height: `${(cropRect.h / natural.h) * 100}%`,
+                }}
+              >
+                <span className="mm-prep-crop-grid" />
+                {CROP_HANDLES.map((h) => (
+                  <span key={h} className="mm-prep-handle" data-handle={h} />
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
 
+        <p className="mm-field-hint">
+          {picking
+            ? '미리보기에서 지울 색을 클릭하세요.'
+            : cropRect
+              ? '상자 안쪽을 끌면 이동, 모서리와 변을 끌면 크기가 바뀝니다. 상자 밖에서 끌면 새로 그립니다.'
+              : '미리보기 위를 끌어서 자를 영역을 직접 그릴 수 있습니다.'}
+        </p>
         <p className="mm-field-hint">
           흰 배경과 검은 배경을 번갈아 보세요. 흰 배경에서 검은 테두리가, 검은 배경에서 흰
           테두리가 보이면 허용치를 조금 올리세요.
@@ -652,6 +838,8 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
       </p>
 
       {/* 크롭 ------------------------------------------------------------- */}
+      <h3 className="mm-section-subtitle">자르기</h3>
+
       <div className="mm-field">
         <span className="mm-field-label" id={`${uid}-aspect`}>
           비율
@@ -674,7 +862,18 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
 
       <div className="mm-prep-actions">
         <button type="button" className="mm-btn" disabled={disabled} onClick={handleAutoTrim}>
-          빈 여백 자동 제거
+          {busy === '여백 찾기' ? '찾는 중' : '빈 여백 자동 제거'}
+        </button>
+        <button
+          type="button"
+          className="mm-btn"
+          disabled={disabled || natural.w === 0}
+          onClick={() => {
+            const full: CropRect = { x: 0, y: 0, w: natural.w, h: natural.h }
+            setCropRect(ratio === null ? full : fitRectToAspect(full, ratio, full))
+          }}
+        >
+          전체 선택
         </button>
         <button
           type="button"
@@ -685,9 +884,69 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
             setAspectId('free')
           }}
         >
-          크롭 해제
+          자르기 해제
         </button>
       </div>
+
+      {/*
+        숫자 입력은 장식이 아니다. 드래그는 마우스가 있어야 하고, 1px 단위로
+        맞추는 것도 드래그로는 불가능하다. 키보드만 쓰는 사용자에게는 이게 유일한 길이다.
+      */}
+      <div className="mm-prep-cropnums">
+        <NumberField
+          label="X"
+          value={cropRect ? Math.round(cropRect.x) : 0}
+          min={0}
+          max={Math.max(0, natural.w - CROP_MIN_SIZE)}
+          step={1}
+          disabled={disabled || !cropRect}
+          onChange={(v) => setCropField('x', v)}
+        />
+        <NumberField
+          label="Y"
+          value={cropRect ? Math.round(cropRect.y) : 0}
+          min={0}
+          max={Math.max(0, natural.h - CROP_MIN_SIZE)}
+          step={1}
+          disabled={disabled || !cropRect}
+          onChange={(v) => setCropField('y', v)}
+        />
+        <NumberField
+          label="폭"
+          value={cropRect ? Math.round(cropRect.w) : natural.w}
+          min={CROP_MIN_SIZE}
+          max={natural.w}
+          step={1}
+          disabled={disabled || !cropRect}
+          onChange={(v) => setCropField('w', v)}
+        />
+        <NumberField
+          label="높이"
+          value={cropRect ? Math.round(cropRect.h) : natural.h}
+          min={CROP_MIN_SIZE}
+          max={natural.h}
+          step={1}
+          disabled={disabled || !cropRect}
+          onChange={(v) => setCropField('h', v)}
+        />
+      </div>
+
+      <div className="mm-field mm-field-toggle">
+        <input
+          id={`${uid}-fitcanvas`}
+          className="mm-checkbox"
+          type="checkbox"
+          checked={fitCanvas}
+          disabled={disabled}
+          onChange={(e) => setFitCanvas(e.target.checked)}
+        />
+        <label className="mm-field-label" htmlFor={`${uid}-fitcanvas`}>
+          캔버스도 자른 크기에 맞추기
+        </label>
+      </div>
+      <p className="mm-field-hint">
+        끄면 잘라낸 여백이 프레임의 빈 공간으로 남아 결과물 크기가 그대로입니다.
+      </p>
 
       {cropRect ? (
         <p className="mm-field-hint">
@@ -713,9 +972,12 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
 
       {applied ? (
         <p className="mm-note">
-          적용했습니다. {applied.w} x {applied.h} (문서 크기에도 반영됨)
+          적용했습니다. {applied.w} x {applied.h}
+          {canvasBeforeRef.current ? ' (캔버스도 이 크기로 맞췄습니다)' : ' (문서 크기에도 반영됨)'}
         </p>
       ) : null}
+
+      {notice ? <p className="mm-note">{notice}</p> : null}
 
       {error ? (
         <p className="mm-error" role="alert">

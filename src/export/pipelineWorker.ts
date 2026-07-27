@@ -27,7 +27,7 @@
 import * as Comlink from 'comlink'
 
 import type { MotionProject } from '@/core/types.ts'
-import { ExportAbortError, type ExportOutput, type ExportSettings } from '@/export/pipeline.ts'
+import { ExportAbortError, type EncodedBuffer, type ExportSettings } from '@/export/pipeline.ts'
 import {
   buildEncodeRequest,
   collectTransferables,
@@ -274,7 +274,7 @@ export interface OffThreadEncodeArgs {
   signal?: AbortSignal
 }
 
-export interface OffThreadEncodeOutput extends ExportOutput {
+export interface OffThreadEncodeOutput extends EncodedBuffer {
   /** true 면 워커에서, false 면 메인 스레드 폴백으로 만들었다. */
   ranOnWorker: boolean
 }

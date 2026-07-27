@@ -11,7 +11,14 @@ import { strToU8, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 
 import { createEmptyProject, createImageLayer, createStaticTrack, resetIdCounter } from '@/core/factory.ts'
-import { RENDER_REVISION, SCHEMA_ID, type AssetRef, type MotionProject } from '@/core/types.ts'
+import {
+  CANVAS_MAX,
+  CANVAS_MIN,
+  RENDER_REVISION,
+  SCHEMA_ID,
+  type AssetRef,
+  type MotionProject,
+} from '@/core/types.ts'
 import { EFFECT_DEFS } from '@/effects/registry.ts'
 import {
   DOC_ENTRY,
@@ -265,8 +272,9 @@ describe('migrateProject', () => {
       assets: [],
     })
 
-    expect(result.doc.canvas.w).toBe(2048)
-    expect(result.doc.canvas.h).toBe(16)
+    // 상수를 숫자로 박으면 상한을 올릴 때마다 이 테스트가 이유 없이 깨진다.
+    expect(result.doc.canvas.w).toBe(CANVAS_MAX)
+    expect(result.doc.canvas.h).toBe(CANVAS_MIN)
     expect(result.doc.canvas.background.type).toBe('alpha')
     expect(result.doc.timeline.fps).toBe(25)
     expect(result.doc.timeline.durationFrames).toBe(120)

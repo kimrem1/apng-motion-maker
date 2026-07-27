@@ -32,9 +32,19 @@ export interface CanvasConfig {
   }
 }
 
-/** 하드 상한. 내보내기 UI 상한은 1080px 이다. */
+/**
+ * 하드 상한.
+ *
+ * 4096 이 아니라 4000 인 이유는 저사양 기기의 MAX_TEXTURE_SIZE 가 4096 이기
+ * 때문이다. 캔버스와 같은 크기의 FBO 를 여러 장 잡으므로 상한을 기기 상한에
+ * 딱 붙이면 여유가 없다. 4000 이면 그 아래에 안전하게 들어간다.
+ *
+ * 이 크기는 싸지 않다. 4000x4000 한 장이 64MB 이고, 내보내기는 거의 항상
+ * 스트리밍 경로(MEMORY_BUDGET_BYTES 초과)로 간다. 그쪽이 상주 메모리를
+ * 프레임 두어 장으로 묶어 주므로 상한을 올려도 탭이 죽지 않는다.
+ */
 export const CANVAS_MIN = 16
-export const CANVAS_MAX = 2048
+export const CANVAS_MAX = 4000
 export const FRAMES_MAX = 120
 
 /**

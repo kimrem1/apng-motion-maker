@@ -66,7 +66,11 @@ export interface ExportProgress {
   message: string
 }
 
-export interface ExportOutput {
+/**
+ * 통짜 인코딩 결과. 프레임 전체를 메모리에 들고 도는 경로가 낸다.
+ * 용량 추정처럼 바이트를 직접 재는 쪽이 이 형태를 쓴다.
+ */
+export interface EncodedBuffer {
   bytes: Uint8Array
   mime: string
   /** 점 없는 확장자 */
@@ -78,6 +82,26 @@ export interface ExportOutput {
   warnings?: WebpWarning[]
 }
 
+/**
+ * 내보내기 최종 결과. **Uint8Array 가 아니라 Blob 이다.**
+ *
+ * 큰 파일에서 이 차이가 성공과 실패를 가른다. 예전에는 완성 바이트를 이어붙이고
+ * (사본 1), 호출자가 slice 로 뷰를 떼어내고(사본 2), Blob 을 만들면서 또 한 번
+ * 복사했다(사본 3). 1GB 파일이 JS 힙에서 3~4GB 를 요구하니 탭이 그냥 죽는다.
+ *
+ * Blob 의 데이터는 JS 힙이 아니라 브라우저가 관리하는 저장소에 있고 필요하면
+ * 디스크로 내려간다. 스트리밍 경로는 조각을 만들자마자 Blob 으로 흘려보내므로
+ * 힙에는 마지막 몇 MB 만 남는다.
+ */
+export interface ExportOutput {
+  blob: Blob
+  byteLength: number
+  mime: string
+  /** 점 없는 확장자 */
+  extension: string
+  warnings?: WebpWarning[]
+}
+
 /** 렌더 구간이 전체 진행률에서 차지하는 비중. */
 export const RENDER_WEIGHT = 40
 export const ENCODE_WEIGHT = 60
@@ -85,7 +109,7 @@ export const ENCODE_WEIGHT = 60
 /**
  * 통짜 경로의 상한. 렌더한 프레임을 전부 메모리에 들고 있다가 인코더에 넘기는
  * 방식은 2048px x 왕복 238프레임에서 약 4GB 를 한 번에 할당해 탭이 죽거나
- * 시스템이 스와핑에 빠진다.
+ * 시스템이 스와핑에 빠진다. 4000px 에서는 프레임 11장이면 이 예산을 채운다.
  *
  * 예전에는 여기서 ExportTooLargeError 로 내보내기 자체를 막았다. 지금은 이 값을
  * 넘으면 **스트리밍 경로**로 간다 (runExport 참조). 프레임을 렌더하는 즉시
@@ -395,7 +419,7 @@ export interface EncodeArgs {
  * 렌더된 RGBA 프레임을 최종 바이트로 만든다.
  * 용량 추정기도 같은 함수를 쓴다. 추정과 실제가 다른 경로를 타면 추정이 의미를 잃는다.
  */
-export async function encodeRenderedFrames(args: EncodeArgs): Promise<ExportOutput> {
+export async function encodeRenderedFrames(args: EncodeArgs): Promise<EncodedBuffer> {
   const { doc, settings, frames, width, height, apngPalette, onProgress, signal } = args
   const { fps, loop } = doc.timeline
   const mapping = mapLoop(loop)
@@ -568,7 +592,29 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
   })
 
   onProgress?.({ phase: 'done', done: 100, total: 100, message: '완성' })
-  return output
+  return toExportOutput(output)
+}
+
+/** 통짜 결과를 최종 형태로 옮긴다. 여기서 바이트가 JS 힙을 떠난다. */
+function toExportOutput(buffer: EncodedBuffer): ExportOutput {
+  const blob = new Blob([toBlobPart(buffer.bytes)], { type: buffer.mime })
+  return {
+    blob,
+    byteLength: buffer.bytes.length,
+    mime: buffer.mime,
+    extension: buffer.extension,
+    ...(buffer.warnings ? { warnings: buffer.warnings } : {}),
+  }
+}
+
+/**
+ * Uint8Array 를 Blob 생성자가 받는 형태로 바꾼다.
+ *
+ * 뷰를 그대로 넘겨도 되지만, SharedArrayBuffer 백킹이면 BlobPart 타입에 맞지
+ * 않는다. 그때만 복사한다. 일반 ArrayBuffer 뷰는 복사 없이 그대로 간다.
+ */
+function toBlobPart(bytes: Uint8Array): BlobPart {
+  return bytes.buffer instanceof ArrayBuffer ? (bytes as unknown as BlobPart) : bytes.slice()
 }
 
 // ---------------------------------------------------------------------------
@@ -582,22 +628,106 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
 const STREAM_FRAME_WEIGHT = 95
 
 /**
+ * GIF 팔레트 표본이 쓸 수 있는 메모리.
+ *
+ * buildPaletteFromFrames 는 표본을 하나로 이어붙인 버퍼를 만든다. 장수를 고정
+ * 16 으로 두면 4000x4000 에서 표본 배열 1GB + 이어붙인 버퍼 1GB 가 되어,
+ * 정작 스트리밍으로 아낀 메모리를 팔레트 준비 단계에서 다 써 버린다.
+ */
+const PALETTE_SAMPLE_BUDGET_BYTES = 192 * 1024 * 1024
+
+/**
+ * 이 크기에서 팔레트 표본을 몇 장이나 쓸 수 있는가.
+ *
+ * 최소 2장이다. 1장이면 애니메이션 전체의 색을 첫 프레임 하나로 대표하게 되고,
+ * 색이 크게 바뀌는 모션에서 팔레트가 통째로 틀어진다.
+ */
+export function paletteSampleCount(width: number, height: number): number {
+  const perFrame = Math.max(1, width * height * 4)
+  const affordable = Math.floor(PALETTE_SAMPLE_BUDGET_BYTES / perFrame)
+  return Math.max(2, Math.min(SAMPLE_FRAME_MAX, affordable))
+}
+
+/**
  * 스트리밍 압축 출력 누적 상한.
  *
  * 원시 프레임은 안 쌓지만 압축 결과는 쌓인다. 글리치/자글자글처럼 매 프레임이
- * 노이즈인 콘텐츠는 deflate 가 거의 못 줄여서 2048px 왕복 238프레임이면 출력만
- * 수 GB 가 될 수 있다. 거기에 finish 의 연결 사본과 저장용 Blob 사본이 더해지면
- * 탭이 설명 없이 죽는다. 1GB 를 넘는 애니메이션 파일은 어차피 쓸 곳이 없으므로
- * 이유를 설명하고 여기서 끊는다.
+ * 노이즈인 콘텐츠는 deflate 가 거의 못 줄여서 4000px 왕복 238프레임이면 출력만
+ * 수십 GB 가 될 수 있다. 어딘가에서는 끊어야 한다.
+ *
+ * 예전 값은 1GB 였고, 그마저도 실제로는 못 닿았다. 완성 바이트를 이어붙이고
+ * (사본 1) 다시 잘라내고(사본 2) Blob 으로 옮기느라(사본 3) 힙이 먼저 터졌기
+ * 때문이다. 지금은 조각을 만들자마자 Blob 으로 흘려보내므로(STREAM_FLUSH_BYTES)
+ * 힙 사용량이 출력 크기와 무관해졌고, 그래서 상한을 2GB 로 올릴 수 있다.
+ *
+ * 2GB 위로 더 올리지 않는 이유는 브라우저의 Blob/파일 저장 경로와 대부분의
+ * 뷰어가 그 근처에서 무너지기 때문이다. 여기서 끊고 이유를 설명하는 편이
+ * 탭이 조용히 죽는 것보다 낫다.
  */
-export const STREAM_OUTPUT_LIMIT_BYTES = 1024 * 1024 * 1024
+export const STREAM_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+
+/**
+ * 이만큼 쌓이면 조각을 Blob 으로 옮기고 JS 힙에서 놓아 준다.
+ *
+ * 작게 잡으면 Blob 개수가 늘어 브라우저가 관리 비용을 더 쓰고, 크게 잡으면
+ * 힙에 그만큼이 상주한다. 64MB 는 4000px 프레임 하나(64MB)와 같은 크기라
+ * 프레임 한 장 이상은 절대 안 쌓인다는 뜻이 된다.
+ */
+const STREAM_FLUSH_BYTES = 64 * 1024 * 1024
 
 /** 포맷별 프레임 push 세션을 하나의 얼굴로 감싼다. */
 interface StreamSession {
   add(rgba: Uint8Array): Promise<void>
-  finish(): Uint8Array
+  /**
+   * 지금까지 쌓인 조각을 가져가고 세션에서는 비운다.
+   * 흘려보내기를 지원하지 않는 포맷은 빈 배열을 돌려준다.
+   */
+  drain(): Uint8Array[]
+  /** 마무리하고 **남은** 조각을 돌려준다. 이어붙이지 않는다. */
+  finishParts(): Uint8Array[]
   /** 지금까지 쌓인 압축 출력 바이트 */
   bytesWritten(): number
+}
+
+/**
+ * 조각을 Blob 으로 흘려보내며 모으는 통.
+ *
+ * 완성 파일을 연속된 Uint8Array 로 한 번도 만들지 않는 것이 핵심이다.
+ * Blob 생성자는 조각들을 브라우저 저장소로 복사하고, 그 뒤 JS 쪽 참조를 놓으면
+ * 힙에서 사라진다. 마지막의 new Blob(blobs) 는 Blob 끼리의 연결이라 데이터를
+ * 다시 JS 힙으로 끌어올리지 않는다.
+ */
+class BlobSink {
+  private readonly blobs: Blob[] = []
+  private pending: Uint8Array[] = []
+  private pendingBytes = 0
+  private total = 0
+
+  push(parts: readonly Uint8Array[]): void {
+    for (const part of parts) {
+      if (part.length === 0) continue
+      this.pending.push(part)
+      this.pendingBytes += part.length
+      this.total += part.length
+    }
+    if (this.pendingBytes >= STREAM_FLUSH_BYTES) this.flush()
+  }
+
+  private flush(): void {
+    if (this.pending.length === 0) return
+    this.blobs.push(new Blob(this.pending.map(toBlobPart)))
+    this.pending = []
+    this.pendingBytes = 0
+  }
+
+  get byteLength(): number {
+    return this.total
+  }
+
+  toBlob(mime: string): Blob {
+    this.flush()
+    return new Blob(this.blobs, { type: mime })
+  }
 }
 
 function createStreamSession(args: {
@@ -629,7 +759,9 @@ function createStreamSession(args: {
     return {
       session: {
         add: (rgba) => encoder.addFrame({ rgba, delayNum: delay.num, delayDen: delay.den }),
-        finish: () => encoder.finish(),
+        // APNG 만 흘려보내기가 된다. 청크를 붙이는 즉시 완결되기 때문이다.
+        drain: () => encoder.drain(),
+        finishParts: () => encoder.finishParts(),
         bytesWritten: () => encoder.bytesWritten,
       },
       // MIME 이 image/png 인 이유는 encodeRenderedFrames 의 주석 참조.
@@ -655,7 +787,9 @@ function createStreamSession(args: {
     return {
       session: {
         add: (rgba) => encoder.addFrame({ rgba, delayMs }),
-        finish: () => encoder.finish(),
+        // gifenc 는 내부 버퍼 하나에 계속 쓴다. 중간에 떼어 낼 수 없다.
+        drain: () => [],
+        finishParts: () => encoder.finishParts(),
         bytesWritten: () => encoder.bytesWritten,
       },
       mime: 'image/gif',
@@ -677,7 +811,9 @@ function createStreamSession(args: {
     return {
       session: {
         add: (rgba) => encoder.addFrame({ rgba, durationMs }),
-        finish: () => encoder.finish(),
+        // RIFF 헤더에 전체 크기를 써야 해서 먹싱은 마지막에 한 번에 한다.
+        drain: () => [],
+        finishParts: () => encoder.finishParts(),
         bytesWritten: () => encoder.bytesWritten,
       },
       mime: 'image/webp',
@@ -724,7 +860,8 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
   let gifPalette: GifencPalette | null = null
   if (settings.format === 'gif') {
     onProgress?.({ phase: 'render', done: 0, total: 100, message: '색상 팔레트 준비 중' })
-    const sampleIndices = pickSampleIndices(total, SAMPLE_FRAME_MAX)
+    // 표본 장수는 크기에 따라 줄인다. 4000px 에서 16장이면 그것만 1GB 다.
+    const sampleIndices = pickSampleIndices(total, paletteSampleCount(width, height))
     const sampleFrames: Uint8Array[] = []
     await renderFrameSink({
       doc,
@@ -767,6 +904,8 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
     message: `프레임 0 / ${total} 만드는 중`,
   })
 
+  const sink = new BlobSink()
+
   await renderFrameSink({
     doc,
     renderer,
@@ -778,13 +917,16 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
     signal,
     sink: async (rgba) => {
       await session.add(rgba)
+      // 완성된 조각을 즉시 Blob 으로 옮긴다. 이게 없으면 압축 결과가 통째로
+      // JS 힙에 남아 GB 단위 파일에서 탭이 죽는다.
+      sink.push(session.drain())
       if (session.bytesWritten() > STREAM_OUTPUT_LIMIT_BYTES) {
         /*
          * 처방을 EASY 사용자가 쓸 수 있는 말로 적는다. EASY 화면에서 길이를 줄이는
          * 유일한 손잡이는 속도 슬라이더다.
          */
         throw new Error(
-          '만들어지는 파일이 1GB 를 넘어 중단했습니다. ' +
+          `만들어지는 파일이 ${formatLimit(STREAM_OUTPUT_LIMIT_BYTES)} 를 넘어 중단했습니다. ` +
             '크기를 한 단계 줄이거나 속도를 조금 올려 주세요(길이가 짧아집니다).',
         )
       }
@@ -807,9 +949,18 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
     message: '마무리하는 중',
   })
 
-  const bytes = session.finish()
+  sink.push(session.finishParts())
+  const blob = sink.toBlob(mime)
   onProgress?.({ phase: 'done', done: 100, total: 100, message: '완성' })
 
-  if (settings.format === 'webp') return { bytes, mime, extension, warnings }
-  return { bytes, mime, extension }
+  const output: ExportOutput = { blob, byteLength: sink.byteLength, mime, extension }
+  if (settings.format === 'webp') return { ...output, warnings }
+  return output
+}
+
+/** 상한을 사람이 읽는 단위로. 상수를 고쳐도 메시지가 따라오게 만든다. */
+function formatLimit(bytes: number): string {
+  const gb = bytes / (1024 * 1024 * 1024)
+  if (gb >= 1) return `${Number.isInteger(gb) ? gb : gb.toFixed(1)}GB`
+  return `${Math.round(bytes / (1024 * 1024))}MB`
 }

@@ -31,6 +31,26 @@ import {
 /** 실제로 인코딩해 볼 표본 수. 늘리면 정확해지지만 다이얼로그가 느려진다. */
 export const ESTIMATE_SAMPLE_COUNT = 8
 
+/**
+ * 표본 프레임이 쓸 수 있는 메모리.
+ *
+ * 추정은 통짜 경로라 표본을 전부 메모리에 들고 있는다. 4000x4000 은 한 장이
+ * 64MB 라 8장이면 512MB 다. 다이얼로그를 열었을 뿐인데 그만큼을 잡으면 정작
+ * 내보내기가 메모리를 못 얻는다. 그래서 장수를 크기에 맞춰 줄인다.
+ */
+const ESTIMATE_BUDGET_BYTES = 128 * 1024 * 1024
+
+/**
+ * 이 크기에서 몇 장을 표본으로 쓸 수 있는가.
+ * 최소 2장이다. 1장이면 프레임 간 차분 압축이 표본에 전혀 안 나타나서
+ * 외삽의 근거가 사라진다.
+ */
+export function estimateSampleCount(width: number, height: number): number {
+  const perFrame = Math.max(1, width * height * 4)
+  const affordable = Math.floor(ESTIMATE_BUDGET_BYTES / perFrame)
+  return Math.max(2, Math.min(ESTIMATE_SAMPLE_COUNT, affordable))
+}
+
 /** 표본 외삽의 낙관/비관 계수. 위 주석의 두 편향을 폭으로 흡수한다. */
 const OPTIMISTIC = 0.55
 const PESSIMISTIC = 1.2
@@ -111,7 +131,7 @@ export async function estimateExportSize(args: EstimateArgs): Promise<SizeEstima
   const all = exportFrames(doc)
   const totalFrames = all.length
 
-  const picks = sampleIndices(totalFrames, ESTIMATE_SAMPLE_COUNT)
+  const picks = sampleIndices(totalFrames, estimateSampleCount(width, height))
   const sampleFrames = picks.map((i) => all[i]!)
 
   const rendered = await renderFrameSequence({

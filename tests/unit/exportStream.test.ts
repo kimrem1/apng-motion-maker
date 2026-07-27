@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { ApngStreamEncoder, encodeApng } from '@/export/apng/encoder.ts'
+import { ESTIMATE_SAMPLE_COUNT, estimateSampleCount } from '@/export/estimate.ts'
 import {
   GifStreamEncoder,
   buildPaletteFromFrames,
@@ -19,6 +20,7 @@ import {
   pickSampleIndices,
   SAMPLE_FRAME_MAX,
 } from '@/export/gif/encoder.ts'
+import { paletteSampleCount } from '@/export/pipeline.ts'
 
 const W = 8
 const H = 6
@@ -57,6 +59,51 @@ describe('APNG 스트리밍 등가성', () => {
     const streamed = stream.finish()
 
     expect(streamed).toEqual(whole)
+  })
+
+  /*
+   * drain 은 큰 파일에서 JS 힙을 지키는 장치다. 조각을 중간에 빼내도 이어붙인
+   * 결과가 한 번에 만든 파일과 **바이트 단위로 같아야** 한다. 여기가 어긋나면
+   * "700MB 를 넘는 내보내기만 파일이 깨진다" 는 최악의 버그가 된다.
+   */
+  it('drain 으로 흘려보낸 조각을 이어붙이면 finish 와 같다', async () => {
+    const whole = await encodeApng(
+      frames.map((rgba) => ({ rgba, delayNum: 1, delayDen: 25 })),
+      { width: W, height: H, numPlays: 0, palette: false },
+    )
+
+    const stream = new ApngStreamEncoder(
+      { width: W, height: H, numPlays: 0, frameCount: frames.length },
+      null,
+    )
+    const parts: Uint8Array[] = []
+    for (const rgba of frames) {
+      await stream.addFrame({ rgba, delayNum: 1, delayDen: 25 })
+      // 파이프라인이 프레임마다 하는 것과 같다.
+      parts.push(...stream.drain())
+    }
+    parts.push(...stream.finishParts())
+
+    const total = parts.reduce((n, p) => n + p.length, 0)
+    const joined = new Uint8Array(total)
+    let at = 0
+    for (const p of parts) {
+      joined.set(p, at)
+      at += p.length
+    }
+
+    expect(joined).toEqual(whole)
+  })
+
+  it('drain 을 쓴 세션에서 finish 를 부르면 던진다', async () => {
+    // 막지 않으면 앞부분이 빠진 파일이 조용히 나온다.
+    const stream = new ApngStreamEncoder(
+      { width: W, height: H, numPlays: 0, frameCount: 1 },
+      null,
+    )
+    await stream.addFrame({ rgba: frame(0), delayNum: 1, delayDen: 25 })
+    stream.drain()
+    expect(() => stream.finish()).toThrow(/finishParts/)
   })
 
   it('선언한 프레임 수보다 모자라면 finish 가 던진다', async () => {
@@ -124,5 +171,45 @@ describe('GIF 스트리밍 등가성', () => {
       palette,
     )
     expect(() => stream.finish()).toThrow(/하나도 없다/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 표본 예산
+// ---------------------------------------------------------------------------
+
+/*
+ * 4000px 상한을 열면서 생긴 자리다.
+ *
+ * GIF 팔레트는 대표 프레임을 이어붙인 버퍼에서 만든다. 장수를 16 으로 고정해
+ * 두면 4000x4000 에서 표본만 1GB, 이어붙인 버퍼가 다시 1GB 다. 스트리밍으로
+ * 아낀 메모리를 팔레트 준비 단계에서 그대로 토해 낸다.
+ * 용량 추정도 같은 이유로 표본을 들고 있으므로 같은 규칙을 쓴다.
+ */
+describe('표본 장수 예산', () => {
+  it('작은 캔버스에서는 최대 장수를 그대로 쓴다', () => {
+    expect(paletteSampleCount(512, 512)).toBe(SAMPLE_FRAME_MAX)
+    expect(estimateSampleCount(512, 512)).toBe(ESTIMATE_SAMPLE_COUNT)
+  })
+
+  it('4000px 에서는 장수를 줄인다', () => {
+    expect(paletteSampleCount(4000, 4000)).toBeLessThan(SAMPLE_FRAME_MAX)
+    expect(estimateSampleCount(4000, 4000)).toBeLessThan(ESTIMATE_SAMPLE_COUNT)
+  })
+
+  it('아무리 커도 2장 아래로는 내려가지 않는다', () => {
+    // 1장이면 팔레트가 첫 프레임 하나로 정해지고, 추정은 프레임 간 차분을
+    // 표본에서 볼 수 없게 된다. 둘 다 결과가 무의미해진다.
+    expect(paletteSampleCount(100000, 100000)).toBe(2)
+    expect(estimateSampleCount(100000, 100000)).toBe(2)
+  })
+
+  it('예산이 커질수록 장수가 줄지 않는다 (단조)', () => {
+    let prev = SAMPLE_FRAME_MAX
+    for (const side of [256, 512, 1024, 2048, 3000, 4000]) {
+      const n = paletteSampleCount(side, side)
+      expect(n).toBeLessThanOrEqual(prev)
+      prev = n
+    }
   })
 })

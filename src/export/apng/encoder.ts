@@ -225,6 +225,13 @@ export class ApngStreamEncoder {
    */
   private broken = false
   private written = 0
+  /**
+   * drain 으로 조각을 흘려보낸 적이 있는가.
+   *
+   * drain 을 쓰면 이 객체 안에는 파일의 뒷부분만 남는다. 그 상태로 finish() 를
+   * 부르면 앞부분이 빠진 파일이 조용히 나온다. 그래서 막는다.
+   */
+  private drained = false
 
   constructor(opts: ApngStreamOptions, pal: GlobalPalette | null = null) {
     const { width, height, numPlays, frameCount } = opts
@@ -333,8 +340,30 @@ export class ApngStreamEncoder {
     this.added += 1
   }
 
-  /** IEND 를 붙이고 완성된 파일 바이트를 돌려준다. */
-  finish(): Uint8Array {
+  /**
+   * 지금까지 쌓인 조각을 넘기고 내부 목록을 비운다.
+   *
+   * **왜 필요한가.** APNG 는 무손실이라 큰 캔버스에서 출력이 GB 단위로 간다.
+   * 조각을 finish 까지 전부 들고 있다가 한 번에 이어붙이면, 그 순간 원본만 한
+   * 연속 버퍼가 하나 더 필요하다. 1GB 파일이 2GB 를 쓰고, 호출자가 Blob 으로
+   * 옮기면 또 하나가 붙는다. 조각을 그때그때 Blob 으로 흘려보내면 JS 힙에는
+   * 마지막 몇 MB 만 남는다.
+   *
+   * 돌려준 배열의 조각은 이 객체가 더 이상 참조하지 않는다. 호출자 것이다.
+   * drain 을 한 번이라도 쓴 세션은 finish() 대신 finishParts() 로 닫아야 한다.
+   */
+  drain(): Uint8Array[] {
+    if (this.finished) throw new Error('finish 뒤에 drain 을 불렀다')
+    if (this.parts.length === 0) return []
+    this.drained = true
+    return this.parts.splice(0, this.parts.length)
+  }
+
+  /**
+   * IEND 를 붙이고 **남은 조각**을 돌려준다. 이어붙이지 않는다.
+   * 호출자가 Blob 으로 바로 옮기면 큰 연속 버퍼를 한 번도 만들지 않는다.
+   */
+  finishParts(): Uint8Array[] {
     if (this.broken) throw new Error('실패한 세션은 마무리할 수 없다')
     if (this.finished) throw new Error('finish 를 두 번 불렀다')
     if (this.added !== this.opts.frameCount) {
@@ -343,7 +372,15 @@ export class ApngStreamEncoder {
     }
     this.finished = true
     this.parts.push(writeChunk('IEND', new Uint8Array(0)))
-    return concatBytes(this.parts)
+    return this.parts.splice(0, this.parts.length)
+  }
+
+  /** IEND 를 붙이고 완성된 파일 바이트를 돌려준다. */
+  finish(): Uint8Array {
+    if (this.drained) {
+      throw new Error('drain 을 쓴 세션은 finishParts 로 닫아야 한다. finish 는 앞부분이 빠진다')
+    }
+    return concatBytes(this.finishParts())
   }
 }
 

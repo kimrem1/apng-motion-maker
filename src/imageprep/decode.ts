@@ -6,6 +6,10 @@
  * 환경에 따라 픽셀이 달라지고, 미리보기와 내보내기 결과가 어긋난다.
  */
 
+import { CANVAS_MAX } from '@/core/types.ts'
+
+import { maxTextureSize } from './gpuLimit.ts'
+
 /** 지원 확장자. 이 목록 밖은 디코드 시도조차 하지 않는다. */
 export const SUPPORTED_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'] as const
 
@@ -33,13 +37,28 @@ const MIME_TO_EXT: Record<string, SupportedExtension> = {
 const ALPHA_CAPABLE = new Set<SupportedExtension>(['png', 'webp', 'gif', 'bmp', 'avif'])
 
 /**
+ * 축소 상한의 절대 천장. 캔버스 상한의 두 배다.
+ *
+ * 기기가 16384 를 받아 준다고 해서 16384px 사진을 그대로 들고 있을 이유는 없다.
+ * 두 배로 잡는 이유는 **크롭** 때문이다. 절반 영역을 잘라내도 캔버스 상한만 한
+ * 해상도가 남는다. 그 위는 메모리만 먹고 결과에 기여하지 않는다.
+ * (CANVAS_MAX 가 2048 이던 시절의 상한 4096 과 같은 비율이다.)
+ *
+ * 대가는 메모리다. 8000x8000 원본은 텍스처 256MB 에, 다듬기 보관본까지 더해진다.
+ * 그래서 천장을 여기서 한 번 더 누른다.
+ */
+const LONG_SIDE_CEILING = CANVAS_MAX * 2
+
+/**
  * 이 길이를 넘으면 축소해서 불러온다.
  *
- * 캔버스 상한이 2048px 이므로 4096 을 넘는 원본은 화질에 기여하지 않는다.
- * 반면 기기의 MAX_TEXTURE_SIZE 를 넘으면 텍스처 업로드가 실패한다. 저사양 기기의
- * 상한은 4096 이 흔하다. 축소가 손해보다 이득이 크다.
+ * 기기의 MAX_TEXTURE_SIZE 를 넘으면 텍스처 업로드가 실패하므로 상한은 실측값을
+ * 따른다. 예전에는 4096 으로 박혀 있었는데, 그러면 4000px 캔버스에 쓸 큰 사진을
+ * 임포트 시점에 이미 뭉개 놓고 그 뒤에 크롭을 하게 된다.
  */
-const MAX_LONG_SIDE = 4096
+function maxLongSide(): number {
+  return Math.min(LONG_SIDE_CEILING, maxTextureSize())
+}
 
 /** 결정론을 위한 고정 옵션. 절대 바꾸지 마라. */
 const BITMAP_OPTIONS: ImageBitmapOptions = {
@@ -137,14 +156,15 @@ async function createBitmap(blob: Blob): Promise<{ bitmap: ImageBitmap; fallback
 }
 
 /**
- * MAX_LONG_SIDE 안쪽으로 줄인다.
+ * maxLongSide() 안쪽으로 줄인다.
  * resizeQuality 'high' 는 다운스케일 시 브라우저가 제대로 된 필터를 쓰게 한다.
  */
 async function shrinkToLimit(bitmap: ImageBitmap): Promise<ImageBitmap> {
+  const limit = maxLongSide()
   const long = Math.max(bitmap.width, bitmap.height)
-  if (long <= MAX_LONG_SIDE) return bitmap
+  if (long <= limit) return bitmap
 
-  const ratio = MAX_LONG_SIDE / long
+  const ratio = limit / long
   const w = Math.max(1, Math.round(bitmap.width * ratio))
   const h = Math.max(1, Math.round(bitmap.height * ratio))
   try {

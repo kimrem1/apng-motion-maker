@@ -22,7 +22,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 
-import { FPS_CHOICES, FRAMES_MAX } from '@/core/types.ts'
+import { CANVAS_MAX, CANVAS_MIN, FPS_CHOICES, FRAMES_MAX } from '@/core/types.ts'
 import { isGifExactFps } from '@/core/time.ts'
 import { exportFrames, type ExportFormat, type ExportSettings } from '@/export/pipeline.ts'
 import {
@@ -342,7 +342,8 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
   }
 
   const setLongestEdge = (px: number): void => {
-    const fitted = fitWithin(doc.canvas.w, doc.canvas.h, Math.max(16, Math.round(px)))
+    const clamped = Math.min(CANVAS_MAX, Math.max(CANVAS_MIN, Math.round(px)))
+    const fitted = fitWithin(doc.canvas.w, doc.canvas.h, clamped)
     setCustom((prev) => ({ ...prev, ...fitted }))
   }
 
@@ -600,8 +601,8 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
                     <NumberField
                       label="긴 변 크기"
                       value={longestEdge}
-                      min={16}
-                      max={2048}
+                      min={CANVAS_MIN}
+                      max={CANVAS_MAX}
                       step={16}
                       suffix="px"
                       disabled={busy}

@@ -70,13 +70,98 @@
   background: #808080;
 }
 
+/*
+ * 캔버스와 크롭 오버레이를 겹치는 상자.
+ *
+ * 크롭 상자를 캔버스에 직접 그리지 않는 이유는 미리보기 캔버스가 320px 짜리를
+ * CSS 로 줄여 보여주기 때문이다. 거기에 그린 1px 선과 핸들은 뭉개져서 잡을 수 없다.
+ * line-height 0 은 인라인 캔버스 아래 생기는 기준선 여백을 없앤다. 그 여백이
+ * 남으면 오버레이 좌표가 세로로 몇 px 어긋난다.
+ */
+.mm-prep-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  touch-action: none; /* 드래그가 페이지 스크롤로 새지 않게 한다 */
+  cursor: crosshair;
+}
+
+.mm-prep-frame[data-picking='true'] {
+  cursor: crosshair;
+}
+
 .mm-prep-canvas {
+  display: block;
   max-width: 100%;
   height: auto;
 }
 
 .mm-prep-canvas.is-picking {
   cursor: crosshair;
+}
+
+/*
+ * 크롭 상자.
+ *
+ * 바깥을 어둡게 덮지 않는다. 덮으면 이 패널의 본래 목적인 알파 확인이 막힌다.
+ * 대신 흰 선과 검은 그림자를 겹쳐서 어떤 배경 위에서도 보이게 만든다.
+ */
+.mm-prep-crop {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid #ffffff;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.55),
+    inset 0 0 0 1px rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
+
+/* 삼분할 안내선. 피사체를 어디에 둘지 정하는 데 쓴다. */
+.mm-prep-crop-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 0.35) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.35) 1px, transparent 1px);
+  background-size: 33.333% 33.333%;
+  background-position: 33.333% 33.333%;
+  background-repeat: repeat;
+  mix-blend-mode: difference;
+}
+
+.mm-prep-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  margin: -5px 0 0 -5px;
+  border: 1px solid rgb(0 0 0 / 0.7);
+  border-radius: 2px;
+  background: #ffffff;
+}
+
+.mm-prep-handle[data-handle='nw'] { left: 0; top: 0; }
+.mm-prep-handle[data-handle='n']  { left: 50%; top: 0; }
+.mm-prep-handle[data-handle='ne'] { left: 100%; top: 0; }
+.mm-prep-handle[data-handle='e']  { left: 100%; top: 50%; }
+.mm-prep-handle[data-handle='se'] { left: 100%; top: 100%; }
+.mm-prep-handle[data-handle='s']  { left: 50%; top: 100%; }
+.mm-prep-handle[data-handle='sw'] { left: 0; top: 100%; }
+.mm-prep-handle[data-handle='w']  { left: 0; top: 50%; }
+
+/* 숫자 입력 네 칸. 좁은 인스펙터에서도 두 줄로 접힌다. */
+.mm-prep-cropnums {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.mm-section-subtitle {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .mm-prep-range {

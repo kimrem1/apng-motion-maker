@@ -47,6 +47,11 @@ import { PreviewCanvas } from '@/ui/canvas/PreviewCanvas.tsx'
 import { ExportDialog } from '@/ui/export/ExportDialog.tsx'
 import { PresetGallery } from '@/ui/presets/PresetGallery.tsx'
 import { FRAME_FIT_OPTIONS, frameFitOf, setFrameFit } from '@/ui/layers/layerDocActions.ts'
+import {
+  restoreAssetOriginal,
+  trimAssetMargins,
+  type CanvasSize,
+} from '@/ui/prep/trimAsset.ts'
 
 import { Onboarding } from './Onboarding.tsx'
 import { QuickExport } from './QuickExport.tsx'
@@ -57,8 +62,17 @@ import './easy.css'
 // 선택지
 // ---------------------------------------------------------------------------
 
-/** 긴 변 기준. EASY 는 숫자를 고민하게 만들지 않는다. */
-const SIZE_CHOICES = [256, 384, 512, 768, 1024] as const
+/**
+ * 긴 변 기준. EASY 는 숫자를 고민하게 만들지 않는다.
+ *
+ * 1024 위로는 간격을 크게 벌린다. 2000 과 2048 을 나란히 보여 줘 봐야 고를 근거가
+ * 없다. 큰 값은 인쇄나 대형 배경처럼 목적이 분명한 사람만 고른다.
+ * CANVAS_MAX 를 넘는 항목은 아래에서 걸러진다.
+ */
+const SIZE_CHOICES = [256, 384, 512, 768, 1024, 1536, 2048, 3000, 4000] as const
+
+/** 이 크기를 넘으면 만드는 데 오래 걸리고 파일도 커진다. 고르기 전에 알린다. */
+const HEAVY_SIZE_PX = 1536
 
 /** 기본 내보내기(투명 스티커)의 긴 변 상한. 이 위로는 줄여서 나간다. */
 const STICKER_MAX_PX = 512
@@ -324,6 +338,61 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
         if (aliveRef.current) setSwapping(false)
       })
   }, [])
+
+  // -------------------------------------------------------------------------
+  // 여백 잘라내기
+  // -------------------------------------------------------------------------
+
+  /**
+   * 자르기 전 캔버스 크기. 되돌리기 버튼을 띄우는 조건이기도 하다.
+   * updateAssetPrep 은 히스토리에 안 쌓이므로 Ctrl+Z 로는 픽셀이 안 돌아온다.
+   */
+  const [trimUndo, setTrimUndo] = useState<CanvasSize | null>(null)
+  const [trimming, setTrimming] = useState(false)
+
+  const firstAssetId = doc.assets[0]?.id ?? null
+
+  const handleTrim = useCallback(() => {
+    const assetId = useDocumentStore.getState().doc.assets[0]?.id
+    if (!assetId) return
+    setTrimming(true)
+    setNotice(null)
+    trimAssetMargins(assetId)
+      .then((result) => {
+        if (!aliveRef.current) return
+        if (!result.trimmed) {
+          setNotice('잘라낼 여백을 찾지 못했습니다. 가장자리까지 그림이 차 있습니다.')
+          return
+        }
+        setTrimUndo(result.previousCanvas)
+        setNotice(`여백을 잘라 ${result.width} x ${result.height} 로 맞췄습니다.`)
+      })
+      .catch((err: unknown) => {
+        if (aliveRef.current) setNotice(toErrorMessage(err))
+      })
+      .finally(() => {
+        if (aliveRef.current) setTrimming(false)
+      })
+  }, [])
+
+  const handleTrimUndo = useCallback(() => {
+    const assetId = useDocumentStore.getState().doc.assets[0]?.id
+    if (!assetId) return
+    const canvas = trimUndo
+    setTrimming(true)
+    restoreAssetOriginal(assetId, canvas ?? undefined)
+      .then(() => {
+        if (!aliveRef.current) return
+        setTrimUndo(null)
+        setNotice('원래 이미지로 되돌렸습니다.')
+      })
+      .catch((err: unknown) => {
+        if (aliveRef.current) setNotice(toErrorMessage(err))
+      })
+      .finally(() => {
+        if (aliveRef.current) setTrimming(false)
+      })
+  }, [trimUndo])
 
   // -------------------------------------------------------------------------
   // 크기 / 배경
@@ -619,6 +688,37 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
             {longestEdge > STICKER_MAX_PX
               ? ` 기본 내보내기는 긴 변을 ${STICKER_MAX_PX}px 로 줄입니다. 원본 크기가 필요하면 [다른 설정으로] 를 쓰세요.`
               : ''}
+          </p>
+          {longestEdge > HEAVY_SIZE_PX ? (
+            <p className="mm-easy-note">
+              큰 크기입니다. 만드는 데 시간이 걸리고 파일도 커집니다. 만드는 동안 이 탭을
+              켜 두세요.
+            </p>
+          ) : null}
+        </div>
+
+        {/*
+          자르기를 PRO 인스펙터에만 두면 EASY 사용자는 여백을 영원히 못 지운다.
+          파라미터 없는 원클릭만 여기 둔다. 영역을 직접 그리는 것은 PRO 몫이다.
+        */}
+        <div className="mm-easy-group">
+          <span className="mm-field-label">여백</span>
+          <button
+            type="button"
+            className="mm-btn"
+            disabled={!firstAssetId || trimming || swapping}
+            onClick={handleTrim}
+          >
+            {trimming ? '자르는 중' : '빈 여백 잘라내기'}
+          </button>
+          {trimUndo ? (
+            <button type="button" className="mm-btn" disabled={trimming} onClick={handleTrimUndo}>
+              원래대로
+            </button>
+          ) : null}
+          <p className="mm-easy-note">
+            그림 둘레의 투명하거나 단색인 여백을 찾아 잘라내고 크기를 거기에 맞춥니다.
+            영역을 직접 정하려면 PRO 의 [이미지 다듬기] 를 쓰세요.
           </p>
         </div>
 

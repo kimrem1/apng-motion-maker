@@ -462,6 +462,15 @@ export class WebpStreamEncoder {
     return this.written
   }
 
+  /**
+   * 완성된 파일 조각. WebP 먹싱은 전체 크기를 RIFF 헤더에 써야 해서 한 덩어리로
+   * 나온다. 그래도 배열로 내는 이유는 호출자가 포맷을 가리지 않고 같은 방식으로
+   * Blob 을 만들게 하기 위해서다.
+   */
+  finishParts(): Uint8Array[] {
+    return [this.finish()]
+  }
+
   /** 경고를 확정하고 애니메이션 WebP 로 먹싱한다. */
   finish(): Uint8Array {
     if (this.finished) throw new Error('finish 를 두 번 불렀다')

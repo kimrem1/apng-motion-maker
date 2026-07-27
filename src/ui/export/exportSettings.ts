@@ -11,6 +11,7 @@
  * 각 플랫폼의 실제 APNG/WebP 지원 여부는 미검증이다.
  */
 
+import { CANVAS_MAX } from '@/core/types.ts'
 import type { ExportFormat, ExportSettings } from '@/export/pipeline.ts'
 
 export type ExportPurposeId = 'sticker' | 'web' | 'messenger' | 'sns' | 'custom'
@@ -136,7 +137,8 @@ export const EXPORT_PURPOSES: readonly ExportPurpose[] = [
     description: '포맷과 색상 수를 직접 정합니다.',
     formatLabel: '',
     format: 'apng',
-    maxWidth: 2048,
+    // 캔버스 상한과 같이 간다. 여기만 낮으면 4000px 캔버스가 조용히 줄어든다.
+    maxWidth: CANVAS_MAX,
     fps: 25,
     maxBytes: 0,
     transparent: true,

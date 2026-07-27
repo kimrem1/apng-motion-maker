@@ -143,14 +143,31 @@ export class GifStreamEncoder {
     this.added += 1
   }
 
-  /** 트레일러를 붙이고 완성된 파일 바이트를 돌려준다. */
-  finish(): Uint8Array {
+  /**
+   * 트레일러를 붙이고 완성된 파일 조각을 돌려준다.
+   *
+   * gifenc 는 내부에 버퍼 하나만 들고 있어 조각이 하나뿐이다. 그래도 배열로
+   * 내는 이유는 호출자(스트리밍 파이프라인)가 포맷을 가리지 않고 같은 방식으로
+   * Blob 을 만들게 하기 위해서다.
+   *
+   * bytes() 가 아니라 bytesView() 를 쓴다. bytes() 는 내부 버퍼를 통째로 복사하는데,
+   * 곧바로 Blob 으로 옮길 값이라 그 복사가 그대로 낭비다. 돌려준 뷰는 이 세션을
+   * 더 쓰지 않는 한 유효하고, finished 플래그가 그것을 보장한다.
+   */
+  finishParts(): Uint8Array[] {
     throwIfAborted(this.opts.signal)
     if (this.finished) throw new Error('encodeGif: finish 를 두 번 불렀다')
     if (this.added === 0) throw new Error('encodeGif: 프레임이 하나도 없다')
     this.finished = true
     this.encoder.finish()
-    return this.encoder.bytes()
+    return [this.encoder.bytesView()]
+  }
+
+  /** 트레일러를 붙이고 완성된 파일 바이트를 돌려준다. */
+  finish(): Uint8Array {
+    const parts = this.finishParts()
+    // bytesView 는 내부 버퍼의 뷰다. 소유권 있는 사본으로 바꿔 돌려준다.
+    return parts[0]!.slice()
   }
 }
 
