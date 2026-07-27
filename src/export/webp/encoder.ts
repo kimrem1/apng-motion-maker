@@ -360,6 +360,138 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 const UNSUPPORTED_MESSAGE =
   '이 브라우저에서는 WebP 를 만들 수 없습니다. GIF 나 APNG 로 대신 만들어 주세요.'
 
+export interface WebpStreamOptions {
+  width: number
+  height: number
+  /** 0 = 무한 */
+  loopCount: number
+  /** 0~1. encodeWebp 의 quality 와 같은 스케일이다. */
+  quality: number
+  lossless: boolean
+  signal?: AbortSignal
+  onWarning?(warning: WebpWarning): void
+}
+
+/**
+ * 프레임 push 형 WebP 인코더. encodeWebp 는 이 클래스 위의 래퍼다.
+ *
+ * 이 경로는 원래부터 프레임을 정지 WebP 로 즉시 압축하고 압축 바이트만 모았다.
+ * 스트리밍에 필요한 것은 원시 RGBA 를 받는 즉시 버리는 구조뿐이라, 클래스로
+ * 쪼개는 것 외에 바뀌는 것이 없다.
+ */
+export class WebpStreamEncoder {
+  private readonly opts: WebpStreamOptions
+  private readonly quality: number
+  private readonly canvas: OffscreenCanvas
+  private readonly ctx: OffscreenCanvasRenderingContext2D
+  // ImageData 생성자가 ArrayBufferLike 백킹을 거부한다. ArrayBuffer 로 명시한다.
+  private readonly scratch: Uint8ClampedArray<ArrayBuffer>
+  private readonly image: ImageData
+  private readonly sources: StaticWebpSource[] = []
+  private sourceHadAlpha = false
+  private encodedHasAlpha = false
+  private sawLossless = false
+  private finished = false
+  private written = 0
+
+  constructor(opts: WebpStreamOptions) {
+    assertCanvasSize(opts.width, opts.height)
+    if (!isWebpSupported()) {
+      throw new Error(UNSUPPORTED_MESSAGE)
+    }
+    assertQuality01(opts.quality)
+
+    this.opts = opts
+    // lossless 요청은 quality 1 로 옮기고, 실제로 무손실(VP8L)이 나왔는지는
+    // 결과 비트스트림을 보고 판정한다. 추측하지 않고 확인한다.
+    this.quality = opts.lossless ? 1 : opts.quality
+
+    this.canvas = new OffscreenCanvas(opts.width, opts.height)
+    const ctx = this.canvas.getContext('2d', { alpha: true })
+    if (ctx === null) {
+      throw new Error(UNSUPPORTED_MESSAGE)
+    }
+    this.ctx = ctx
+
+    // ImageData 는 넘긴 Uint8ClampedArray 를 그대로 참조한다. 버퍼 하나를 돌려 쓰면
+    // 프레임마다 width*height*4 를 새로 할당하지 않는다.
+    this.scratch = new Uint8ClampedArray(opts.width * opts.height * 4)
+    this.image = new ImageData(this.scratch, opts.width, opts.height)
+  }
+
+  /** 프레임 하나를 정지 WebP 로 압축해 모은다. rgba 는 이 호출 뒤 재사용해도 된다. */
+  async addFrame(frame: WebpFrame): Promise<void> {
+    const { width, height, signal } = this.opts
+    throwIfAborted(signal)
+    if (this.finished) throw new Error('finish 뒤에 addFrame 을 불렀다')
+
+    const expectedBytes = width * height * 4
+    if (frame.rgba.length !== expectedBytes) {
+      throw new Error(
+        `프레임 ${this.sources.length} 의 RGBA 길이가 맞지 않는다: ${frame.rgba.length} != ${expectedBytes}`,
+      )
+    }
+    if (!this.sourceHadAlpha && hasTransparency(frame.rgba)) this.sourceHadAlpha = true
+
+    this.scratch.set(frame.rgba)
+    // putImageData 는 합성하지 않고 픽셀을 그대로 덮어쓴다. 직전 프레임을 지울 필요가
+    // 없고, 알파 0 픽셀이 이전 프레임과 섞이지도 않는다.
+    this.ctx.putImageData(this.image, 0, 0)
+
+    const blob = await this.canvas.convertToBlob({ type: 'image/webp', quality: this.quality })
+    throwIfAborted(signal)
+    if (blob.type !== 'image/webp') {
+      // 이 브라우저는 webp 를 못 만들어 png 로 떨어뜨렸다. 그 png 를 ANMF 에 넣으면
+      // 완전히 깨진 파일이 나온다. 여기서 끊는 편이 낫다.
+      throw new Error(`${UNSUPPORTED_MESSAGE} (돌려받은 형식: ${blob.type || '알 수 없음'})`)
+    }
+
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    // 크기와 알파 유무는 여기서 한 번 확인해 둔다. muxAnimatedWebp 가 다시 파싱하지만
+    // 경고를 내려면 어차피 프레임 단위로 봐야 한다.
+    const still = parseStaticWebp(bytes)
+    if (still.hasAlpha) this.encodedHasAlpha = true
+    if (still.bitstreamFourCC === VP8L_FOURCC) this.sawLossless = true
+
+    this.sources.push({ bytes, durationMs: frame.durationMs })
+    this.written += bytes.length
+  }
+
+  /** 지금까지 모은 압축 프레임 바이트. 파이프라인이 출력 폭주를 감시할 때 쓴다. */
+  get bytesWritten(): number {
+    return this.written
+  }
+
+  /** 경고를 확정하고 애니메이션 WebP 로 먹싱한다. */
+  finish(): Uint8Array {
+    if (this.finished) throw new Error('finish 를 두 번 불렀다')
+    if (this.sources.length === 0) throw new Error('프레임이 하나도 없다')
+    this.finished = true
+
+    const { width, height, loopCount, lossless, onWarning, signal } = this.opts
+    if (lossless && !this.sawLossless) {
+      onWarning?.({
+        code: 'lossless-unavailable',
+        message:
+          '이 브라우저의 WebP 인코더에 무손실 옵션이 없어 손실 압축(최고 품질)으로 저장했습니다.',
+      })
+    }
+    if (this.sourceHadAlpha && !this.encodedHasAlpha) {
+      onWarning?.({
+        code: 'alpha-dropped',
+        message:
+          '이 브라우저의 WebP 인코더가 투명도를 버렸습니다. 투명 배경이 필요하면 APNG 로 만들어 주세요.',
+      })
+    }
+
+    throwIfAborted(signal)
+    return muxAnimatedWebp(this.sources, { width, height, loopCount, onWarning })
+  }
+}
+
+/**
+ * WebpStreamEncoder 의 래퍼. 스트리밍 경로와 바이트 단위로 같은 파일을 만든다.
+ */
 export async function encodeWebp(frames: WebpFrame[], opts: WebpOptions): Promise<Uint8Array> {
   const { loopCount, lossless, onProgress, signal, onWarning } = opts
   const width = opts.width
@@ -372,92 +504,28 @@ export async function encodeWebp(frames: WebpFrame[], opts: WebpOptions): Promis
   if (!isWebpSupported()) {
     throw new Error(UNSUPPORTED_MESSAGE)
   }
-
   assertQuality01(opts.quality)
-  // lossless 요청은 quality 1 로 옮기고, 실제로 무손실(VP8L)이 나왔는지는
-  // 결과 비트스트림을 보고 판정한다. 추측하지 않고 확인한다.
-  const quality = lossless ? 1 : opts.quality
 
-  const expectedBytes = width * height * 4
+  const stream = new WebpStreamEncoder({
+    width,
+    height,
+    loopCount,
+    quality: opts.quality,
+    lossless,
+    signal,
+    onWarning,
+  })
+
   const total = frames.length
-
-  const canvas = new OffscreenCanvas(width, height)
-  const ctx = canvas.getContext('2d', { alpha: true })
-  if (ctx === null) {
-    throw new Error(UNSUPPORTED_MESSAGE)
-  }
-
-  // ImageData 는 넘긴 Uint8ClampedArray 를 그대로 참조한다. 버퍼 하나를 돌려 쓰면
-  // 프레임마다 width*height*4 를 새로 할당하지 않는다.
-  const scratch = new Uint8ClampedArray(expectedBytes)
-  const image = new ImageData(scratch, width, height)
-
-  const sources: StaticWebpSource[] = []
-  let sourceHadAlpha = false
-  let encodedHasAlpha = false
-  let sawLossless = false
-
   for (let i = 0; i < total; i += 1) {
-    throwIfAborted(signal)
-
-    const frame = frames[i]!
-    if (frame.rgba.length !== expectedBytes) {
-      throw new Error(
-        `프레임 ${i} 의 RGBA 길이가 맞지 않는다: ${frame.rgba.length} != ${expectedBytes}`,
-      )
-    }
-    if (!sourceHadAlpha && hasTransparency(frame.rgba)) sourceHadAlpha = true
-
-    scratch.set(frame.rgba)
-    // putImageData 는 합성하지 않고 픽셀을 그대로 덮어쓴다. 직전 프레임을 지울 필요가
-    // 없고, 알파 0 픽셀이 이전 프레임과 섞이지도 않는다.
-    ctx.putImageData(image, 0, 0)
-
-    const blob = await canvas.convertToBlob({ type: 'image/webp', quality })
-    throwIfAborted(signal)
-    if (blob.type !== 'image/webp') {
-      // 이 브라우저는 webp 를 못 만들어 png 로 떨어뜨렸다. 그 png 를 ANMF 에 넣으면
-      // 완전히 깨진 파일이 나온다. 여기서 끊는 편이 낫다.
-      throw new Error(`${UNSUPPORTED_MESSAGE} (돌려받은 형식: ${blob.type || '알 수 없음'})`)
-    }
-
-    const bytes = new Uint8Array(await blob.arrayBuffer())
-    // 크기와 알파 유무는 여기서 한 번 확인해 둔다. muxAnimatedWebp 가 다시 파싱하지만
-    // 경고를 내려면 어차피 프레임 단위로 봐야 한다.
-    const still = parseStaticWebp(bytes)
-    if (still.hasAlpha) encodedHasAlpha = true
-    if (still.bitstreamFourCC === VP8L_FOURCC) sawLossless = true
-
-    sources.push({ bytes, durationMs: frame.durationMs })
-
+    await stream.addFrame(frames[i]!)
     onProgress?.(i + 1, total)
     // convertToBlob 은 대개 비동기지만 구현에 따라 즉시 해소될 수 있다. 프레임마다
     // 한 번 양보해 취소 버튼과 진행률이 도는 시간을 준다.
     await yieldToHost()
   }
 
-  if (lossless && !sawLossless) {
-    onWarning?.({
-      code: 'lossless-unavailable',
-      message:
-        '이 브라우저의 WebP 인코더에 무손실 옵션이 없어 손실 압축(최고 품질)으로 저장했습니다.',
-    })
-  }
-  if (sourceHadAlpha && !encodedHasAlpha) {
-    onWarning?.({
-      code: 'alpha-dropped',
-      message:
-        '이 브라우저의 WebP 인코더가 투명도를 버렸습니다. 투명 배경이 필요하면 APNG 로 만들어 주세요.',
-    })
-  }
-
-  throwIfAborted(signal)
-  return muxAnimatedWebp(sources, {
-    width,
-    height,
-    loopCount,
-    onWarning,
-  })
+  return stream.finish()
 }
 
 /**

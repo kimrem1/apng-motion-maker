@@ -15,6 +15,15 @@ export class GpuAssetCache {
   private readonly map = new Map<string, GpuAsset>()
   /** 업로드에 실패한 에셋. 매 프레임 같은 에러를 다시 던지지 않기 위해 기억한다. */
   private readonly failed = new Map<string, string>()
+  /**
+   * 마지막으로 업로드(또는 시도)한 원본 비트맵. **참조 비교 전용이다.**
+   *
+   * 이미지 다듬기가 assetRegistry.set 으로 같은 id 의 비트맵을 교체하면 여기서
+   * 감지해 텍스처를 다시 올린다. 이게 없으면 프리뷰가 다듬기 전 픽셀을 영원히
+   * 보여 준다. 레지스트리가 교체 시 이전 비트맵을 close 하므로 이 Map 의 값은
+   * 닫힌 비트맵일 수 있다. 픽셀을 읽는 데 쓰면 안 되고, 실제로 안 쓴다.
+   */
+  private readonly sources = new Map<string, ImageBitmap>()
 
   constructor(gl: WebGL2RenderingContext) {
     this.gl = gl
@@ -31,9 +40,22 @@ export class GpuAssetCache {
 
     for (const ref of refs) {
       live.add(ref.id)
-      if (this.map.has(ref.id)) continue
-      if (this.failed.has(ref.id)) continue
       const bitmap = resolve(ref.id)
+      const cached = this.map.get(ref.id)
+
+      if (cached) {
+        // hasAlpha 의 정본은 문서다. 배경 제거가 알파를 만들면 문서 쪽이 먼저 바뀐다.
+        cached.hasAlpha = ref.hasAlpha
+        // 같은 비트맵이면 그대로 쓴다. 비트맵이 아직 없으면(로딩 중) 옛 텍스처를 유지한다.
+        if (!bitmap || this.sources.get(ref.id) === bitmap) continue
+        this.gl.deleteTexture(cached.texture)
+        this.map.delete(ref.id)
+      } else if (this.failed.has(ref.id)) {
+        // 실패도 비트맵이 교체되면 다시 시도한다. 같은 비트맵 재시도는 여전히 막는다.
+        if (!bitmap || this.sources.get(ref.id) === bitmap) continue
+        this.failed.delete(ref.id)
+      }
+
       if (!bitmap) continue
       try {
         const uploaded = uploadImageBitmap(this.gl, bitmap)
@@ -48,6 +70,7 @@ export class GpuAssetCache {
         // 사유를 남긴다. 검은 사각형이 조용히 그려지는 것보다 낫다.
         this.failed.set(ref.id, err instanceof Error ? err.message : String(err))
       }
+      this.sources.set(ref.id, bitmap)
     }
 
     for (const [id, asset] of this.map) {
@@ -58,6 +81,9 @@ export class GpuAssetCache {
     for (const id of this.failed.keys()) {
       if (!live.has(id)) this.failed.delete(id)
     }
+    for (const id of this.sources.keys()) {
+      if (!live.has(id)) this.sources.delete(id)
+    }
 
     return this.map
   }
@@ -66,5 +92,6 @@ export class GpuAssetCache {
     for (const asset of this.map.values()) this.gl.deleteTexture(asset.texture)
     this.map.clear()
     this.failed.clear()
+    this.sources.clear()
   }
 }

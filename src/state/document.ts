@@ -9,13 +9,14 @@
  */
 
 import { create } from 'zustand'
-import { applyPatches, enablePatches, produceWithPatches, type Patch } from 'immer'
+import { applyPatches, enablePatches, produce, produceWithPatches, type Patch } from 'immer'
 
 import {
   CANVAS_MAX,
   CANVAS_MIN,
   FPS_CHOICES,
   FRAMES_MAX,
+  type AssetPrep,
   type AssetRef,
   type BackgroundType,
   type BlendMode,
@@ -41,6 +42,7 @@ import {
 import { evalTrack, insertKeyframe } from '@/easing/curve.ts'
 import { EASING_PRESET_BY_ID } from '@/easing/presets.ts'
 import { mergePresetEffects, mergePresetTracks, ownershipOf } from '@/motions/merge.ts'
+import { probeAlpha } from '@/imageprep/alphaProbe.ts'
 import { assetRegistry } from './assets.ts'
 
 enablePatches()
@@ -77,6 +79,25 @@ interface DocumentState {
   addImage(input: AddImageInput): { assetId: string; layerId: string }
   removeLayer(layerId: string): void
   reorderLayer(layerId: string, direction: -1 | 1): void
+
+  /**
+   * 이미지 다듬기(배경 제거 / 크롭) 결과를 문서에 반영한다.
+   *
+   * 픽셀 교체(assetRegistry.set)만 하면 AssetRef.naturalW/H 가 실제 픽셀과 어긋나
+   * 오버스캔 솔버가 옛 크기로 s_min 을 계산한다. 회전/이동 프리셋에서 캔버스
+   * 모서리가 비는 사고가 그것이다. 픽셀을 바꾼 쪽이 반드시 이 액션을 함께 부른다.
+   *
+   * hasAlpha 도 여기서 갱신한다. 흰 배경 JPG 는 임포트 시 알파 없음으로 기록되는데,
+   * 배경 제거가 알파를 만든 뒤에도 그대로면 내보내기가 투명도를 버린다.
+   *
+   * **실행취소 스택에 쌓지 않는다.** 픽셀(assetRegistry)은 undo 로 되돌릴 수 없으므로
+   * 이 숫자들만 되돌아가면 문서-픽셀 불일치가 다시 생기고, 자동저장이 그 불일치
+   * 상태를 그대로 영구화한다. 다듬기를 되돌리는 정본 경로는 패널의 [되돌리기]다.
+   */
+  updateAssetPrep(
+    assetId: string,
+    args: { width: number; height: number; hasAlpha: boolean; prep?: AssetPrep },
+  ): void
 
   setLayerFlag(layerId: string, key: 'visible' | 'locked', value: boolean): void
   /**
@@ -241,6 +262,32 @@ function sortKeys(track: Track): void {
 }
 
 /**
+ * undo/redo 가 복원한 에셋 정보를 레지스트리의 실제 픽셀과 다시 맞춘다.
+ *
+ * 픽셀(assetRegistry)은 히스토리 밖이라 패치가 못 되돌린다. 그런데 일부 패치는
+ * 에셋 객체의 값 스냅샷을 들고 있어(addImage 의 push 패치가 대표), undo/redo 가
+ * 다듬기 이전의 naturalW/H / hasAlpha 를 되살릴 수 있다. 그대로 두면 오버스캔이
+ * 옛 크기로 계산되는 그 병이 재발하므로, 히스토리 이동 직후 항상 실측으로 되맞춘다.
+ *
+ * 크기가 어긋난 에셋만 손댄다. 그때 hasAlpha 도 probeAlpha 로 재실측한다
+ * (256px 축소 표본이라 에셋당 1ms 수준). 크기가 같은 desync(배경 제거만 한 경우)는
+ * 여기서 못 잡지만, hasAlpha 는 내보내기 픽셀에 영향이 없는 참고 정보라 손해가 작다.
+ * prep 기록까지는 복원하지 못하지만 prep 은 아직 소비자가 없는 정보성 필드다.
+ */
+function resyncAssetRefs(doc: MotionProject): MotionProject {
+  return produce(doc, (d) => {
+    for (const asset of d.assets) {
+      const bitmap = assetRegistry.get(asset.id)
+      if (!bitmap) continue
+      if (asset.naturalW === bitmap.width && asset.naturalH === bitmap.height) continue
+      asset.naturalW = bitmap.width
+      asset.naturalH = bitmap.height
+      asset.hasAlpha = probeAlpha(bitmap)
+    }
+  })
+}
+
+/**
  * PRO 에서 손을 댔다는 표시.
  *
  * 이게 없으면 EASY 의 "프리셋에서 벗어났습니다" 배너가 영원히 안 뜨고,
@@ -299,7 +346,8 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       const cmd = past[past.length - 1]
       if (!cmd) return
       set({
-        doc: applyPatches(doc, cmd.inversePatches),
+        // 패치가 다듬기 이전 에셋 스냅샷을 되살릴 수 있다. 픽셀과 다시 맞춘다.
+        doc: resyncAssetRefs(applyPatches(doc, cmd.inversePatches)),
         past: past.slice(0, -1),
         future: [cmd, ...future],
       })
@@ -310,7 +358,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       const cmd = future[0]
       if (!cmd) return
       set({
-        doc: applyPatches(doc, cmd.patches),
+        doc: resyncAssetRefs(applyPatches(doc, cmd.patches)),
         past: [...past, cmd],
         future: future.slice(1),
       })
@@ -353,6 +401,32 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       return { assetId, layerId }
     },
 
+    updateAssetPrep(assetId, { width, height, hasAlpha, prep }) {
+      // mutateDoc 을 일부러 안 쓴다. 히스토리에 쌓이면 Ctrl+Z 가 크기만 되돌려
+      // 픽셀과 어긋난다 (인터페이스 주석 참조). past/future 는 건드리지 않는다.
+      // 일부 패치는 에셋 값 스냅샷을 들고 있어 undo/redo 가 이 갱신을 덮을 수
+      // 있는데, 그 구멍은 undo/redo 의 resyncAssetRefs 가 실측으로 막는다.
+      const next = produce(get().doc, (d) => {
+        const asset = d.assets.find((a) => a.id === assetId)
+        if (!asset) return
+        // 마이그레이션(migrate.ts normalizeAssets)과 같은 범위로 자른다.
+        asset.naturalW = clamp(Math.round(width), 1, 1 << 16)
+        asset.naturalH = clamp(Math.round(height), 1, 1 << 16)
+        asset.hasAlpha = hasAlpha
+        if (prep) {
+          // 호출자 객체를 그대로 넣으면 immer 밖의 참조가 문서에 섞인다. 사본을 만든다.
+          asset.prep = {
+            ...(prep.crop ? { crop: [...prep.crop] as [number, number, number, number] } : {}),
+            ...(prep.bgRemove ? { bgRemove: { ...prep.bgRemove } } : {}),
+          }
+        } else {
+          delete asset.prep
+        }
+      })
+      // 참조가 같으면 아무것도 안 바뀐 것이다. 불필요한 리렌더와 자동저장을 막는다.
+      if (next !== get().doc) set({ doc: next })
+    },
+
     removeLayer(layerId) {
       let orphanAssetId: string | null = null
       mutateDoc('레이어 삭제', (d) => {
@@ -364,7 +438,11 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         if (removed.assetId) {
           const stillUsed = d.layers.some((l) => l.assetId === removed.assetId)
           if (!stillUsed) {
-            d.assets = d.assets.filter((a) => a.id !== removed.assetId)
+            // filter 로 배열을 재대입하면 immer 가 ['assets'] 전체 스냅샷 패치를
+            // 기록한다. 그 undo 가 다른 에셋의 나중 갱신(updateAssetPrep)까지
+            // 통째로 되돌리므로 반드시 지운 항목만 splice 한다.
+            const ai = d.assets.findIndex((a) => a.id === removed.assetId)
+            if (ai >= 0) d.assets.splice(ai, 1)
             orphanAssetId = removed.assetId
           }
         }

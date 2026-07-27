@@ -85,7 +85,14 @@ export function lastFrame(span: number, loopSafe: LoopSafety): number {
 export function loopFor(loopSafe: LoopSafety): LoopMode {
   if (loopSafe === 'seamless') return 'loop'
   if (loopSafe === 'pingPongOnly') return 'pingPong'
-  return 'once'
+  /*
+   * once 계열도 기본 제안은 반복이다. 스티커/이모티콘 파일은 반복 재생이 표준이고
+   * "한 번만" 은 EASY 의 반복 라디오에서 언제든 고를 수 있다. 등장처럼 끝이 닫히지
+   * 않는 모션은 반복 시 첫 프레임으로 점프해 돌아가지만, 그것은 반복을 고른 결과이지
+   * 이음새 결함이 아니다. loopSafe 'once' 는 여전히 "이음새가 닫히지 않는다" 는
+   * 사실 기록으로 남는다.
+   */
+  return 'loop'
 }
 
 /** [0, span] 을 n 등분한 정수 프레임 목록 (길이 n+1). 반드시 오름차순이다. */

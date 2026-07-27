@@ -121,12 +121,3 @@
   min-width: 0;
 }
 
-.mm-prep-warn {
-  margin: 0;
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--warn);
-  border-radius: var(--r-sm);
-  color: var(--text);
-  font-size: var(--fs-xs);
-  line-height: 1.5;
-}

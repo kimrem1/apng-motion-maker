@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { estimateExportMemory, mapLoop, MEMORY_BUDGET_BYTES } from '@/export/pipeline.ts'
+import { mapLoop, needsStreamingExport } from '@/export/pipeline.ts'
 import { encodeGif } from '@/export/gif/encoder.ts'
 import { parseGifHeader } from '@/export/gif/parse.ts'
 import { encodeApng } from '@/export/apng/encoder.ts'
@@ -122,18 +122,23 @@ describe('루프 왕복 검증 (mapLoop -> 인코더 -> 재파싱)', () => {
   })
 })
 
-describe('메모리 가드', () => {
-  it('2048px 왕복 120프레임은 예산을 넘는다', () => {
+describe('메모리 라우팅', () => {
+  // 예산을 넘는 설정은 이제 실패가 아니라 스트리밍 경로로 간다.
+  it('2048px 왕복 120프레임은 스트리밍으로 간다', () => {
     // 2N-2 = 238프레임 x 2048 x 2048 x 4 = 약 4GB
-    const bytes = estimateExportMemory(238, 2048, 2048)
-    expect(bytes).toBeGreaterThan(MEMORY_BUDGET_BYTES)
+    expect(needsStreamingExport(238, 2048, 2048)).toBe(true)
   })
 
-  it('512px 30프레임은 예산 안이다', () => {
-    expect(estimateExportMemory(30, 512, 512)).toBeLessThan(MEMORY_BUDGET_BYTES)
+  it('1080px 왕복 238프레임(약 1.1GB)도 스트리밍으로 간다', () => {
+    // 예전 상한이 막던 대표 사례다. 이제 만들 수 있어야 한다.
+    expect(needsStreamingExport(238, 1080, 1080)).toBe(true)
   })
 
-  it('1080px 120프레임은 예산 안이다 (14.A3 상한)', () => {
-    expect(estimateExportMemory(120, 1080, 1080)).toBeLessThan(MEMORY_BUDGET_BYTES)
+  it('512px 30프레임은 통짜 경로다 (APNG 팔레트 최적화 유지)', () => {
+    expect(needsStreamingExport(30, 512, 512)).toBe(false)
+  })
+
+  it('1080px 120프레임은 통짜 경로다 (14.A3 상한)', () => {
+    expect(needsStreamingExport(120, 1080, 1080)).toBe(false)
   })
 })

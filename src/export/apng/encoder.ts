@@ -183,13 +183,177 @@ function planFrame(
   return { rect: changed, blendOp, payload }
 }
 
+export interface ApngStreamOptions {
+  width: number
+  height: number
+  /** 0 = 무한 반복 */
+  numPlays: number
+  /**
+   * 전체 프레임 수. acTL(num_frames)이 파일 머리에 있어서 시작 전에 알아야 한다.
+   * finish 까지 넣은 프레임 수가 이 값과 다르면 finish 가 던진다.
+   */
+  frameCount: number
+  /** 프레임 차분 사각형. 기본 true. */
+  diff?: boolean
+  signal?: AbortSignal
+}
+
+/**
+ * 프레임 push 형 APNG 인코더. encodeApng 는 이 클래스 위의 래퍼다.
+ *
+ * 내보내기 파이프라인의 스트리밍 경로가 렌더한 프레임을 즉시 여기 넣고 원시
+ * RGBA 를 버린다. 차분(planFrame)에 필요한 것은 직전 프레임 하나뿐이라 상주
+ * 메모리가 프레임 2장 + 압축 청크로 떨어진다.
+ *
+ * 팔레트(pal)는 전 프레임을 미리 훑어야 만들 수 있으므로 통짜 경로에서만 쓴다.
+ * 스트리밍 호출자는 null 을 넘긴다. 700MB 를 넘는 내보내기가 전 프레임 256색
+ * 이하일 가능성은 사실상 없어서 실질 손해도 없다.
+ */
+export class ApngStreamEncoder {
+  private readonly parts: Uint8Array[]
+  private readonly opts: ApngStreamOptions
+  private readonly pal: GlobalPalette | null
+  private readonly useDiff: boolean
+  private sequenceNumber = 0
+  private prev: Uint8Array | null = null
+  private added = 0
+  private finished = false
+  /**
+   * addFrame 도중 실패(취소 / deflate 오류)하면 true.
+   * fcTL 을 push 한 뒤 deflate 에서 던지면 parts 에 데이터 없는 고아 fcTL 이 남는다.
+   * 그 상태로 계속 쓰면 sequence_number 가 어긋난 손상 파일이 조용히 나온다.
+   */
+  private broken = false
+  private written = 0
+
+  constructor(opts: ApngStreamOptions, pal: GlobalPalette | null = null) {
+    const { width, height, numPlays, frameCount } = opts
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+      throw new Error(`캔버스 크기가 잘못됐다: ${width}x${height}`)
+    }
+    if (!Number.isInteger(frameCount) || frameCount <= 0) {
+      throw new Error('프레임이 하나도 없다')
+    }
+    if (!Number.isInteger(numPlays) || numPlays < 0 || numPlays > UINT32_MAX) {
+      throw new Error(`numPlays 는 0..4294967295 정수여야 한다: ${numPlays}`)
+    }
+
+    this.opts = opts
+    this.pal = pal
+    this.useDiff = opts.diff !== false
+    this.parts = [
+      PNG_SIGNATURE,
+      writeChunk('IHDR', buildIhdr(width, height, pal ? COLOR_TYPE_PALETTE : COLOR_TYPE_RGBA)),
+      writeChunk('acTL', buildActl(frameCount, numPlays)),
+    ]
+    if (pal) {
+      // PLTE 와 tRNS 는 IDAT 앞이면 된다. acTL 도 IDAT 앞이면 되므로 순서는 자유롭다.
+      // acTL 을 IHDR 바로 뒤에 두는 배치가 apngasm 출력과 같다.
+      this.parts.push(writeChunk('PLTE', pal.palette))
+      if (pal.trns) this.parts.push(writeChunk('tRNS', pal.trns))
+    }
+  }
+
+  /** 지금까지 쌓인 압축 출력 바이트. 파이프라인이 출력 폭주를 감시할 때 쓴다. */
+  get bytesWritten(): number {
+    return this.written
+  }
+
+  /**
+   * 프레임 하나를 인코딩해 붙인다.
+   * **넘긴 rgba 는 다음 addFrame 까지 차분 기준으로 참조한다. 재사용 버퍼를 넘기면 안 된다.**
+   */
+  async addFrame(frame: ApngFrame): Promise<void> {
+    const { width, height, signal } = this.opts
+    throwIfAborted(signal)
+    if (this.broken) throw new Error('이전 프레임이 실패한 세션이다. 새로 만들어야 한다')
+    if (this.finished) throw new Error('finish 뒤에 addFrame 을 불렀다')
+    if (this.added >= this.opts.frameCount) {
+      throw new Error(`선언한 프레임 수(${this.opts.frameCount})보다 많이 넣었다`)
+    }
+
+    const i = this.added
+    const expectedBytes = width * height * 4
+    if (frame.rgba.length !== expectedBytes) {
+      throw new Error(
+        `프레임 ${i} 의 RGBA 길이가 맞지 않는다: ${frame.rgba.length} != ${expectedBytes}`,
+      )
+    }
+    assertUint16(frame.delayNum, `프레임 ${i} 의 delayNum`)
+    assertUint16(frame.delayDen, `프레임 ${i} 의 delayDen`)
+
+    try {
+      const { rect, blendOp, payload } = planFrame(
+        this.useDiff ? this.prev : null,
+        frame.rgba,
+        width,
+        height,
+        this.pal,
+      )
+
+      const fctl = writeChunk(
+        'fcTL',
+        buildFctl(
+          this.sequenceNumber++,
+          rect.w,
+          rect.h,
+          rect.x,
+          rect.y,
+          frame.delayNum,
+          frame.delayDen,
+          // dispose 는 언제나 NONE 이다. 차분은 이전 프레임이 버퍼에 남아야 성립한다.
+          DISPOSE_OP_NONE,
+          blendOp,
+        ),
+      )
+      this.parts.push(fctl)
+      this.written += fctl.length
+
+      const compressed = await zlibDeflate(filterPayload(payload, rect, this.pal))
+
+      throwIfAborted(signal)
+
+      let data: Uint8Array
+      if (i === 0) {
+        // 첫 프레임의 픽셀은 IDAT 다. IDAT 에는 sequence_number 가 없다.
+        data = writeChunk('IDAT', compressed)
+      } else {
+        data = writeChunk('fdAT', buildFdat(this.sequenceNumber++, compressed))
+      }
+      this.parts.push(data)
+      this.written += data.length
+    } catch (err) {
+      // fcTL 만 push 된 채 던졌을 수 있다. 이후 호출을 막지 않으면 재시도한 호출자가
+      // added 카운트가 맞아떨어지는 손상 파일을 받아 간다.
+      this.broken = true
+      throw err
+    }
+
+    this.prev = frame.rgba
+    this.added += 1
+  }
+
+  /** IEND 를 붙이고 완성된 파일 바이트를 돌려준다. */
+  finish(): Uint8Array {
+    if (this.broken) throw new Error('실패한 세션은 마무리할 수 없다')
+    if (this.finished) throw new Error('finish 를 두 번 불렀다')
+    if (this.added !== this.opts.frameCount) {
+      // acTL 에 이미 frameCount 를 썼다. 모자란 채로 닫으면 디코더가 파일을 거부한다.
+      throw new Error(`프레임이 모자란다: ${this.added} / ${this.opts.frameCount}`)
+    }
+    this.finished = true
+    this.parts.push(writeChunk('IEND', new Uint8Array(0)))
+    return concatBytes(this.parts)
+  }
+}
+
 /**
  * 프레임 배열을 APNG 바이트열로 먹싱한다.
  * 프레임마다 onProgress 를 부르고 signal.aborted 를 확인한다.
+ * ApngStreamEncoder 의 래퍼라 스트리밍 경로와 바이트 단위로 같은 파일을 만든다.
  */
 export async function encodeApng(frames: ApngFrame[], opts: ApngOptions): Promise<Uint8Array> {
   const { width, height, numPlays, onProgress, signal } = opts
-  const useDiff = opts.diff !== false
   const usePalette = opts.palette !== false
 
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
@@ -225,70 +389,18 @@ export async function encodeApng(frames: ApngFrame[], opts: ApngOptions): Promis
 
   throwIfAborted(signal)
 
-  const parts: Uint8Array[] = [
-    PNG_SIGNATURE,
-    writeChunk('IHDR', buildIhdr(width, height, pal ? COLOR_TYPE_PALETTE : COLOR_TYPE_RGBA)),
-    writeChunk('acTL', buildActl(total, numPlays)),
-  ]
-  if (pal) {
-    // PLTE 와 tRNS 는 IDAT 앞이면 된다. acTL 도 IDAT 앞이면 되므로 순서는 자유롭다.
-    // acTL 을 IHDR 바로 뒤에 두는 배치가 apngasm 출력과 같다.
-    parts.push(writeChunk('PLTE', pal.palette))
-    if (pal.trns) parts.push(writeChunk('tRNS', pal.trns))
-  }
-
-  // fcTL 과 fdAT 가 공유하는 단일 카운터.
-  let sequenceNumber = 0
-  let prev: Uint8Array | null = null
+  const stream = new ApngStreamEncoder(
+    { width, height, numPlays, frameCount: total, diff: opts.diff, signal },
+    pal,
+  )
 
   for (let i = 0; i < total; i++) {
-    throwIfAborted(signal)
-
-    const frame = frames[i]!
-    const { rect, blendOp, payload } = planFrame(
-      useDiff ? prev : null,
-      frame.rgba,
-      width,
-      height,
-      pal,
-    )
-
-    parts.push(
-      writeChunk(
-        'fcTL',
-        buildFctl(
-          sequenceNumber++,
-          rect.w,
-          rect.h,
-          rect.x,
-          rect.y,
-          frame.delayNum,
-          frame.delayDen,
-          // dispose 는 언제나 NONE 이다. 차분은 이전 프레임이 버퍼에 남아야 성립한다.
-          DISPOSE_OP_NONE,
-          blendOp,
-        ),
-      ),
-    )
-
-    const compressed = await zlibDeflate(filterPayload(payload, rect, pal))
-
-    throwIfAborted(signal)
-
-    if (i === 0) {
-      // 첫 프레임의 픽셀은 IDAT 다. IDAT 에는 sequence_number 가 없다.
-      parts.push(writeChunk('IDAT', compressed))
-    } else {
-      parts.push(writeChunk('fdAT', buildFdat(sequenceNumber++, compressed)))
-    }
-
-    prev = frame.rgba
+    await stream.addFrame(frames[i]!)
     onProgress?.(i + 1, total)
     // CompressionStream 폴백(무압축 경로)에서는 위의 await 가 실질적으로 양보하지
     // 않는다. 그러면 인코딩 내내 메인 스레드가 막혀 취소 버튼과 진행률이 죽는다.
     await yieldToHost()
   }
 
-  parts.push(writeChunk('IEND', new Uint8Array(0)))
-  return concatBytes(parts)
+  return stream.finish()
 }

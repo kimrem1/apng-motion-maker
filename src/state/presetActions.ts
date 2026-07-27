@@ -152,11 +152,24 @@ export function buildPresetDoc(presetId: string): MotionProject | null {
       { doc, layerId, presetId, strength, speed, params: presetParams },
       isFirstApply,
     )
-    if (!isFirstApply) delete result.suggestedLoop
+    // 확정 적용(applyPresetToDocument)의 shouldFollowLoopSuggestion 과 같은 규칙이다.
+    if (!isFirstApply || !shouldFollowLoopSuggestion(doc)) delete result.suggestedLoop
     return withPresetApplied(doc, layerId, result)
   } catch {
     return null
   }
+}
+
+/**
+ * 프리셋의 반복 제안을 따라도 되는가.
+ *
+ * 첫 적용 전에 사용자가 반복 라디오를 이미 만졌다면(공장 기본값 'loop' 가 아니면)
+ * 그 선택이 이긴다. "사용자가 고른 반복을 덮으면 조정값을 날린다" 는 아래 규칙을
+ * 첫 적용이라고 예외로 두면, '한 번만' 을 먼저 고르고 프리셋을 누른 사용자의
+ * 선택이 소리 없이 뒤집힌다.
+ */
+function shouldFollowLoopSuggestion(doc: MotionProject): boolean {
+  return doc.timeline.loop.mode === 'loop'
 }
 
 /** 호버/포커스 시작. presetId 가 null 이면 미리보기를 끈다. */
@@ -255,9 +268,12 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
     // 넘기면 사용자가 직접 쌓아 둔 이펙트가 프리셋을 갈아탈 때마다 날아간다.
     ...(result.effects ? { effects: result.effects } : {}),
     durationFrames: result.durationFrames,
-    // 반복 방식은 공통 노브다. 프리셋을 갈아탄다고 사용자가 고른 반복을
-    // 덮으면 조정값을 날린다. 첫 적용에서만 제안을 따르고, 이후 어긋남은 이음새 검사기가 잡는다.
-    ...(result.suggestedLoop && isFirstApply ? { loopMode: result.suggestedLoop } : {}),
+    // 반복 방식은 공통 노브다. 프리셋을 갈아탄다고 사용자가 고른 반복을 덮으면
+    // 조정값을 날린다. 제안은 첫 적용, 그것도 사용자가 반복을 아직 안 만졌을 때만
+    // 따른다 (shouldFollowLoopSuggestion).
+    ...(result.suggestedLoop && isFirstApply && shouldFollowLoopSuggestion(store.doc)
+      ? { loopMode: result.suggestedLoop }
+      : {}),
     /*
      * 권장 fps.
      * 지지직 8종은 매 프레임 노이즈가 달라 델타 압축이 사실상 0 이다. 25fps 로 두면
@@ -293,6 +309,104 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// 속도/세기 실시간 재적용
+// ---------------------------------------------------------------------------
+
+/**
+ * 슬라이더 드래그 중 재적용 최소 간격 (트레일링 스로틀).
+ *
+ * 매 onChange 마다 적용하면 프리셋 emit + 담기 솔버(240 샘플)가 입력 주기로 돌아
+ * 드래그가 버벅인다. **디바운스가 아니라 스로틀이어야 한다.** 디바운스는 연속으로
+ * 끄는 동안 타이머가 계속 리셋되어 손을 멈추기 전까지 한 번도 발화하지 않는다.
+ * 스로틀은 마지막 적용 시각 기준으로 이 간격마다 발화해 드래그를 실시간으로 따라간다.
+ *
+ * 이 간격이 applyPresetTracks 의 coalesce 창(500ms)보다 짧으므로 연속 드래그의
+ * 적용들은 실행취소 한 칸으로 합쳐진다. 드래그 중 손을 500ms 이상 완전히 멈췄다
+ * 다시 끌면 새 칸이 생기는데, 이는 앱의 다른 드래그 컨트롤(키프레임 이동 등)과
+ * 같은 coalesce 규칙이다.
+ */
+export const LIVE_REAPPLY_MS = 140
+
+let liveTimer: ReturnType<typeof setTimeout> | null = null
+/** 마지막 라이브 적용 시각. 스로틀 발화 간격의 기준점이다. */
+let liveLastAppliedAt = 0
+/**
+ * 마지막 적용 이후 노브가 **실제로 움직였는가.**
+ *
+ * commitMacroNow 의 발화 조건이다. pointerup / keyup / blur 는 값 변경 없이도
+ * 발생한다 (Tab 으로 슬라이더에 들어올 때의 keyup, 제자리 클릭, 포커스 이동).
+ * "문서 macro != 노브" 를 조건으로 쓰면 undo 직후(macro 만 되돌아가고 노브는
+ * 그대로인 상태)에 슬라이더를 스치기만 해도 재적용이 일어나 방금 한 실행취소를
+ * 조용히 되감고 redo 스택까지 지운다. 그래서 "사용자가 노브를 움직였다" 는
+ * 사실 자체를 들고 있어야 한다.
+ */
+let livePending = false
+
+/** 지금 재적용해도 되는가. 되면 프리셋 id, 아니면 null. */
+function reapplyTargetId(): string | null {
+  const id = usePresetUiStore.getState().appliedId
+  if (!id) return null
+  // PRO 에서 손본 문서에 재적용하면 그 편집이 조용히 사라진다.
+  // 그 길은 [프리셋으로 리셋] 버튼 하나만 연다.
+  if (useDocumentStore.getState().doc.presetRef?.dirty === true) return null
+  return id
+}
+
+/**
+ * 라이브 재적용 한 번. 적용이 hover 미리보기를 지우므로(clearPreview),
+ * 아직 호버 중이면 새 문서 기준으로 미리보기를 다시 얹는다. 안 그러면 카드 위에
+ * 마우스를 둔 채 슬라이더를 조정하는 순간 미리보기가 사라지고, mouseenter 가
+ * 다시 오지 않아 카드를 떠났다 돌아오기 전까지 복구되지 않는다.
+ */
+function applyLive(id: string): PresetApplyReport {
+  const report = applyPresetToDocument(id)
+  const hovered = usePresetUiStore.getState().hoveredId
+  if (hovered) previewPreset(hovered)
+  return report
+}
+
+/**
+ * 속도/세기 노브가 움직일 때 부른다. 스로틀 간격으로 현재 프리셋을 같은 노브
+ * 값으로 다시 적용한다. 프리셋을 다시 클릭할 필요가 없다.
+ */
+export function reapplyAppliedPresetSoon(): void {
+  if (reapplyTargetId() === null) return
+  livePending = true
+  if (liveTimer !== null) return // 이미 발화가 예약돼 있다. 리셋하지 않는다 (스로틀).
+  const wait = Math.max(0, LIVE_REAPPLY_MS - (Date.now() - liveLastAppliedAt))
+  liveTimer = setTimeout(() => {
+    liveTimer = null
+    liveLastAppliedAt = Date.now()
+    const id = reapplyTargetId()
+    if (!id || !livePending) return
+    livePending = false
+    applyLive(id)
+  }, wait)
+}
+
+/**
+ * 드래그가 끝났을 때(포인터업/키업/블러) 부른다. 대기 중인 재적용을 지금 확정한다.
+ * 노브가 실제로 움직인 적이 없으면(livePending false) 아무것도 하지 않는다.
+ */
+export function commitMacroNow(): PresetApplyReport | null {
+  if (liveTimer !== null) {
+    clearTimeout(liveTimer)
+    liveTimer = null
+  }
+  if (!livePending) return null
+  const id = reapplyTargetId()
+  if (!id) return null
+  livePending = false
+  // 마지막 스로틀 발화가 이미 최종 값을 적용했으면 문서가 노브와 같다. 그때는
+  // 재적용해도 트랙 id 만 갈리는 무의미한 변경이 생기므로 건너뛴다.
+  const macro = useDocumentStore.getState().doc.presetRef?.macro
+  const ui = usePresetUiStore.getState()
+  if (macro && macro.speed === ui.speed && macro.strength === ui.strength) return null
+  liveLastAppliedAt = Date.now()
+  return applyLive(id)
+}
 
 /** 일부만 적용됐을 때만 문장을 만든다. 문제가 없으면 null 이라 배너가 안 뜬다. */
 function describeSkipped(skipped: PresetApplyReport['skipped']): string | null {

@@ -10,13 +10,21 @@
  * 결정론을 위해 Math.random / Date.now / performance.now 를 쓰지 않는다.
  */
 
+import type { GifencPalette } from 'gifenc'
+
 import type { AssetTable, LoopSpec, MotionProject } from '@/core/types.ts'
 import type { Renderer } from '@/core/renderer/index.ts'
 import { parseHexColor } from '@/core/color.ts'
 import { exportFrameIndices, frameToSec } from '@/core/time.ts'
-import { encodeApng } from '@/export/apng/encoder.ts'
-import { encodeGif } from '@/export/gif/encoder.ts'
-import { encodeWebp, type WebpWarning } from '@/export/webp/encoder.ts'
+import { ApngStreamEncoder, encodeApng } from '@/export/apng/encoder.ts'
+import {
+  GifStreamEncoder,
+  buildPaletteFromFrames,
+  encodeGif,
+  pickSampleIndices,
+  SAMPLE_FRAME_MAX,
+} from '@/export/gif/encoder.ts'
+import { WebpStreamEncoder, encodeWebp, type WebpWarning } from '@/export/webp/encoder.ts'
 import { yieldToHost } from '@/export/yield.ts'
 
 // ---------------------------------------------------------------------------
@@ -48,9 +56,10 @@ export interface ExportSettings {
 export interface ExportProgress {
   phase: 'render' | 'encode' | 'done'
   /**
-   * done / total 은 프레임 수가 아니라 **가중 백분율**이다.
-   * 렌더 40 + 인코딩 60 으로 합산하므로 total 은 항상 100 이다.
-   * 프레임 단위 숫자는 message 에 담는다. 그래야 버튼 하나에 그대로 물릴 수 있다.
+   * done / total 은 프레임 수가 아니라 **가중 백분율**이다. total 은 항상 100 이다.
+   * 가중치는 경로마다 다르다. 통짜 경로는 렌더 40 + 인코딩 60, 스트리밍 경로는
+   * 렌더+인코딩 인터리브 95 (phase 'render' 로 보고) + 마무리 5 다. phase 로
+   * 백분율 구간을 역산하면 안 되고, 프레임 단위 숫자는 message 에 담는다.
    */
   done: number
   total: number
@@ -74,10 +83,15 @@ export const RENDER_WEIGHT = 40
 export const ENCODE_WEIGHT = 60
 
 /**
- * 렌더한 프레임을 전부 메모리에 들고 있다가 인코더에 통짜로 넘긴다.
- * 상한 없이 두면 2048px x 왕복 238프레임에서 약 4GB 를 한 번에 할당해
- * 탭이 죽거나 시스템이 스와핑에 빠진다. 미리 막고 처방을 알려 준다.
- * 스트리밍 인코딩으로 옮기면 이 상한은 사라진다.
+ * 통짜 경로의 상한. 렌더한 프레임을 전부 메모리에 들고 있다가 인코더에 넘기는
+ * 방식은 2048px x 왕복 238프레임에서 약 4GB 를 한 번에 할당해 탭이 죽거나
+ * 시스템이 스와핑에 빠진다.
+ *
+ * 예전에는 여기서 ExportTooLargeError 로 내보내기 자체를 막았다. 지금은 이 값을
+ * 넘으면 **스트리밍 경로**로 간다 (runExport 참조). 프레임을 렌더하는 즉시
+ * 인코딩하고 원시 RGBA 를 버리므로 상주 메모리가 프레임 두어 장 + 압축 결과로
+ * 떨어진다. 통짜 경로를 남겨 두는 이유는 APNG 무손실 팔레트화(전 프레임을
+ * 미리 훑어야 한다) 때문이다.
  */
 export const MEMORY_BUDGET_BYTES = 700 * 1024 * 1024
 
@@ -85,22 +99,13 @@ export function estimateExportMemory(frameCount: number, width: number, height: 
   return frameCount * width * height * 4
 }
 
-export class ExportTooLargeError extends Error {
-  override readonly name = 'ExportTooLargeError'
-  readonly requiredBytes: number
-  constructor(requiredBytes: number) {
-    const gb = (requiredBytes / (1024 * 1024 * 1024)).toFixed(1)
-    /*
-     * 처방을 EASY 사용자가 쓸 수 있는 말로 적는다. "길이를 줄여 주세요" 만 있으면
-     * EASY 화면에 길이 컨트롤이 없어서 아무것도 할 수 없다. 거기서 길이를 줄이는
-     * 유일한 손잡이는 속도 슬라이더다.
-     */
-    super(
-      `이 설정은 한 번에 약 ${gb}GB 가 필요해 만들 수 없습니다. ` +
-        `속도를 조금 올리거나(길이가 짧아집니다) 크기를 한 단계 줄여 주세요.`,
-    )
-    this.requiredBytes = requiredBytes
-  }
+/** 이 설정이 통짜 버퍼 대신 스트리밍 인코딩을 타야 하는가. */
+export function needsStreamingExport(
+  frameCount: number,
+  width: number,
+  height: number,
+): boolean {
+  return estimateExportMemory(frameCount, width, height) > MEMORY_BUDGET_BYTES
 }
 
 /**
@@ -293,18 +298,22 @@ export interface RenderSequenceArgs {
   signal?: AbortSignal
 }
 
+export interface RenderSinkArgs extends RenderSequenceArgs {
+  /**
+   * 프레임 하나의 straight alpha RGBA 를 받는다. 버퍼는 프레임마다 새로 할당되며
+   * 소유권이 sink 로 넘어간다 (APNG 차분이 직전 프레임을 참조하므로 재사용 버퍼면 안 된다).
+   */
+  sink(rgba: Uint8Array, index: number): Promise<void> | void
+}
+
 /**
- * 프레임 목록을 straight alpha RGBA 버퍼 배열로 만든다.
+ * 프레임을 하나씩 렌더해 sink 로 흘린다. 스트리밍 인코딩의 렌더 구간이다.
  *
  * 타깃은 루프 밖에서 한 번만 빌린다. 프레임마다 acquire 하면 FBO 를 매번 새로 만들게 되고
  * (풀은 반납 전에는 같은 걸 다시 주지 않는다) 120프레임에 FBO 120개가 생긴다.
- *
- * 메모리: 1080x1080 x 120프레임이면 약 560MB 다. 14.A3 상한 안에서도 큰 값이라
- * 워커 + 스트리밍 인코딩으로 옮길 자리다. 지금은 인코더 API 가 프레임 배열을
- * 통짜로 받으므로 이 구조가 불가피하다.
  */
-export async function renderFrameSequence(args: RenderSequenceArgs): Promise<Uint8Array[]> {
-  const { doc, renderer, assets, frames, matte, onFrame, signal } = args
+export async function renderFrameSink(args: RenderSinkArgs): Promise<void> {
+  const { doc, renderer, assets, frames, matte, onFrame, signal, sink } = args
   const width = Math.max(1, Math.round(args.width))
   const height = Math.max(1, Math.round(args.height))
   const gl = renderer.gl
@@ -312,7 +321,6 @@ export async function renderFrameSequence(args: RenderSequenceArgs): Promise<Uin
 
   const pooled = renderer.targets.acquire(width, height, 'rgba8')
   const scratch = new Uint8Array(width * height * 4)
-  const out: Uint8Array[] = []
   // 렌더 타깃 서술자도 루프 밖에서 한 번만 만든다.
   const target = { gl, width, height, fbo: pooled.fbo }
 
@@ -332,7 +340,7 @@ export async function renderFrameSequence(args: RenderSequenceArgs): Promise<Uin
 
       const rgba = new Uint8Array(width * height * 4)
       readbackToStraight(scratch, rgba, width, height, matte)
-      out.push(rgba)
+      await sink(rgba, i)
 
       onFrame?.(i + 1, total)
       await yieldToHost()
@@ -342,7 +350,22 @@ export async function renderFrameSequence(args: RenderSequenceArgs): Promise<Uin
     gl.bindFramebuffer(gl.FRAMEBUFFER, null)
     renderer.targets.release(pooled)
   }
+}
 
+/**
+ * 프레임 목록을 straight alpha RGBA 버퍼 배열로 만든다. 통짜 경로 전용이다.
+ *
+ * 메모리: 1080x1080 x 120프레임이면 약 560MB 다. 그래서 MEMORY_BUDGET_BYTES 를
+ * 넘는 설정은 이 함수 대신 renderFrameSink 로 스트리밍한다 (runExport 참조).
+ */
+export async function renderFrameSequence(args: RenderSequenceArgs): Promise<Uint8Array[]> {
+  const out: Uint8Array[] = []
+  await renderFrameSink({
+    ...args,
+    sink: (rgba) => {
+      out.push(rgba)
+    },
+  })
   return out
 }
 
@@ -356,6 +379,14 @@ export interface EncodeArgs {
   frames: readonly Uint8Array[]
   width: number
   height: number
+  /**
+   * APNG 무손실 팔레트화 스위치. 생략하면 켜짐(인코더 기본값).
+   *
+   * 용량 추정기가 쓴다. 실제 내보내기가 스트리밍으로 라우팅되는 설정은 팔레트
+   * 없이 인코딩되므로, 추정도 팔레트를 꺼야 "추정 경로 = 실제 경로" 불변이 산다.
+   * 안 맞추면 256색 이하 콘텐츠에서 추정이 실제 파일보다 몇 배 작게 나온다.
+   */
+  apngPalette?: boolean
   onProgress?(done: number, total: number): void
   signal?: AbortSignal
 }
@@ -365,7 +396,7 @@ export interface EncodeArgs {
  * 용량 추정기도 같은 함수를 쓴다. 추정과 실제가 다른 경로를 타면 추정이 의미를 잃는다.
  */
 export async function encodeRenderedFrames(args: EncodeArgs): Promise<ExportOutput> {
-  const { doc, settings, frames, width, height, onProgress, signal } = args
+  const { doc, settings, frames, width, height, apngPalette, onProgress, signal } = args
   const { fps, loop } = doc.timeline
   const mapping = mapLoop(loop)
 
@@ -377,6 +408,7 @@ export async function encodeRenderedFrames(args: EncodeArgs): Promise<ExportOutp
         width,
         height,
         numPlays: mapping.apngNumPlays,
+        ...(apngPalette === undefined ? {} : { palette: apngPalette }),
         onProgress,
         signal,
       },
@@ -460,9 +492,25 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
   const frames = exportFrames(doc)
   const matte = resolveMatte(doc, settings)
 
-  // 한 프레임도 그리기 전에 막는다. 4GB 를 할당하다 죽으면 사용자는 이유를 모른다.
-  const required = estimateExportMemory(frames.length, width, height)
-  if (required > MEMORY_BUDGET_BYTES) throw new ExportTooLargeError(required)
+  /*
+   * 통짜 버퍼가 예산을 넘으면 스트리밍으로 간다. 예전에는 여기서
+   * ExportTooLargeError 로 막고 "크기를 줄여 달라" 고 했지만, 1080px 왕복
+   * 238프레임(약 1.1GB) 같은 정상 설정까지 걸려서 상한 자체를 없앴다.
+   */
+  if (needsStreamingExport(frames.length, width, height)) {
+    return runExportStreaming({
+      doc,
+      renderer,
+      assets,
+      settings,
+      width,
+      height,
+      frames,
+      matte,
+      onProgress,
+      signal,
+    })
+  }
 
   throwIfAborted(signal)
   onProgress?.({
@@ -521,4 +569,247 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
 
   onProgress?.({ phase: 'done', done: 100, total: 100, message: '완성' })
   return output
+}
+
+// ---------------------------------------------------------------------------
+// 스트리밍 경로
+// ---------------------------------------------------------------------------
+
+/**
+ * 스트리밍 진행률에서 렌더+인코딩 인터리브 구간이 차지하는 비중.
+ * 나머지 5는 finish(먹싱/연결) 몫이다.
+ */
+const STREAM_FRAME_WEIGHT = 95
+
+/**
+ * 스트리밍 압축 출력 누적 상한.
+ *
+ * 원시 프레임은 안 쌓지만 압축 결과는 쌓인다. 글리치/자글자글처럼 매 프레임이
+ * 노이즈인 콘텐츠는 deflate 가 거의 못 줄여서 2048px 왕복 238프레임이면 출력만
+ * 수 GB 가 될 수 있다. 거기에 finish 의 연결 사본과 저장용 Blob 사본이 더해지면
+ * 탭이 설명 없이 죽는다. 1GB 를 넘는 애니메이션 파일은 어차피 쓸 곳이 없으므로
+ * 이유를 설명하고 여기서 끊는다.
+ */
+export const STREAM_OUTPUT_LIMIT_BYTES = 1024 * 1024 * 1024
+
+/** 포맷별 프레임 push 세션을 하나의 얼굴로 감싼다. */
+interface StreamSession {
+  add(rgba: Uint8Array): Promise<void>
+  finish(): Uint8Array
+  /** 지금까지 쌓인 압축 출력 바이트 */
+  bytesWritten(): number
+}
+
+function createStreamSession(args: {
+  doc: MotionProject
+  settings: ExportSettings
+  width: number
+  height: number
+  frameCount: number
+  /** GIF 전용. 대표 프레임 선렌더로 만든 팔레트. */
+  gifPalette: GifencPalette | null
+  warnings: WebpWarning[]
+  signal?: AbortSignal
+}): { session: StreamSession; mime: string; extension: string } {
+  const { doc, settings, width, height, frameCount, gifPalette, warnings, signal } = args
+  const { fps, loop } = doc.timeline
+  const mapping = mapLoop(loop)
+
+  if (settings.format === 'apng') {
+    const delay = fpsToApngDelay(fps)
+    /*
+     * 팔레트는 넘기지 않는다(null). 무손실 팔레트화는 전 프레임을 미리 훑어야
+     * 하는데 그게 곧 통짜 버퍼다. 스트리밍까지 온 크기(700MB 초과)의 애니메이션이
+     * 전 프레임 256색 이하일 가능성은 사실상 없어 실질 손해도 없다.
+     */
+    const encoder = new ApngStreamEncoder(
+      { width, height, numPlays: mapping.apngNumPlays, frameCount, signal },
+      null,
+    )
+    return {
+      session: {
+        add: (rgba) => encoder.addFrame({ rgba, delayNum: delay.num, delayDen: delay.den }),
+        finish: () => encoder.finish(),
+        bytesWritten: () => encoder.bytesWritten,
+      },
+      // MIME 이 image/png 인 이유는 encodeRenderedFrames 의 주석 참조.
+      mime: 'image/png',
+      extension: 'png',
+    }
+  }
+
+  if (settings.format === 'gif') {
+    if (!gifPalette) throw new Error('GIF 스트리밍에는 선계산된 팔레트가 필요하다')
+    const delayMs = fpsToGifDelayMs(fps)
+    const encoder = new GifStreamEncoder(
+      {
+        width,
+        height,
+        loopCount: mapping.gifLoopCount,
+        transparent: settings.transparent,
+        dither: settings.dither,
+        signal,
+      },
+      gifPalette,
+    )
+    return {
+      session: {
+        add: (rgba) => encoder.addFrame({ rgba, delayMs }),
+        finish: () => encoder.finish(),
+        bytesWritten: () => encoder.bytesWritten,
+      },
+      mime: 'image/gif',
+      extension: 'gif',
+    }
+  }
+
+  if (settings.format === 'webp') {
+    const durationMs = fpsToGifDelayMs(fps) // 1000/fps. GIF 전용 이름이지만 계산은 같다.
+    const encoder = new WebpStreamEncoder({
+      width,
+      height,
+      loopCount: mapping.webpLoopCount,
+      quality: settings.quality,
+      lossless: settings.lossless,
+      signal,
+      onWarning: (w) => warnings.push(w),
+    })
+    return {
+      session: {
+        add: (rgba) => encoder.addFrame({ rgba, durationMs }),
+        finish: () => encoder.finish(),
+        bytesWritten: () => encoder.bytesWritten,
+      },
+      mime: 'image/webp',
+      extension: 'webp',
+    }
+  }
+
+  throw new Error('PNG 시퀀스 내보내기는 아직 준비되지 않았습니다. APNG 나 GIF 를 골라 주세요.')
+}
+
+interface StreamExportArgs {
+  doc: MotionProject
+  renderer: Renderer
+  assets: AssetTable
+  settings: ExportSettings
+  width: number
+  height: number
+  frames: readonly number[]
+  matte: Rgb255 | null
+  onProgress?(p: ExportProgress): void
+  signal?: AbortSignal
+}
+
+/**
+ * 렌더와 인코딩을 프레임 하나 단위로 인터리브한다.
+ *
+ * 원시 RGBA 를 전 프레임 보관하지 않는다는 설계 불변 규칙(DESIGN_PLAN)의 실현이다.
+ * 상주 메모리는 프레임 두어 장(리드백 스크래치 + 현재 프레임 + APNG 차분용 직전
+ * 프레임)과 압축 결과뿐이라, 통짜 경로가 감당 못 하는 1080px 왕복 238프레임도
+ * 수십 MB 로 끝난다.
+ *
+ * 통짜 경로와의 차이는 APNG 무손실 팔레트화가 꺼진다는 것 하나다. 나머지는
+ * 같은 세션 인코더를 쓰므로 픽셀 결과가 같다.
+ */
+async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput> {
+  const { doc, renderer, assets, settings, width, height, frames, matte, onProgress, signal } =
+    args
+  const total = frames.length
+
+  throwIfAborted(signal)
+
+  // GIF 팔레트: 대표 프레임만 먼저 렌더한다. 전 프레임을 붙잡지 않기 위해
+  // 지불하는 유일한 선행 비용이고, 최대 16프레임이라 예산 안이다.
+  let gifPalette: GifencPalette | null = null
+  if (settings.format === 'gif') {
+    onProgress?.({ phase: 'render', done: 0, total: 100, message: '색상 팔레트 준비 중' })
+    const sampleIndices = pickSampleIndices(total, SAMPLE_FRAME_MAX)
+    const sampleFrames: Uint8Array[] = []
+    await renderFrameSink({
+      doc,
+      renderer,
+      assets,
+      width,
+      height,
+      frames: sampleIndices.map((i) => frames[i]!),
+      matte,
+      signal,
+      sink: (rgba) => {
+        sampleFrames.push(rgba)
+      },
+    })
+    gifPalette = buildPaletteFromFrames(sampleFrames, {
+      width,
+      height,
+      maxColors: settings.maxColors,
+      transparent: settings.transparent,
+      dither: settings.dither,
+    })
+  }
+
+  const warnings: WebpWarning[] = []
+  const { session, mime, extension } = createStreamSession({
+    doc,
+    settings,
+    width,
+    height,
+    frameCount: total,
+    gifPalette,
+    warnings,
+    signal,
+  })
+
+  onProgress?.({
+    phase: 'render',
+    done: 0,
+    total: 100,
+    message: `프레임 0 / ${total} 만드는 중`,
+  })
+
+  await renderFrameSink({
+    doc,
+    renderer,
+    assets,
+    width,
+    height,
+    frames,
+    matte,
+    signal,
+    sink: async (rgba) => {
+      await session.add(rgba)
+      if (session.bytesWritten() > STREAM_OUTPUT_LIMIT_BYTES) {
+        /*
+         * 처방을 EASY 사용자가 쓸 수 있는 말로 적는다. EASY 화면에서 길이를 줄이는
+         * 유일한 손잡이는 속도 슬라이더다.
+         */
+        throw new Error(
+          '만들어지는 파일이 1GB 를 넘어 중단했습니다. ' +
+            '크기를 한 단계 줄이거나 속도를 조금 올려 주세요(길이가 짧아집니다).',
+        )
+      }
+    },
+    onFrame: (done, t) => {
+      onProgress?.({
+        phase: 'render',
+        done: (done / t) * STREAM_FRAME_WEIGHT,
+        total: 100,
+        message: `프레임 ${done} / ${t} 만드는 중`,
+      })
+    },
+  })
+
+  throwIfAborted(signal)
+  onProgress?.({
+    phase: 'encode',
+    done: STREAM_FRAME_WEIGHT,
+    total: 100,
+    message: '마무리하는 중',
+  })
+
+  const bytes = session.finish()
+  onProgress?.({ phase: 'done', done: 100, total: 100, message: '완성' })
+
+  if (settings.format === 'webp') return { bytes, mime, extension, warnings }
+  return { bytes, mime, extension }
 }

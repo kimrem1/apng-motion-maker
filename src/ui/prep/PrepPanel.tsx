@@ -10,13 +10,11 @@
  * 체커보드 위에서는 흰 테두리가 안 보이고, 흰 배경 위에서는 검은 테두리가
  * 안 보인다. 둘 다 볼 수 있어야 디스필이 됐는지 판단할 수 있다.
  *
- * --- 문서 스토어에 필요한 액션 (아직 없음) ---
- * 지금은 assetRegistry.set 으로 픽셀만 바꾼다. 문서의 AssetRef 는 그대로다.
- * 배경 제거만 하면 크기가 안 변해서 문제가 없지만, **크롭은 크기를 바꾼다.**
- * 그러면 AssetRef.naturalW / naturalH 가 실제 픽셀과 어긋나고,
- * overscan.ts 의 requiredScaleAt 이 틀린 원본 크기로 s_min 을 계산한다.
- * 결과적으로 회전/이동 프리셋에서 캔버스 모서리가 비는 사고가 난다.
- * 그래서 크기가 바뀌면 경고를 띄운다. 필요한 액션은 반환 보고서에 적었다.
+ * 적용/되돌리기는 픽셀 교체(assetRegistry.set)와 문서 반영(updateAssetPrep)을
+ * 반드시 함께 한다. 픽셀만 바꾸면 AssetRef.naturalW/H 가 실제와 어긋나
+ * overscan.ts 의 requiredScaleAt 이 틀린 원본 크기로 s_min 을 계산하고,
+ * 회전/이동 프리셋에서 캔버스 모서리가 비는 사고가 난다. hasAlpha 도 같이
+ * 갱신해야 배경을 지운 JPG 의 투명도가 내보내기에서 살아남는다.
  */
 
 import {
@@ -29,7 +27,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 
-import type { AssetRef } from '@/core/types.ts'
+import type { AssetPrep, AssetRef } from '@/core/types.ts'
+import { probeAlpha } from '@/imageprep/alphaProbe.ts'
 import { toErrorMessage } from '@/imageprep/decode.ts'
 import {
   PREP_BITMAP_OPTIONS,
@@ -439,11 +438,43 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
     return out ?? (await cloneBitmap(original))
   }
 
+  /** 문서에 기록할 다듬기 파라미터. 아무 처리도 없으면 undefined 다. */
+  function buildPrepRecord(): AssetPrep | undefined {
+    const prep: AssetPrep = {}
+    if (cropRect) {
+      prep.crop = [
+        Math.round(cropRect.x),
+        Math.round(cropRect.y),
+        Math.round(cropRect.w),
+        Math.round(cropRect.h),
+      ]
+    }
+    if (settings.enabled) {
+      prep.bgRemove = {
+        enabled: true,
+        keyColor: toHex(settings.keyColor),
+        tolerance: settings.tolerance,
+        featherPx: settings.featherPx,
+        contiguous: settings.contiguous,
+      }
+    }
+    return prep.crop || prep.bgRemove ? prep : undefined
+  }
+
   function handleApply(): void {
     void withBusy('적용', async () => {
       const original = await ensurePrepOriginal(asset.id)
       const result = await buildResult(original)
+      // 알파는 실측한다. 배경 제거를 껐어도 크롭이 투명 영역을 잘라냈을 수 있다.
+      const hasAlpha = probeAlpha(result)
       assetRegistry.set(asset.id, result)
+      // 픽셀과 문서를 같은 동작 안에서 맞춘다. 어긋나면 오버스캔이 옛 크기를 쓴다.
+      useDocumentStore.getState().updateAssetPrep(asset.id, {
+        width: result.width,
+        height: result.height,
+        hasAlpha,
+        prep: buildPrepRecord(),
+      })
       setApplied({ w: result.width, h: result.height })
     })
   }
@@ -451,7 +482,13 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   function handleRevert(): void {
     void withBusy('되돌리기', async () => {
       const original = await ensurePrepOriginal(asset.id)
+      const hasAlpha = probeAlpha(original)
       assetRegistry.set(asset.id, await cloneBitmap(original))
+      useDocumentStore.getState().updateAssetPrep(asset.id, {
+        width: original.width,
+        height: original.height,
+        hasAlpha,
+      })
       setApplied(null)
     })
   }
@@ -480,8 +517,6 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
     setCropRect(fitRectToAspect(cropRect ?? bounds, ratio, bounds))
   }
 
-  const sizeChanged =
-    applied !== null && (applied.w !== asset.naturalW || applied.h !== asset.naturalH)
   const disabled = busy !== null
 
   return (
@@ -678,16 +713,7 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
 
       {applied ? (
         <p className="mm-note">
-          적용했습니다. {applied.w} x {applied.h}
-        </p>
-      ) : null}
-
-      {sizeChanged ? (
-        <p className="mm-prep-warn" role="alert">
-          잘라낸 크기({applied?.w} x {applied?.h})가 문서에 기록된 원본 크기(
-          {asset.naturalW} x {asset.naturalH})와 다릅니다. 문서에 크기를 반영하는 액션
-          (updateAssetPrep)이 아직 없어 오버스캔 계산이 옛 크기를 씁니다. 회전이나 이동
-          프리셋에서 캔버스 모서리가 빌 수 있습니다.
+          적용했습니다. {applied.w} x {applied.h} (문서 크기에도 반영됨)
         </p>
       ) : null}
 

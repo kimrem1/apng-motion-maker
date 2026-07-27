@@ -30,7 +30,9 @@ import {
   applyPresetToDocument,
   buildPresetDoc,
   clearPreview,
+  commitMacroNow,
   previewPreset,
+  reapplyAppliedPresetSoon,
   resolveTargetLayerId,
 } from '@/state/presetActions.ts'
 import { MAX_COMPARE, usePresetUiStore, type PresetCategoryFilter } from '@/state/presetUi.ts'
@@ -386,7 +388,15 @@ export function PresetGallery() {
             max={1}
             step={0.05}
             value={strength}
-            onChange={(e) => setStrength(Number(e.target.value))}
+            onChange={(e) => {
+              setStrength(Number(e.target.value))
+              // 적용된 프리셋이 있으면 다시 클릭하지 않아도 드래그를 따라 실시간 적용된다.
+              // PRO 에서 손본 문서(dirty)는 건드리지 않는다 (presetActions 참조).
+              reapplyAppliedPresetSoon()
+            }}
+            onPointerUp={() => commitMacroNow()}
+            onKeyUp={() => commitMacroNow()}
+            onBlur={() => commitMacroNow()}
           />
         </label>
         <label className="mm-field mm-preset-knob">
@@ -399,7 +409,13 @@ export function PresetGallery() {
             max={1}
             step={SPEED_STEP}
             value={pFromSpeed(speed)}
-            onChange={(e) => setSpeed(speedFromP(Number(e.target.value)))}
+            onChange={(e) => {
+              setSpeed(speedFromP(Number(e.target.value)))
+              reapplyAppliedPresetSoon()
+            }}
+            onPointerUp={() => commitMacroNow()}
+            onKeyUp={() => commitMacroNow()}
+            onBlur={() => commitMacroNow()}
           />
         </label>
       </div>

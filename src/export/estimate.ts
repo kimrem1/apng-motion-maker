@@ -22,6 +22,7 @@ import type { Renderer } from '@/core/renderer/index.ts'
 import {
   encodeRenderedFrames,
   exportFrames,
+  needsStreamingExport,
   renderFrameSequence,
   resolveMatte,
   type ExportSettings,
@@ -130,6 +131,13 @@ export async function estimateExportSize(args: EstimateArgs): Promise<SizeEstima
     frames: rendered,
     width,
     height,
+    /*
+     * 실제 내보내기가 스트리밍으로 라우팅되는 설정(700MB 초과)은 APNG 팔레트
+     * 최적화 없이 인코딩된다. 추정도 같은 조건으로 돌려야 "추정 경로 = 실제 경로"
+     * 불변이 산다. 표본 8프레임은 예산과 무관하게 작으므로 판정은 전체 프레임
+     * 수로 한다.
+     */
+    apngPalette: needsStreamingExport(totalFrames, width, height) ? false : undefined,
     signal,
   })
 

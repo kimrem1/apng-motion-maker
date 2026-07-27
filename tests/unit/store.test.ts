@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { getTrack, isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
+import { assetRegistry } from '@/state/assets.ts'
 import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
 import type { AssetRef, MotionProject } from '@/core/types.ts'
 
@@ -346,5 +347,110 @@ describe('프리셋 이펙트 소유권', () => {
       macro: { speed: 1, strength: 0.5 },
     })
     expect(s().doc.presetRef?.effectIds).toEqual(['v1', 'v2'])
+  })
+})
+
+describe('updateAssetPrep', () => {
+  it('크기 / 알파 / prep 기록이 문서에 반영된다', () => {
+    s().updateAssetPrep('a1', {
+      width: 1602,
+      height: 196,
+      hasAlpha: true,
+      prep: {
+        crop: [100, 500, 1602, 196],
+        bgRemove: { enabled: true, keyColor: '#ffffff', tolerance: 0.12, featherPx: 1 },
+      },
+    })
+    const asset = s().doc.assets[0]!
+    expect(asset.naturalW).toBe(1602)
+    expect(asset.naturalH).toBe(196)
+    expect(asset.hasAlpha).toBe(true)
+    expect(asset.prep?.crop).toEqual([100, 500, 1602, 196])
+    expect(asset.prep?.bgRemove?.keyColor).toBe('#ffffff')
+  })
+
+  it('prep 을 생략하면 기록을 지운다 (되돌리기)', () => {
+    s().updateAssetPrep('a1', {
+      width: 100, height: 50, hasAlpha: true, prep: { crop: [0, 0, 100, 50] },
+    })
+    s().updateAssetPrep('a1', { width: 200, height: 200, hasAlpha: true })
+    const asset = s().doc.assets[0]!
+    expect(asset.naturalW).toBe(200)
+    expect(asset.prep).toBeUndefined()
+  })
+
+  it('실행취소 스택에 쌓이지 않는다 (픽셀은 undo 로 못 되돌리므로)', () => {
+    s().updateAssetPrep('a1', { width: 100, height: 50, hasAlpha: false })
+    expect(s().past).toHaveLength(0)
+    // undo 를 눌러도 크기가 픽셀과 어긋나게 되돌아가지 않는다.
+    s().undo()
+    const asset = s().doc.assets[0]!
+    expect(asset.naturalW).toBe(100)
+    expect(asset.naturalH).toBe(50)
+    expect(asset.hasAlpha).toBe(false)
+  })
+
+  it('이전 커맨드의 undo 는 크기 갱신을 건너뛰고 동작한다', () => {
+    s().setLayerFit(L, 'contain')
+    s().updateAssetPrep('a1', { width: 100, height: 50, hasAlpha: true })
+    s().undo()
+    expect(s().doc.layers[0]!.fit).toBe('cover')
+    // 크기 갱신은 살아남는다. 픽셀이 이미 100x50 이기 때문이다.
+    expect(s().doc.assets[0]!.naturalW).toBe(100)
+  })
+
+  it('없는 에셋이면 문서를 건드리지 않는다', () => {
+    const before = s().doc
+    s().updateAssetPrep('ghost', { width: 10, height: 10, hasAlpha: true })
+    expect(s().doc).toBe(before)
+  })
+
+  it('크기는 정수로 반올림되고 1 미만으로 내려가지 않는다', () => {
+    s().updateAssetPrep('a1', { width: 0.2, height: 99.6, hasAlpha: true })
+    const asset = s().doc.assets[0]!
+    expect(asset.naturalW).toBe(1)
+    expect(asset.naturalH).toBe(100)
+  })
+})
+
+describe('히스토리와 에셋 재동기화', () => {
+  const fakeBitmap = (w: number, h: number): ImageBitmap =>
+    ({ width: w, height: h, close() {} }) as unknown as ImageBitmap
+
+  it('redo 가 되살린 옛 에셋 스냅샷을 레지스트리 실측으로 되맞춘다', () => {
+    const { assetId } = s().addImage({ name: 'x', bitmap: fakeBitmap(30, 30), hasAlpha: false })
+    // 다듬기: 픽셀 교체 + 문서 반영 (updateAssetPrep 은 히스토리 밖)
+    assetRegistry.set(assetId, fakeBitmap(100, 50))
+    s().updateAssetPrep(assetId, { width: 100, height: 50, hasAlpha: true })
+
+    s().undo() // 이미지 추가 취소
+    s().redo() // add 패치는 30x30 스냅샷을 되살리지만 resync 가 실측으로 되맞춘다
+
+    const asset = s().doc.assets.find((a) => a.id === assetId)!
+    expect(asset.naturalW).toBe(100)
+    expect(asset.naturalH).toBe(50)
+    assetRegistry.delete(assetId)
+  })
+
+  it('레이어 삭제 undo 가 다른 에셋의 다듬기 갱신을 덮지 않는다 (splice 패치)', () => {
+    const a = s().addImage({ name: 'a', bitmap: fakeBitmap(20, 20), hasAlpha: false })
+    const b = s().addImage({ name: 'b', bitmap: fakeBitmap(20, 20), hasAlpha: false })
+    s().removeLayer(b.layerId)
+
+    assetRegistry.set(a.assetId, fakeBitmap(10, 5))
+    s().updateAssetPrep(a.assetId, {
+      width: 10, height: 5, hasAlpha: true, prep: { crop: [0, 0, 10, 5] },
+    })
+
+    s().undo() // 삭제 취소. filter 재대입이었다면 assets 전체 스냅샷이 a 를 되돌렸다.
+
+    const asset = s().doc.assets.find((x) => x.id === a.assetId)!
+    expect(asset.naturalW).toBe(10)
+    expect(asset.naturalH).toBe(5)
+    // resync 는 크기만 맞추고 prep 은 못 되살린다. splice 패치 덕에 애초에 안 덮인다.
+    expect(asset.prep?.crop).toEqual([0, 0, 10, 5])
+
+    assetRegistry.delete(a.assetId)
+    assetRegistry.delete(b.assetId)
   })
 })

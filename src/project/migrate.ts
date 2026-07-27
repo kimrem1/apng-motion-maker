@@ -634,6 +634,8 @@ function normalizeAssets(raw: unknown, bag: WarningBag): MotionProject['assets']
           keyColor: str(rawBgRemove.keyColor, '#ffffff'),
           tolerance: num(rawBgRemove.tolerance, 0.12, 0, 1),
           featherPx: num(rawBgRemove.featherPx, 1, 0, 64),
+          // 기본 true 는 PrepPanel 초기값과 같다. 없던 시절 기록도 그 값으로 만들었다.
+          contiguous: bool(rawBgRemove.contiguous, true),
         } as NonNullable<NonNullable<MotionProject['assets'][number]['prep']>['bgRemove']>
       } else {
         delete prep.bgRemove

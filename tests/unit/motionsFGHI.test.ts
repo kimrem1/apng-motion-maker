@@ -209,8 +209,8 @@ describe('emit 유효성', () => {
 
   it('반복 모드 제안이 반복 안전성과 맞는다', () => {
     for (const preset of NEW_PRESETS) {
-      const expected =
-        preset.loopSafe === 'seamless' ? 'loop' : preset.loopSafe === 'pingPongOnly' ? 'pingPong' : 'once'
+      // once 계열도 기본 제안은 반복이다 (loopFor 주석 참조). 스티커는 반복이 표준이다.
+      const expected = preset.loopSafe === 'pingPongOnly' ? 'pingPong' : 'loop'
       expect(emit(preset).suggestedLoop, preset.id).toBe(expected)
     }
   })

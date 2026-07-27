@@ -40,6 +40,121 @@ const MAX_PALETTE_COLORS = 256
 const MIN_PALETTE_COLORS = 2
 
 /**
+ * 원시 RGBA 프레임 목록으로 글로벌 팔레트를 만든다.
+ *
+ * 프레임 전처리(디더 + 알파 스냅)를 거친 픽셀로 만들어야 팔레트가 실제로
+ * 인덱싱될 색 분포와 어긋나지 않는다. encodeGif 와 스트리밍 경로(파이프라인이
+ * 대표 프레임만 미리 렌더해 넘기는 쪽)가 같은 함수를 써야 두 경로의 색이 같다.
+ */
+export function buildPaletteFromFrames(
+  sampleFrames: readonly Uint8Array[],
+  opts: Pick<GifOptions, 'width' | 'height' | 'maxColors' | 'transparent' | 'dither'>,
+): GifencPalette {
+  const { width, height, maxColors, transparent, dither } = opts
+  const bytesPerFrame = width * height * 4
+  const sample = new Uint8Array(sampleFrames.length * bytesPerFrame)
+  for (let i = 0; i < sampleFrames.length; i += 1) {
+    const rgba = sampleFrames[i]
+    if (!rgba) continue
+    sample.set(prepareFrame(rgba, width, height, dither, transparent), i * bytesPerFrame)
+  }
+  return buildGlobalPalette(sample, maxColors, transparent)
+}
+
+export interface GifStreamOptions {
+  width: number
+  height: number
+  /** 0 = 무한 */
+  loopCount: number
+  transparent: boolean
+  dither: number
+  signal?: AbortSignal
+}
+
+/**
+ * 프레임 push 형 GIF 인코더. encodeGif 는 이 클래스 위의 래퍼다.
+ *
+ * gifenc 의 GIFEncoder 는 원래 프레임 단위로 append 하는 구조라 그대로 스트리밍이
+ * 된다. 팔레트만 전 구간 대표 샘플이 필요해서 생성자로 받는다 (buildPaletteFromFrames).
+ * 스트리밍 경로는 대표 프레임 몇 장만 먼저 렌더해 팔레트를 만들고, 본 렌더에서
+ * 프레임을 즉시 여기 넣어 원시 RGBA 를 버린다.
+ */
+export class GifStreamEncoder {
+  private readonly opts: GifStreamOptions
+  private readonly palette: GifencPalette
+  private readonly format: GifencFormat
+  private readonly encoder = GIFEncoder()
+  private readonly repeat: number
+  private added = 0
+  private finished = false
+
+  constructor(opts: GifStreamOptions, palette: GifencPalette) {
+    if (
+      !Number.isInteger(opts.width) ||
+      !Number.isInteger(opts.height) ||
+      opts.width <= 0 ||
+      opts.height <= 0
+    ) {
+      throw new Error(`encodeGif: 잘못된 크기 ${opts.width}x${opts.height}`)
+    }
+    this.opts = opts
+    this.palette = palette
+    this.format = opts.transparent ? 'rgba4444' : 'rgb565'
+    this.repeat = loopCountToRepeat(opts.loopCount)
+  }
+
+  /** 지금까지 쌓인 출력 바이트. 파이프라인이 출력 폭주를 감시할 때 쓴다. */
+  get bytesWritten(): number {
+    // bytesView 는 내부 버퍼의 subarray 라 복사가 없다.
+    return this.encoder.bytesView().length
+  }
+
+  /** 프레임 하나를 디더 + 팔레트 매핑해 붙인다. rgba 는 이 호출 뒤 재사용해도 된다. */
+  async addFrame(frame: GifFrame): Promise<void> {
+    const { width, height, transparent, dither, signal } = this.opts
+    throwIfAborted(signal)
+    if (this.finished) throw new Error('encodeGif: finish 뒤에 addFrame 을 불렀다')
+
+    const bytesPerFrame = width * height * 4
+    if (frame.rgba.length !== bytesPerFrame) {
+      throw new Error(
+        `encodeGif: 프레임 ${this.added} 픽셀 길이 불일치 (기대 ${bytesPerFrame}, 실제 ${frame.rgba.length})`,
+      )
+    }
+
+    const prepared = prepareFrame(frame.rgba, width, height, dither, transparent)
+    const indexed = applyPalette(prepared, this.palette, this.format)
+
+    const frameOpts: GifencWriteFrameOptions = {
+      // delayMs 는 fps 에서 계산된 값을 그대로 넘긴다. 센티초 변환은 gifenc 몫이다.
+      delay: frame.delayMs,
+      repeat: this.repeat,
+      transparent,
+      transparentIndex: transparent ? TRANSPARENT_INDEX : 0,
+      // 투명이면 2 (배경색으로 복원) 여야 이전 프레임이 비쳐 보이지 않는다.
+      // 불투명이면 1 (그대로 두기) 이 프레임 간 LZW 반복에 유리하다.
+      dispose: transparent ? 2 : 1,
+    }
+    // 팔레트는 **첫 프레임에서만** 넘긴다. 이후 프레임에 넘기면 gifenc 가
+    // 로컬 컬러 테이블을 프레임마다 다시 써서 파일이 크게 부푼다.
+    if (this.added === 0) frameOpts.palette = this.palette
+
+    this.encoder.writeFrame(indexed, width, height, frameOpts)
+    this.added += 1
+  }
+
+  /** 트레일러를 붙이고 완성된 파일 바이트를 돌려준다. */
+  finish(): Uint8Array {
+    throwIfAborted(this.opts.signal)
+    if (this.finished) throw new Error('encodeGif: finish 를 두 번 불렀다')
+    if (this.added === 0) throw new Error('encodeGif: 프레임이 하나도 없다')
+    this.finished = true
+    this.encoder.finish()
+    return this.encoder.bytes()
+  }
+}
+
+/**
  * 프레임 배열을 GIF89a 바이트로 인코딩한다.
  *
  * 파이프라인
@@ -47,6 +162,8 @@ const MIN_PALETTE_COLORS = 2
  *   2) quantize 를 **한 번만** 호출해 글로벌 팔레트를 만든다
  *   3) 투명이면 팔레트 0번을 투명으로 예약한다
  *   4) 각 프레임은 Bayer 디더 -> applyPalette 만 수행한다 (재양자화 없음)
+ *
+ * GifStreamEncoder 의 래퍼라 스트리밍 경로와 바이트 단위로 같은 파일을 만든다.
  */
 export async function encodeGif(
   frames: GifFrame[],
@@ -78,60 +195,31 @@ export async function encodeGif(
   const total = frames.length
   onProgress?.(0, total)
 
-  // 1) 대표 샘플. 프레임 전처리(디더 + 알파 스냅)를 거친 픽셀로 만들어야
-  //    팔레트가 실제로 인덱싱될 색 분포와 어긋나지 않는다.
+  // 1) ~ 3) 대표 샘플에서 글로벌 팔레트를 만든다.
   const sampleIndices = pickSampleIndices(total, SAMPLE_FRAME_MAX)
-  const sample = new Uint8Array(sampleIndices.length * bytesPerFrame)
-  for (let i = 0; i < sampleIndices.length; i += 1) {
-    const frame = frames[sampleIndices[i] ?? 0]
-    if (!frame) continue
-    sample.set(prepareFrame(frame.rgba, width, height, dither, transparent), i * bytesPerFrame)
-  }
+  const palette = buildPaletteFromFrames(
+    sampleIndices.map((i) => frames[i]?.rgba ?? new Uint8Array(bytesPerFrame)),
+    { width, height, maxColors, transparent, dither },
+  )
 
   throwIfAborted(signal)
 
-  // 2) + 3) 글로벌 팔레트
-  const palette = buildGlobalPalette(sample, maxColors, transparent)
-  const format: GifencFormat = transparent ? 'rgba4444' : 'rgb565'
-
-  const encoder = GIFEncoder()
-  const repeat = loopCountToRepeat(loopCount)
+  const stream = new GifStreamEncoder(
+    { width, height, loopCount, transparent, dither, signal },
+    palette,
+  )
 
   // 4) 프레임별 디더 + applyPalette
   for (let i = 0; i < total; i += 1) {
-    throwIfAborted(signal)
-
     const frame = frames[i]
     if (!frame) continue
-
-    const prepared = prepareFrame(frame.rgba, width, height, dither, transparent)
-    const indexed = applyPalette(prepared, palette, format)
-
-    const frameOpts: GifencWriteFrameOptions = {
-      // delayMs 는 fps 에서 계산된 값을 그대로 넘긴다. 센티초 변환은 gifenc 몫이다.
-      delay: frame.delayMs,
-      repeat,
-      transparent,
-      transparentIndex: transparent ? TRANSPARENT_INDEX : 0,
-      // 투명이면 2 (배경색으로 복원) 여야 이전 프레임이 비쳐 보이지 않는다.
-      // 불투명이면 1 (그대로 두기) 이 프레임 간 LZW 반복에 유리하다.
-      dispose: transparent ? 2 : 1,
-    }
-    // 팔레트는 **첫 프레임에서만** 넘긴다. 이후 프레임에 넘기면 gifenc 가
-    // 로컬 컬러 테이블을 프레임마다 다시 써서 파일이 크게 부푼다.
-    if (i === 0) frameOpts.palette = palette
-
-    encoder.writeFrame(indexed, width, height, frameOpts)
-
+    await stream.addFrame(frame)
     onProgress?.(i + 1, total)
     // 워커/메인 어느 쪽에서 돌든 취소 신호와 진행률이 반영될 틈을 준다.
     await yieldToHost()
   }
 
-  throwIfAborted(signal)
-
-  encoder.finish()
-  return encoder.bytes()
+  return stream.finish()
 }
 
 /**

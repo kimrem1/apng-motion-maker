@@ -118,6 +118,8 @@ export interface AssetPrep {
     keyColor: string
     tolerance: number
     featherPx: number
+    /** 모서리에서 연결된 영역만 지웠는가. 이게 빠지면 기록으로 재현이 안 된다. */
+    contiguous?: boolean
   }
 }
 

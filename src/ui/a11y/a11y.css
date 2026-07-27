@@ -176,10 +176,8 @@ summary:focus-visible,
 /*
  * 테두리 색 하나로만 "경고" 를 표시하는 나머지 상자들.
  * .mm-preset-notice 는 성공 안내와 실패 안내가 같은 상자를 쓴다.
- * .mm-prep-warn 은 경고 전용인데 평범한 상자와 테두리 색만 다르다.
  */
-:root .mm-preset-notice,
-:root .mm-prep-warn {
+:root .mm-preset-notice {
   border-left-width: 6px;
   border-left-style: double;
 }

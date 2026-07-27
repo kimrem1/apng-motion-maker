@@ -2,7 +2,9 @@
  * A. 등장.
  *
  * 6종 중 combo.popGlitchIn 은 블록 깨짐 이펙트가 있어야 성립해서 combo.ts 에 있다.
- * 등장 프리셋은 전부 1회 재생이다. 무한 반복을 걸면 매 사이클 급가속이 반복된다.
+ * 등장 프리셋은 loopSafe 'once' 다 (이음새가 닫히지 않는다). 그래도 기본 제안은
+ * 반복이다 (shared.ts 의 loopFor 참조). 반복하면 매 사이클 등장이 되풀이되는데,
+ * 스티커에서는 그것이 기대 동작이고 '한 번만' 은 반복 라디오에서 고를 수 있다.
  */
 
 import type { MotionPreset, PresetEmission } from '@/motions/types.ts'

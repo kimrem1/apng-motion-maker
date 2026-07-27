@@ -15,10 +15,11 @@
  *   PRO -> EASY   표현 불가한 편집이 있으면(presetRef.dirty) 배너 + 슬라이더 비활성 +
  *                 [프리셋으로 리셋]. **절대 데이터를 버리지 않는다.**
  *
- * 강도/속도 슬라이더는 문서를 직접 고치지 않는다. presetUi 의 공통 노브를 움직이고,
- * 손을 뗄 때 현재 프리셋을 다시 적용한다. 매 픽셀마다 적용하면 실행취소가 수십 칸
- * 쌓이고(applyPresetTracks 는 병합 키가 없다) 드래그가 버벅인다. 그래서 커밋 시점을
- * pointerup / keyup / blur 로 잡는다.
+ * 강도/속도 슬라이더는 presetUi 의 공통 노브를 움직이면서 **실시간으로** 현재
+ * 프리셋을 다시 적용한다 (reapplyAppliedPresetSoon, 140ms 간격). 매 onChange 마다
+ * 통째로 적용하면 emit + 담기 솔버가 입력 주기로 돌아 드래그가 버벅이므로 짧게
+ * 묶고, 손을 떼는 순간(commitMacroNow) 마지막 값을 확정한다. applyPresetTracks 의
+ * coalesce(500ms) 덕에 드래그 한 번이 실행취소 한 칸이다.
  *
  * dirty 일 때는 속도까지 잠근다. 프리셋 재적용은 프리셋이 소유한 트랙을 갈아끼우므로
  * PRO 에서 손본 값이 사라진다. 강도만 잠그는 선택지도 있지만,
@@ -33,7 +34,12 @@ import { importImageFile, toErrorMessage } from '@/imageprep/index.ts'
 import { EASY_PRESETS } from '@/motions/registry.ts'
 import { baselineFps, baselineSec, fpsForDuration } from '@/motions/apply.ts'
 import { useDocumentStore } from '@/state/document.ts'
-import { applyPresetToDocument, resolveTargetLayerId } from '@/state/presetActions.ts'
+import {
+  applyPresetToDocument,
+  commitMacroNow,
+  reapplyAppliedPresetSoon,
+  resolveTargetLayerId,
+} from '@/state/presetActions.ts'
 import { MAX_COMPARE, usePresetUiStore } from '@/state/presetUi.ts'
 import { SPEED_STEP, formatDurationSec, pFromSpeed, speedFromP } from '@/state/speedScale.ts'
 import { useUiStore } from '@/state/ui.ts'
@@ -206,9 +212,6 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
   // 문서 -> 공통 노브 동기화
   // -------------------------------------------------------------------------
 
-  /** 마지막으로 문서에 반영한 값. 손을 뗐을 때 실제로 바뀌었는지 판단한다. */
-  const committedRef = useRef({ strength, speed })
-
   /*
    * 저장된 프로젝트를 열거나 PRO 에서 넘어오면 presetUi 는 초기값이고 문서에는 진짜
    * macro 가 들어 있다. 이때는 **문서가 진실이다.** 슬라이더가 0.5 를 가리키는데 실제
@@ -221,24 +224,16 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
     ui.setStrength(presetRef.macro.strength)
     ui.setSpeed(presetRef.macro.speed)
     ui.markApplied(presetRef.id)
-    committedRef.current = {
-      strength: presetRef.macro.strength,
-      speed: presetRef.macro.speed,
-    }
   }, [presetRef])
 
   /**
-   * 슬라이더에서 손을 뗀 시점에만 문서를 고친다.
-   * 값이 그대로면 아무것도 하지 않는다. 클릭만 해도 실행취소가 한 칸 쌓이면 안 된다.
+   * 슬라이더에서 손을 뗀 시점의 확정 커밋. 드래그 중에는 reapplyAppliedPresetSoon 이
+   * 실시간으로 적용하고 있으므로, 여기는 대기 중인 재적용을 마지막 값으로 확정하는
+   * 역할이다. 문서가 이미 노브와 같으면 아무것도 하지 않는다.
    */
   const commitMacro = useCallback(() => {
-    const ui = usePresetUiStore.getState()
-    const prev = committedRef.current
-    if (prev.strength === ui.strength && prev.speed === ui.speed) return
-    committedRef.current = { strength: ui.strength, speed: ui.speed }
-
-    if (!ui.appliedId) return
-    const report = applyPresetToDocument(ui.appliedId)
+    const report = commitMacroNow()
+    if (!report) return
     setNotice(report.ok ? report.message : (report.message ?? '모션을 다시 적용하지 못했습니다.'))
   }, [])
 
@@ -506,7 +501,11 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
             value={pFromSpeed(speed)}
             disabled={dirty}
             aria-valuetext={`${formatDurationSec(previewSec)}, ${speed.toFixed(2)}배`}
-            onChange={(e) => setSpeed(speedFromP(Number(e.target.value)))}
+            onChange={(e) => {
+              setSpeed(speedFromP(Number(e.target.value)))
+              // 프리셋을 다시 클릭하지 않아도 드래그를 따라 실시간 적용된다.
+              reapplyAppliedPresetSoon()
+            }}
             onPointerUp={commitMacro}
             onKeyUp={commitMacro}
             onBlur={commitMacro}
@@ -534,7 +533,10 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
             step={0.05}
             value={strength}
             disabled={dirty}
-            onChange={(e) => setStrength(Number(e.target.value))}
+            onChange={(e) => {
+              setStrength(Number(e.target.value))
+              reapplyAppliedPresetSoon()
+            }}
             onPointerUp={commitMacro}
             onKeyUp={commitMacro}
             onBlur={commitMacro}
