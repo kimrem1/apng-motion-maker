@@ -22,9 +22,8 @@ import { TransportBar } from '@/ui/canvas/TransportBar.tsx'
 import { EasyMode } from '@/ui/easy/EasyMode.tsx'
 import { ExportDialog } from '@/ui/export/ExportDialog.tsx'
 import { Inspector } from '@/ui/inspector/Inspector.tsx'
-import { LayerPanel } from '@/ui/layers/LayerPanel.tsx'
-import { PresetGallery } from '@/ui/presets/PresetGallery.tsx'
 import { ErrorBoundary } from '@/ui/shell/ErrorBoundary.tsx'
+import { LeftDock } from '@/ui/shell/LeftDock.tsx'
 import { RecoveryBanner } from '@/ui/shell/RecoveryBanner.tsx'
 import { StatusBar } from '@/ui/shell/StatusBar.tsx'
 import { Toolbar } from '@/ui/shell/Toolbar.tsx'
@@ -53,11 +52,8 @@ function EmptyStage() {
 function ProShell() {
   return (
     <>
-      {/* 좌측 열은 이미지(레이어)가 위, 모션 프리셋이 아래다. */}
-      <div className="mm-app-source mm-left-dock">
-        <LayerPanel />
-        <PresetGallery />
-      </div>
+      {/* 좌측 열은 이미지(레이어)가 위, 모션 프리셋이 아래다. 사이의 손잡이로 높이를 나눈다. */}
+      <LeftDock />
 
       <main className="mm-stage mm-app-stage" id="mm-main" aria-label="미리보기">
         <div className="mm-stage-viewport">

@@ -74,7 +74,9 @@ function overscanCase(emission: PresetEmission): { doc: MotionProject; layer: La
   doc.assets = [asset]
 
   const layer = createImageLayer(asset, 0)
-  // 채우기 솔버를 재는 자리다. 레이어 기본값은 담기라서 명시적으로 뒤집는다.
+  // 채우기 솔버를 재는 자리다. 레이어 기본값은 '원본 크기 그대로'(fit: none, 담기/채우기
+  // 모두 꺼짐)라 명시적으로 채우기로 돌린다. fit 도 같이 바꿔야 isSolverTarget 이 통과한다.
+  layer.fit = 'cover'
   layer.fillsCanvas = true
   layer.keepInside = false
   layer.tracks = emission.tracks

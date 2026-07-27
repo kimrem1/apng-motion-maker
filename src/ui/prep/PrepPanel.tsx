@@ -194,8 +194,11 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   // 같은 화면에 편집기가 둘 이상 뜰 일은 없지만, id 를 고정 문자열로 박으면
   // 나중에 비교 뷰를 붙이는 순간 label 연결이 조용히 깨진다.
   const uid = useId()
+  // 배경 지우기는 꺼진 채로 시작한다. 이미 투명한 PNG 가 대부분인데 켜진 채로 열면
+  // 자동 추정한 키 색이 피사체 일부를 물고 들어가, 사용자가 아무것도 안 했는데
+  // 미리보기가 이미 망가져 보인다. 필요한 사람이 체크해서 켠다.
   const [settings, setSettings] = useState<PrepSettings>(() => ({
-    enabled: true,
+    enabled: false,
     keyColor: [255, 255, 255],
     tolerance: 0.12,
     featherPx: 1,
@@ -289,12 +292,14 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
 
         // 자동 추정은 축소본에서 한다. 전체 해상도로 해도 결과가 거의 같고,
         // 임포트 직후 UI 가 멈추는 쪽이 훨씬 나쁘다.
+        // 추정값은 꺼진 상태로 채워 둔다. 체크를 켜는 순간 바로 쓸 만한 값이 들어 있어야
+        // 사용자가 색과 허용치를 처음부터 맞출 필요가 없다.
         const key = pickKeyColorFromCorners(small)
         const tolerance = estimateTolerance(small, key)
 
         if (!alive) return
         setNatural({ w: original.width, h: original.height })
-        setSettings({ enabled: true, keyColor: key, tolerance, featherPx: 1, contiguous: true })
+        setSettings({ enabled: false, keyColor: key, tolerance, featherPx: 1, contiguous: true })
         replacePreviewOut(null)
         setSourceRev((v) => v + 1)
       } catch (err) {

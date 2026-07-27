@@ -101,6 +101,14 @@ interface DocumentState {
 
   setLayerFlag(layerId: string, key: 'visible' | 'locked', value: boolean): void
   /**
+   * 모든 레이어의 표시/잠금을 한 번에 바꾼다.
+   *
+   * setLayerFlag 를 레이어 수만큼 부르면 안 된다. 20장짜리 문서에서 [전체 숨기기] 한
+   * 번이 undo 20칸을 먹고, Ctrl+Z 를 스무 번 눌러야 원래대로 돌아온다.
+   * 한 번의 변경으로 묶어 한 칸이 되게 한다.
+   */
+  setAllLayersFlag(key: 'visible' | 'locked', value: boolean): void
+  /**
    * 프레임을 벗어날 때의 처리 방식.
    * 두 불리언을 따로 켜면 실행취소가 두 칸 쌓이고 그 사이에 둘 다 켜진 상태가 생긴다.
    */
@@ -388,14 +396,22 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         layerId = layer.id
         d.layers.push(layer)
 
-        // 첫 이미지는 캔버스를 이미지 비율에 맞춘다. 사용자가 크기를 먼저
-        // 정하게 만들면 3클릭 온보딩이 깨진다.
-        if (d.layers.length === 1) {
-          const long = Math.max(bitmap.width, bitmap.height)
-          const scale = long > 1080 ? 1080 / long : 1
-          d.canvas.w = clamp(Math.round(bitmap.width * scale), CANVAS_MIN, CANVAS_MAX)
-          d.canvas.h = clamp(Math.round(bitmap.height * scale), CANVAS_MIN, CANVAS_MAX)
-        }
+        /*
+         * 캔버스를 들어온 이미지 중 **가장 큰 것**에 맞춘다.
+         *
+         * 첫 장은 그대로 받고, 이후에는 폭과 높이를 각각 큰 쪽으로만 넓힌다.
+         * 여러 장을 한 번에 떨어뜨리면 addImage 가 장당 한 번씩 불리므로, 이 규칙이
+         * 곧 "그 묶음에서 가장 큰 크기" 가 된다. 줄이지는 않는다. 나중에 작은 그림을
+         * 한 장 더 넣었다고 이미 잡아 둔 캔버스가 쪼그라들면 안 된다.
+         *
+         * 축소하지 않는 이유는 레이어 기본값이 '원본 크기 그대로'(fit: none,
+         * keepInside: false)이기 때문이다. 캔버스만 줄이면 넣은 그림이 곧바로 잘린다.
+         * 상한은 CANVAS_MAX(4000) 하나뿐이다.
+         */
+        const w = d.layers.length === 1 ? bitmap.width : Math.max(d.canvas.w, bitmap.width)
+        const h = d.layers.length === 1 ? bitmap.height : Math.max(d.canvas.h, bitmap.height)
+        d.canvas.w = clamp(Math.round(w), CANVAS_MIN, CANVAS_MAX)
+        d.canvas.h = clamp(Math.round(h), CANVAS_MIN, CANVAS_MAX)
       })
 
       return { assetId, layerId }
@@ -475,6 +491,19 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       mutateDoc(labels[key], (d) => {
         const layer = findLayer(d, layerId)
         if (layer) layer[key] = value
+      })
+    },
+
+    setAllLayersFlag(key, value) {
+      const labels = {
+        visible: value ? '전체 보이기' : '전체 숨기기',
+        locked: value ? '전체 잠그기' : '전체 잠금 풀기',
+      }
+      mutateDoc(labels[key], (d) => {
+        for (const layer of d.layers) {
+          // 이미 같은 값이면 건드리지 않는다. 패치가 비면 히스토리도 안 쌓인다.
+          if (layer[key] !== value) layer[key] = value
+        }
       })
     },
 

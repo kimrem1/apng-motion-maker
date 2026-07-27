@@ -33,8 +33,11 @@ function setup(): { doc: MotionProject; layer: Layer } {
   }
   doc.assets = [asset]
   const layer = createImageLayer(asset, 0)
-  // 이 파일은 채우기 솔버를 본다. 레이어 기본값은 담기라서 명시적으로 뒤집는다.
-  // 담기 솔버는 containScaleAt 쪽 테스트가 따로 본다.
+  // 이 파일은 채우기 솔버를 본다. 레이어 기본값은 '원본 크기 그대로'(fit: none,
+  // 담기/채우기 모두 꺼짐)라서 명시적으로 채우기로 돌린다. fit 까지 바꿔야 한다.
+  // isSolverTarget 이 fit 이 cover / fill 일 때만 솔버를 돌리기 때문이다.
+  // 담기 솔버는 contain.test.ts 가 따로 본다.
+  layer.fit = 'cover'
   layer.fillsCanvas = true
   layer.keepInside = false
   doc.layers = [layer]
@@ -336,6 +339,7 @@ describe('부모 이동 상속', () => {
     const fg = createImageLayer(doc.assets[0]!, 1)
     fg.parentId = bg.id
     fg.parallaxFactor = 1
+    fg.fit = 'cover'
     fg.fillsCanvas = true
     doc.layers.push(fg)
 

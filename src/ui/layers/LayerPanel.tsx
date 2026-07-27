@@ -199,6 +199,7 @@ export function LayerPanel() {
   const layers = useDocumentStore((s) => s.doc.layers)
   const removeLayer = useDocumentStore((s) => s.removeLayer)
   const setLayerFlag = useDocumentStore((s) => s.setLayerFlag)
+  const setAllLayersFlag = useDocumentStore((s) => s.setAllLayersFlag)
   const setLayerName = useDocumentStore((s) => s.setLayerName)
 
   const selectedIds = useLayerUiStore((s) => s.selectedLayerIds)
@@ -416,6 +417,19 @@ export function LayerPanel() {
 
   const dragging = drag?.active === true
   const listClass = ['mm-lyr-list', dragging ? 'is-dragging mm-dragging' : ''].filter(Boolean).join(' ')
+
+  /*
+   * 전체 토글의 판정.
+   *
+   * "하나라도 켜져 있으면 전부 끈다" 로 잡는다. 절반만 보이는 상태에서 버튼을 누르면
+   * 무엇이 일어날지 눈으로 예측할 수 있어야 하는데, "전부 켜져 있을 때만 끈다" 로 하면
+   * 섞인 상태에서 눌렀을 때 아무 일도 안 일어난 것처럼 보인다.
+   */
+  // 레이어가 없으면 "전부 켜져 있다" 쪽으로 읽는다. 버튼은 어차피 비활성인데,
+  // 빈 목록에서 [전체 보이기] 라고 적혀 있으면 누를 것이 있는 줄 안다.
+  const hasLayers = layers.length > 0
+  const anyVisible = !hasLayers || layers.some((l) => l.visible)
+  const anyUnlocked = !hasLayers || layers.some((l) => !l.locked)
   // 지워진 레이어를 가리키고 있으면 목록에서 탭 진입점이 사라진다. 첫 행으로 되돌린다.
   const activeRowId =
     activeId && orderedIds.includes(activeId) ? activeId : (orderedIds[0] ?? null)
@@ -424,7 +438,34 @@ export function LayerPanel() {
     <section className="mm-panel mm-lyr-panel" aria-label="레이어">
       <div className="mm-panel-head">
         <span>레이어</span>
-        <span aria-hidden="true">{layers.length}</span>
+
+        <span className="mm-lyr-head-actions">
+          <button
+            type="button"
+            className="mm-icon-btn"
+            disabled={!hasLayers}
+            aria-pressed={hasLayers && !anyVisible}
+            title={anyVisible ? '전체 숨기기' : '전체 보이기'}
+            aria-label={anyVisible ? '레이어 전체 숨기기' : '레이어 전체 보이기'}
+            onClick={() => setAllLayersFlag('visible', !anyVisible)}
+          >
+            <IconEye open={anyVisible} />
+          </button>
+          <button
+            type="button"
+            className="mm-icon-btn"
+            disabled={!hasLayers}
+            aria-pressed={hasLayers && !anyUnlocked}
+            title={anyUnlocked ? '전체 잠그기' : '전체 잠금 풀기'}
+            aria-label={anyUnlocked ? '레이어 전체 잠그기' : '레이어 전체 잠금 풀기'}
+            onClick={() => setAllLayersFlag('locked', anyUnlocked)}
+          >
+            <IconLock locked={!anyUnlocked} />
+          </button>
+          <span className="mm-lyr-count" aria-hidden="true">
+            {layers.length}
+          </span>
+        </span>
       </div>
 
       <div className="mm-panel-body mm-scroll">

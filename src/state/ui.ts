@@ -29,8 +29,10 @@ interface UiState {
 }
 
 export const useUiStore = create<UiState>()((set) => ({
-  // 첫 방문은 무조건 EASY 다. 3클릭 온보딩이 이 제품의 핵심 약속이다.
-  mode: 'easy',
+  // 기본은 PRO 다. 레이어와 타임라인을 직접 만지는 것이 이 도구의 주 사용 방식이라,
+  // 매번 EASY 에서 한 번 더 눌러 들어오는 것이 오히려 방해가 된다.
+  // EASY 는 툴바의 세그먼트 토글로 언제든 갈 수 있고, 온보딩은 그쪽에 붙어 있다.
+  mode: 'pro',
   selectedLayerId: null,
   playing: true,
   playheadFrame: 0,

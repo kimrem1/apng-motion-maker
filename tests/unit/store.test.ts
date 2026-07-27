@@ -39,13 +39,13 @@ describe('실행취소 기본', () => {
     s().setLayerFit(L, 'contain')
     expect(s().past).toHaveLength(1)
     s().undo()
-    expect(s().doc.layers[0]!.fit).toBe('cover')
+    expect(s().doc.layers[0]!.fit).toBe('none')
     expect(s().past).toHaveLength(0)
     expect(s().future).toHaveLength(1)
   })
 
   it('값이 그대로면 스택을 먹지 않는다', () => {
-    s().setLayerFit(L, 'cover') // 이미 cover 다
+    s().setLayerFit(L, 'none') // 이미 none(원본 크기) 이다
     expect(s().past).toHaveLength(0)
   })
 
@@ -394,7 +394,7 @@ describe('updateAssetPrep', () => {
     s().setLayerFit(L, 'contain')
     s().updateAssetPrep('a1', { width: 100, height: 50, hasAlpha: true })
     s().undo()
-    expect(s().doc.layers[0]!.fit).toBe('cover')
+    expect(s().doc.layers[0]!.fit).toBe('none')
     // 크기 갱신은 살아남는다. 픽셀이 이미 100x50 이기 때문이다.
     expect(s().doc.assets[0]!.naturalW).toBe(100)
   })

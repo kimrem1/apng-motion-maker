@@ -83,16 +83,24 @@ export function createImageLayer(asset: AssetRef, z: number): Layer {
     z,
     visible: true,
     locked: false,
-    fit: 'cover',
+    // 원본 크기 그대로 앉힌다. 캔버스가 가장 큰 이미지에 맞춰 잡히므로 채우기나
+    // 담기로 배율을 건드리면 오히려 원본과 다른 크기가 된다.
+    fit: 'none',
     anchor: [0.5, 0.5],
     keepPlaceOnAnchorChange: true,
     blend: 'normal',
     parallaxFactor: 1,
-    // 기본은 담기다. 이 제품의 주 용도가 투명 배경 스티커라, 움직임 때문에 오브제가
-    // 잘리는 것이 여백이 생기는 것보다 훨씬 나쁘다. 배경 사진처럼 꽉 채워야 하는
-    // 레이어는 인스펙터에서 채우기로 바꾼다. 둘은 동시에 켤 수 없다.
+    /*
+     * 기본은 '원본 크기 그대로'(FrameFit = crop)다. 둘 다 끈 상태가 그 뜻이다.
+     *
+     * 캔버스가 처음 들어온 가장 큰 이미지에 맞춰 잡히므로(state/document.ts addImage)
+     * 그림은 이미 프레임에 딱 맞는다. 여기서 담기(keepInside)를 켜면 모션이 조금만
+     * 프레임을 벗어나도 솔버가 배율을 낮춰, 넣은 그림이 넣자마자 작아진다.
+     * 잘리는 것이 더 싫은 레이어는 인스펙터 > 레이어 관계에서 '잘리지 않게' 로 바꾼다.
+     * 셋은 배타다.
+     */
     fillsCanvas: false,
-    keepInside: true,
+    keepInside: false,
     motionExitsFrame: false,
     tracks: [],
     modifiers: [],

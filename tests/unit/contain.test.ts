@@ -33,6 +33,16 @@ function setup(imageW = SIZE, imageH = SIZE): { doc: MotionProject; layer: Layer
   }
   doc.assets = [asset]
   const layer = createImageLayer(asset, 0)
+  /*
+   * 이 파일은 담기 솔버를 검증한다. 레이어 기본값은 '원본 크기 그대로'(fit: none,
+   * keepInside: false)라 그대로 두면 솔버가 아예 돌지 않는다. 여기서 켜 놓고 시작한다.
+   *
+   * fit 도 cover 로 둔다. 담기는 fit 기준 배율 위에서 재기 때문에(overscan.ts
+   * containScaleAt) fit 이 바뀌면 이 파일의 기대값이 전부 달라진다.
+   * 기본값 자체는 '담기 대상 판정' 의 첫 항목이 따로 확인한다.
+   */
+  layer.fit = 'cover'
+  layer.keepInside = true
   doc.layers = [layer]
   return { doc, layer }
 }
@@ -55,10 +65,20 @@ function overflowPx(doc: MotionProject, resolved: ReturnType<typeof resolveCompo
 }
 
 describe('담기 대상 판정', () => {
-  it('이미지 레이어의 기본값은 담기다', () => {
+  it('이미지 레이어의 기본값은 원본 크기 그대로다', () => {
+    // setup() 이 담기를 켜 두므로 여기서는 공장 기본값을 직접 만든다.
+    const fresh = createImageLayer(
+      { id: 'a9', name: 'img', storeKey: 'k', naturalW: SIZE, naturalH: SIZE, hasAlpha: true },
+      0,
+    )
+    expect(fresh.fit).toBe('none')
+    expect(fresh.keepInside).toBe(false)
+    expect(fresh.fillsCanvas).toBe(false)
+    expect(isContainTarget(fresh)).toBe(false)
+  })
+
+  it('담기를 켜면 대상이 된다', () => {
     const { layer } = setup()
-    expect(layer.keepInside).toBe(true)
-    expect(layer.fillsCanvas).toBe(false)
     expect(isContainTarget(layer)).toBe(true)
   })
 

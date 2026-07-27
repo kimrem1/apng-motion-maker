@@ -571,10 +571,52 @@
   border-right: 0;
 }
 
+/*
+ * 손잡이로 높이를 정한 뒤에는 그 값이 이긴다.
+ * 내용보다 크게도(빈 공간이 남더라도) 작게도 만들 수 있어야 손잡이가 손가락을 따라온다.
+ */
+.mm-left-dock.is-resized > .mm-lyr-panel {
+  flex: 0 0 var(--mm-layer-h);
+  /* 손잡이의 하한(LeftDock.tsx MIN_H)과 같은 값이어야 한다. 여기가 더 크면 손잡이가
+     내려가다 멈추고, 저장값과 화면이 어긋난다. */
+  min-height: 96px;
+  max-height: none;
+}
+
 .mm-left-dock > .mm-preset-gallery {
   flex: 1 1 auto;
   min-height: 0;
   border-top: 1px solid var(--border);
+}
+
+/* --------------------------------------------------------------------------
+ * 도크 높이 조절 손잡이
+ * ------------------------------------------------------------------------ */
+
+.mm-dock-resizer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  height: 9px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  cursor: row-resize;
+  /* 세로 드래그를 브라우저 스크롤에 뺏기지 않는다. */
+  touch-action: none;
+}
+
+.mm-dock-resizer-grip {
+  width: 28px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-strong);
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.mm-dock-resizer:hover .mm-dock-resizer-grip,
+.mm-dock-resizer:focus-visible .mm-dock-resizer-grip {
+  background: var(--accent);
 }
 
 @media (max-width: 1023px) {
