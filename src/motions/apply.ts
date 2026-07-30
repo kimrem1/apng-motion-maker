@@ -33,6 +33,7 @@ import {
   type Track,
 } from '@/core/types.ts'
 import { solveLayerContain } from '@/core/overscan.ts'
+import { layerIntrinsicSize } from '@/core/shape.ts'
 import type { EmitContext, MotionPreset, PresetEmission } from './types.ts'
 import { MOTION_PRESET_BY_ID, applyPreset, resolveParams } from './registry.ts'
 import { mergePresetEffects, mergePresetTracks, ownershipOf } from './merge.ts'
@@ -446,9 +447,12 @@ function containReferenceScale(args: {
   fps: number
 }): number | undefined {
   const { doc, layer, preset, params, speed, durationFrames, fps } = args
-  if (!layer.assetId) return undefined
-  const asset = doc.assets.find((a) => a.id === layer.assetId)
-  if (!asset || asset.naturalW <= 0 || asset.naturalH <= 0) return undefined
+  // 도형에는 에셋이 없다. 자연 크기는 core/shape.ts 가 한 곳에서 정한다.
+  const size = layerIntrinsicSize(layer, (assetId) => {
+    const found = doc.assets.find((a) => a.id === assetId)
+    return found ? { width: found.naturalW, height: found.naturalH } : undefined
+  })
+  if (!size || size.width <= 0 || size.height <= 0) return undefined
 
   let emission: PresetEmission
   try {
@@ -489,7 +493,7 @@ function containReferenceScale(args: {
     timeline: { ...doc.timeline, durationFrames, fps },
   }
 
-  const need = solveLayerContain(probeDoc, probeLayer, asset.naturalW, asset.naturalH)
+  const need = solveLayerContain(probeDoc, probeLayer, size.width, size.height)
   if (need.correction >= 1) return undefined
   // 하한 아래로는 기준값을 쓰지 않는다. 세기를 끝까지 올려야 성립하는 프리셋(한 점으로
   // 파고드는 사진 훑기 같은 것)은 기준값이 33% 까지 내려가는데, 그러면 세기를 낮춰

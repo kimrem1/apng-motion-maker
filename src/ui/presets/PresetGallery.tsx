@@ -158,7 +158,17 @@ export function PresetGallery() {
         layerId ?? '-',
         `${doc.canvas.w}x${doc.canvas.h}`,
         doc.timeline.fps,
-        doc.layers.map((l) => `${l.id}:${l.assetId ?? '-'}`).join(','),
+        // 도형은 에셋 리비전이 없다. 모양이 바뀌면 그림도 바뀌므로 지문에 넣는다.
+        // 빠뜨리면 색이나 종류를 바꿔도 카드가 옛 그림을 계속 보여 준다.
+        doc.layers
+          .map((l) => {
+            const s = l.shape
+            const shapeKey = s
+              ? `${s.kind}/${s.color}/${s.width}x${s.height}/${s.strokeWidth}/${s.cornerRadius}/${s.points}/${s.innerRatio}/${s.sweepDeg}`
+              : '-'
+            return `${l.id}:${l.assetId ?? '-'}:${shapeKey}`
+          })
+          .join(','),
         assetRevision,
         strength.toFixed(1),
         speed.toFixed(3),

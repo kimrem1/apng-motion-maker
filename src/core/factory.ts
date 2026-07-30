@@ -6,6 +6,7 @@ import {
   type AssetRef,
   type Layer,
   type MotionProject,
+  type ShapeSpec,
   type Track,
   type TrackProp,
   type TrackUnit,
@@ -104,6 +105,41 @@ export function createImageLayer(asset: AssetRef, z: number): Layer {
     fillsCanvas: false,
     keepInside: false,
     motionExitsFrame: false,
+    tracks: [],
+    modifiers: [],
+    effects: [],
+  }
+}
+
+/**
+ * 도형 레이어.
+ *
+ * 이미지 레이어와 필드 순서를 맞춘다. 마이그레이션이 `shape` 를 같은 자리에 끼우므로
+ * 저장했다 다시 여는 왕복에서 JSON 이 한 글자도 달라지지 않는다.
+ *
+ * 담기(keepInside)와 채우기(fillsCanvas)는 꺼 둔다. 도형은 자기 크기를 사용자가 직접
+ * 정하는 것이고, 솔버가 배율을 건드리면 방금 정한 크기가 조용히 달라진다.
+ */
+export function createShapeLayer(shape: ShapeSpec, name: string, z: number): Layer {
+  return {
+    id: nextId('l'),
+    name,
+    type: 'shape',
+    assetId: null,
+    parentId: null,
+    z,
+    visible: true,
+    locked: false,
+    fit: 'none',
+    anchor: [0.5, 0.5],
+    keepPlaceOnAnchorChange: true,
+    baseScale: 1,
+    blend: 'normal',
+    parallaxFactor: 1,
+    fillsCanvas: false,
+    keepInside: false,
+    motionExitsFrame: false,
+    shape,
     tracks: [],
     modifiers: [],
     effects: [],

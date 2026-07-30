@@ -42,6 +42,7 @@ import {
   type ModifierType,
   type MotionProject,
   type SafeZonePolicy,
+  type ShapeSpec,
   type SpringFit,
   type SpringSpec,
   type Track,
@@ -49,6 +50,7 @@ import {
   type TrackUnit,
 } from '@/core/types.ts'
 import { TRACK_DEFAULTS, createEmptyProject } from '@/core/factory.ts'
+import { normalizeShapeSpec } from '@/core/shape.ts'
 import { EFFECT_BY_ID } from '@/effects/registry.ts'
 
 // ---------------------------------------------------------------------------
@@ -74,7 +76,7 @@ const BACKGROUND_TYPES: BackgroundType[] = ['alpha', 'solid', 'blurExtend', 'mir
 const SAFE_POLICIES: SafeZonePolicy[] = ['autoFit', 'backgroundFill', 'warn', 'allowEmpty']
 const FIT_MODES: FitMode[] = ['cover', 'contain', 'fill', 'none']
 const BLEND_MODES: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'lighten', 'darken']
-const LAYER_TYPES: LayerType[] = ['image', 'solid', 'group']
+const LAYER_TYPES: LayerType[] = ['image', 'solid', 'group', 'shape']
 const SPRING_MODES: SpringSpec['mode'][] = ['physical', 'visual']
 const SPRING_FITS: SpringFit[] = ['springDrivesDuration', 'fitToDuration']
 
@@ -544,6 +546,16 @@ function normalizeLayer(
      */
     keepInside: bool(raw.keepInside, false),
     motionExitsFrame: bool(raw.motionExitsFrame, false),
+    /*
+     * 도형은 있을 때만 넣는다.
+     *
+     * 이미지 레이어에 빈 shape 키가 붙으면 저장 -> 열기 왕복에서 JSON 이 달라져
+     * "문서를 한 글자도 바꾸지 않는다" 는 계약이 깨진다. 값 정규화는 core/shape.ts
+     * 한 곳에만 있고, 모르는 하위 필드는 스프레드로 살려 둔다.
+     */
+    ...(isRecord(raw.shape)
+      ? { shape: { ...raw.shape, ...normalizeShapeSpec(raw.shape as Partial<ShapeSpec>) } }
+      : {}),
     // 0 이나 음수는 그림을 없애 버린다. 범위 밖이면 없는 것으로 보고 문서에서 다시 푼다.
     ...(typeof raw.containScale === 'number' && raw.containScale > 0 && raw.containScale <= 1
       ? { containScale: raw.containScale }

@@ -14,6 +14,7 @@ import { useId, useMemo, useState } from 'react'
 
 import type { Layer } from '@/core/types.ts'
 import { diagnose, isContainTarget, solveLayerContain, solveLayerOverscan } from '@/core/overscan.ts'
+import { layerIntrinsicSize } from '@/core/shape.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { formatNumber, SelectField, type SelectOption } from '@/ui/widgets/Field.tsx'
 import {
@@ -71,8 +72,12 @@ export function LayerProperties({ layer }: LayerPropertiesProps) {
    * 생각하고 되돌릴 방법을 찾지 못한다.
    */
   const contain = useMemo(() => {
-    if (!asset || !isContainTarget(layer)) return null
-    const need = solveLayerContain(doc, layer, asset.naturalW, asset.naturalH)
+    // 도형에는 에셋이 없지만 담기 솔버는 정상 동작한다. 자연 크기는 한 곳에서 온다.
+    const size = layerIntrinsicSize(layer, () =>
+      asset ? { width: asset.naturalW, height: asset.naturalH } : undefined,
+    )
+    if (!size || !isContainTarget(layer)) return null
+    const need = solveLayerContain(doc, layer, size.width, size.height)
     if (need.correction >= 1) return null
     return { percent: Math.round(need.correction * 100), clipped: need.clipped }
   }, [doc, layer, asset])

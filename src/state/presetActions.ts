@@ -223,7 +223,7 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
       ok: false,
       presetId,
       layerId: null,
-      message: '먼저 이미지를 넣어 주세요.',
+      message: '먼저 이미지나 도형을 넣어 주세요.',
       skipped,
     }
   }
@@ -348,9 +348,27 @@ let livePending = false
 function reapplyTargetId(): string | null {
   const id = usePresetUiStore.getState().appliedId
   if (!id) return null
+  const doc = useDocumentStore.getState().doc
   // PRO 에서 손본 문서에 재적용하면 그 편집이 조용히 사라진다.
   // 그 길은 [프리셋으로 리셋] 버튼 하나만 연다.
-  if (useDocumentStore.getState().doc.presetRef?.dirty === true) return null
+  if (doc.presetRef?.dirty === true) return null
+
+  /*
+   * **재적용은 프리셋이 실제로 얹힌 레이어에만 한다.**
+   *
+   * presetRef 는 레이어 id 를 들고 있지 않고, resolveTargetLayerId 는 "지금 고른
+   * 레이어" 를 돌려준다. 그래서 도형을 하나 넣어 선택이 옮겨간 뒤 세기 슬라이더를
+   * 끌면, 이미지에 걸린 모션이 도형 위에 다시 심겨 이미지는 멈추고 도형이 혼자
+   * 튀어오른다. 프리셋이 만든 속성이 그 레이어에 남아 있는지로 판정한다.
+   */
+  const props = doc.presetRef?.props
+  if (props && props.length > 0) {
+    const layerId = resolveTargetLayerId()
+    const layer = layerId ? doc.layers.find((l) => l.id === layerId) : undefined
+    if (!layer) return null
+    const owned = new Set(layer.tracks.map((t) => t.prop))
+    if (!props.every((prop) => owned.has(prop))) return null
+  }
   return id
 }
 

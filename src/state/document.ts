@@ -29,6 +29,7 @@ import {
   type Layer,
   type LoopMode,
   type MotionProject,
+  type ShapeSpec,
   type Track,
   type TrackProp,
 } from '@/core/types.ts'
@@ -36,9 +37,11 @@ import {
   TRACK_DEFAULTS,
   createEmptyProject,
   createImageLayer,
+  createShapeLayer,
   createStaticTrack,
   nextId,
 } from '@/core/factory.ts'
+import { normalizeShapeSpec } from '@/core/shape.ts'
 import { evalTrack, insertKeyframe } from '@/easing/curve.ts'
 import { EASING_PRESET_BY_ID } from '@/easing/presets.ts'
 import { mergePresetEffects, mergePresetTracks, ownershipOf } from '@/motions/merge.ts'
@@ -47,10 +50,20 @@ import { assetRegistry } from './assets.ts'
 
 enablePatches()
 
-/** 스택 상한. 200 엔트리 또는 누적 8MB 다. */
+/** 스택 상한. 200 엔트리다. */
 const HISTORY_LIMIT = 200
 /** 같은 coalesceKey 가 이 시간 안에 다시 오면 하나로 합친다. */
 const COALESCE_MS = 500
+/**
+ * 한 엔트리가 품을 수 있는 패치 수의 상한.
+ *
+ * 병합은 패치를 덧붙이기만 한다. 같은 자리를 반복해서 덮는 패치를 접지 않는 이유는
+ * splice 처럼 add/remove 가 섞인 패치를 경로만 보고 접으면 순서가 무너지기 때문이다.
+ * 대신 한 칸이 너무 커지면 병합을 멈추고 새 칸을 연다. 도형 세트의 세기 슬라이더처럼
+ * 레이어 아홉 장을 초당 일곱 번 갈아끼우는 조작이 실행취소 한 칸에 수 MB 를 쌓던
+ * 문제가 여기서 막힌다. 드래그가 두어 칸으로 나뉘는 대신 메모리가 엔트리 수로 묶인다.
+ */
+const COALESCE_PATCH_LIMIT = 240
 
 export interface Command {
   id: string
@@ -67,6 +80,45 @@ export interface AddImageInput {
   hasAlpha: boolean
 }
 
+/**
+ * 도형 레이어 한 장의 재료.
+ *
+ * shapes/types.ts 의 SceneLayer 와 모양이 같지만 그쪽을 import 하지 않는다.
+ * 문서 스토어가 세트 카탈로그를 알면 core 가 UI 쪽 데이터에 묶인다. 구조만 맞춘다.
+ */
+export interface ShapeLayerInput {
+  name: string
+  shape: ShapeSpec
+  tracks: Track[]
+  modifiers?: Modifier[]
+  blend?: BlendMode
+  anchor?: [number, number]
+}
+
+export interface AddShapeSceneInput {
+  /** 실행취소 목록에 보일 이름. */
+  label: string
+  layers: ShapeLayerInput[]
+  durationFrames: number
+  /**
+   * 반복 방식 제안. **생략하면 지금 설정을 그대로 둔다.**
+   *
+   * 반복은 공통 노브다. 세트를 하나 넣었다고 사용자가 고른 '한 번만' 을 덮으면
+   * 조정값을 날린다. 프리셋 쪽과 같은 규칙이고(state/presetActions.ts), 그래서
+   * 호출부가 첫 삽입일 때만 채운다.
+   */
+  loopMode?: LoopMode
+  fps: number
+  /**
+   * 이 레이어들을 지우고 그 자리에 넣는다.
+   *
+   * 세기나 속도 슬라이더를 끌면 같은 세트를 계속 다시 만든다. 지우지 않으면
+   * 드래그 한 번에 도형이 수십 장 쌓인다. coalesceKey 와 짝이다.
+   */
+  replace?: string[]
+  coalesceKey?: string
+}
+
 interface DocumentState {
   doc: MotionProject
   past: Command[]
@@ -77,6 +129,22 @@ interface DocumentState {
   clearHistory(): void
 
   addImage(input: AddImageInput): { assetId: string; layerId: string }
+  /**
+   * 도형 레이어 한 장을 만든다.
+   *
+   * addImage 와 달리 캔버스 크기를 건드리지 않는다. 도형에는 "원본 픽셀" 이 없어서
+   * 캔버스를 맞출 기준이 없고, 이미 잡혀 있는 캔버스에 얹는 것이 언제나 맞다.
+   */
+  addShape(input: { name: string; shape: ShapeSpec }): { layerId: string }
+  /**
+   * 도형 모션 세트를 통째로 심는다.
+   *
+   * 레이어마다 addShape 를 부르면 안 된다. 물결 파동 하나가 실행취소 세 칸을 먹고,
+   * 그 중간에 링이 한 장만 있는 상태가 문서로 남는다. 한 번의 변경으로 묶는다.
+   */
+  addShapeScene(input: AddShapeSceneInput): { layerIds: string[] }
+  /** 도형의 모양을 바꾼다. 값 규칙은 core/shape.ts 한 곳에만 있다. */
+  setShapeSpec(layerId: string, patch: Partial<ShapeSpec>): void
   removeLayer(layerId: string): void
   reorderLayer(layerId: string, direction: -1 | 1): void
 
@@ -334,7 +402,11 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
     const now = Date.now()
     const top = state.past[state.past.length - 1]
     const canCoalesce =
-      !!coalesceKey && !!top && top.coalesceKey === coalesceKey && now - top.timestamp < COALESCE_MS
+      !!coalesceKey &&
+      !!top &&
+      top.coalesceKey === coalesceKey &&
+      now - top.timestamp < COALESCE_MS &&
+      top.patches.length + patches.length <= COALESCE_PATCH_LIMIT
 
     let past: Command[]
     if (canCoalesce && top) {
@@ -426,6 +498,83 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
 
       return { assetId, layerId }
+    },
+
+    addShape({ name, shape }) {
+      let layerId = ''
+      mutateDoc('도형 추가', (d) => {
+        const layer = createShapeLayer(normalizeShapeSpec(shape), name, d.layers.length)
+        layerId = layer.id
+        d.layers.push(layer)
+      })
+      return { layerId }
+    },
+
+    addShapeScene({ label, layers, durationFrames, loopMode, fps, replace, coalesceKey }) {
+      const layerIds: string[] = []
+      mutateDoc(
+        label,
+        (d) => {
+          if (replace && replace.length > 0) {
+            const drop = new Set(replace)
+            // filter 로 배열을 재대입하면 immer 가 ['layers'] 전체 스냅샷 패치를
+            // 기록한다. 지운 항목만 splice 한다 (removeLayer 와 같은 이유).
+            for (let i = d.layers.length - 1; i >= 0; i -= 1) {
+              if (drop.has(d.layers[i]?.id ?? '')) d.layers.splice(i, 1)
+            }
+          }
+
+          for (const input of layers) {
+            const layer = createShapeLayer(
+              normalizeShapeSpec(input.shape),
+              input.name,
+              d.layers.length,
+            )
+            if (input.anchor) {
+              layer.anchor = [clamp(input.anchor[0], 0, 1), clamp(input.anchor[1], 0, 1)]
+            }
+            if (input.blend) layer.blend = input.blend
+            // id 는 여기서 다시 매긴다. 장면 정의는 같은 id 를 여러 레이어에 쓴다.
+            layer.tracks = input.tracks.map((t) => ({ ...t, id: nextId('t') }))
+            layer.modifiers = (input.modifiers ?? []).map((m) => ({ ...m, id: nextId('m') }))
+            layerIds.push(layer.id)
+            d.layers.push(layer)
+          }
+
+          d.layers.forEach((l, i) => {
+            l.z = i
+          })
+
+          d.timeline.durationFrames = clamp(Math.round(durationFrames), 2, FRAMES_MAX)
+          if (loopMode !== undefined) d.timeline.loop.mode = loopMode
+          d.timeline.fps = snapFps(fps)
+          /*
+           * 세트는 프리셋이 아니다. presetRef 를 건드리지 않는다.
+           *
+           * presetRef 는 "문서에 걸린 모션 프리셋 하나" 를 가리키고 EASY 의 세기/속도
+           * 슬라이더가 그것을 다시 적용한다. 세트가 그 자리를 차지하면 슬라이더가
+           * 도형을 지우고 이미지 모션을 다시 그린다.
+           *
+           * baseFps 도 건드리지 않는다. 그 필드의 뜻은 **사용자가 고른 fps** 이고
+           * 속도 유도 fps 의 천장이다(core/types.ts). 도형 속도 노브에서 유도된 값을
+           * 거기 넣으면, 모션 속도를 1 로 되돌려도 원래 fps 로 못 돌아온다.
+           */
+        },
+        coalesceKey,
+      )
+      return { layerIds }
+    },
+
+    setShapeSpec(layerId, patch) {
+      mutateDoc(
+        '도형 바꾸기',
+        (d) => {
+          const layer = findLayer(d, layerId)
+          if (!layer || !layer.shape) return
+          layer.shape = normalizeShapeSpec({ ...layer.shape, ...patch })
+        },
+        `shape:${layerId}`,
+      )
     },
 
     updateAssetPrep(assetId, { width, height, hasAlpha, prep }) {

@@ -156,7 +156,7 @@ export function useExport(): UseExportResult {
 
     const doc = useDocumentStore.getState().doc
     if (doc.layers.length === 0) {
-      setError('내보낼 이미지가 없습니다. 이미지를 먼저 추가해 주세요.')
+      setError('내보낼 것이 없습니다. 이미지나 도형을 먼저 넣어 주세요.')
       return
     }
 

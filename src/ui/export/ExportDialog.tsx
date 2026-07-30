@@ -917,7 +917,7 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
                   </p>
                 ) : null}
                 {!hasLayers ? (
-                  <p className="mm-callout is-warn">내보낼 이미지가 없습니다.</p>
+                  <p className="mm-callout is-warn">내보낼 것이 없습니다. 이미지나 도형을 먼저 넣어 주세요.</p>
                 ) : null}
                 {!ready ? (
                   <p className="mm-callout is-warn">

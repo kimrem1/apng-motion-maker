@@ -25,7 +25,7 @@ import {
 } from 'react'
 
 import { LayerPanel } from '@/ui/layers/LayerPanel.tsx'
-import { PresetGallery } from '@/ui/presets/PresetGallery.tsx'
+import { CreatorTabs } from '@/ui/shapes/CreatorTabs.tsx'
 
 const STORAGE_KEY = 'mm.leftDock.layerHeight'
 
@@ -202,7 +202,7 @@ export function LeftDock() {
         <span className="mm-dock-resizer-grip" aria-hidden="true" />
       </div>
 
-      <PresetGallery />
+      <CreatorTabs />
     </div>
   )
 }

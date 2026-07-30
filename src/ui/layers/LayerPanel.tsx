@@ -28,11 +28,13 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react'
 
-import type { BlendMode, Layer } from '@/core/types.ts'
+import type { BlendMode, Layer, ShapeSpec } from '@/core/types.ts'
+import { toHex6 } from '@/core/shape.ts'
 import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useLayerUiStore, type LayerSelectMode } from '@/state/layerUi.ts'
 import { useUiStore } from '@/state/ui.ts'
+import { addSingleShape } from '@/state/shapeActions.ts'
 import { AddLayerMenu } from './AddLayerMenu.tsx'
 import { BLEND_OPTIONS, moveLayerTo, setLayerBlend } from './layerDocActions.ts'
 import './layers.css'
@@ -46,6 +48,15 @@ const DRAG_THRESHOLD_PX = 4
 // ---------------------------------------------------------------------------
 // 아이콘
 // ---------------------------------------------------------------------------
+
+function IconShape() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1.6" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="10.4" cy="10.4" r="3.4" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  )
+}
 
 function IconGrip() {
   return (
@@ -122,8 +133,82 @@ function IconTrash() {
 // 썸네일
 // ---------------------------------------------------------------------------
 
+/**
+ * 도형 레이어의 썸네일.
+ *
+ * 렌더러의 SDF 를 그대로 옮기지 않는다. 32px 안에서는 어차피 구별이 안 되고,
+ * 여기서 필요한 것은 "몇 번째가 그 도형인가" 뿐이다. 종류와 색만 맞춘다.
+ */
+function paintShapeThumb(ctx: CanvasRenderingContext2D, shape: ShapeSpec, size: number): void {
+  const cx = size / 2
+  const cy = size / 2
+  const r = size * 0.38
+  ctx.fillStyle = toHex6(shape.color)
+  ctx.strokeStyle = toHex6(shape.color)
+  ctx.lineWidth = Math.max(1.5, size * 0.09)
+  ctx.beginPath()
+
+  const radial = (n: number, inner: number): void => {
+    const steps = inner < 1 ? n * 2 : n
+    for (let i = 0; i < steps; i += 1) {
+      const a = (i / steps) * Math.PI * 2 - Math.PI / 2
+      const rr = inner < 1 && i % 2 === 1 ? r * inner : r
+      const x = cx + Math.cos(a) * rr
+      const y = cy + Math.sin(a) * rr
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    }
+    ctx.closePath()
+  }
+
+  switch (shape.kind) {
+    case 'circle':
+      ctx.ellipse(cx, cy, r, r * (shape.height / Math.max(1, shape.width)), 0, 0, Math.PI * 2)
+      break
+    case 'triangle':
+      radial(3, 1)
+      break
+    case 'polygon':
+      radial(shape.points, 1)
+      break
+    case 'star':
+      radial(shape.points, shape.innerRatio)
+      break
+    case 'cross': {
+      const t = r * 0.36
+      ctx.rect(cx - r, cy - t, r * 2, t * 2)
+      ctx.rect(cx - t, cy - r, t * 2, r * 2)
+      break
+    }
+    case 'arc': {
+      const half = ((shape.sweepDeg / 2) * Math.PI) / 180
+      ctx.moveTo(cx, cy)
+      ctx.arc(cx, cy, r, -Math.PI / 2 - half, -Math.PI / 2 + half)
+      ctx.closePath()
+      break
+    }
+    case 'rect':
+    default: {
+      const rad = Math.min(r * 0.9, (shape.cornerRadius / Math.max(1, shape.width)) * size)
+      ctx.roundRect(cx - r, cy - r, r * 2, r * 2, rad)
+      break
+    }
+  }
+
+  if (shape.strokeWidth > 0) ctx.stroke()
+  else ctx.fill()
+}
+
 /** 에셋 비트맵을 작은 캔버스에 contain 으로 그린다. 리비전이 바뀌면 다시 그린다. */
-export function LayerThumb({ assetId, name }: { assetId: string | null; name: string }) {
+export function LayerThumb({
+  assetId,
+  shape,
+  name,
+}: {
+  assetId: string | null
+  shape?: ShapeSpec
+  name: string
+}) {
   const revision = useSyncExternalStore(assetRegistry.subscribe, assetRegistry.getRevision)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
@@ -134,6 +219,10 @@ export function LayerThumb({ assetId, name }: { assetId: string | null; name: st
     if (!ctx) return
 
     ctx.clearRect(0, 0, canvas.width, canvas.height)
+    if (shape) {
+      paintShapeThumb(ctx, shape, canvas.width)
+      return
+    }
     if (!assetId) return
     const bitmap = assetRegistry.get(assetId)
     if (!bitmap) return
@@ -151,7 +240,7 @@ export function LayerThumb({ assetId, name }: { assetId: string | null; name: st
       h,
     )
     // revision 은 비트맵 교체 감지용이다. 값 자체는 쓰지 않는다.
-  }, [assetId, revision])
+  }, [assetId, shape, revision])
 
   return (
     <canvas
@@ -471,7 +560,7 @@ export function LayerPanel() {
       <div className="mm-panel-body mm-scroll">
         {display.length === 0 ? (
           <p className="mm-lyr-empty">
-            이미지를 끌어다 놓거나 Ctrl+V 로 붙여넣으세요.
+            이미지를 끌어다 놓거나 Ctrl+V 로 붙여넣으세요. 아래 [도형 추가] 로 도형만 넣어도 됩니다.
             <br />
             아래 [이미지 추가] 로도 넣을 수 있어요.
           </p>
@@ -533,7 +622,7 @@ export function LayerPanel() {
                     <IconGrip />
                   </span>
 
-                  <LayerThumb assetId={layer.assetId} name={layer.name} />
+                  <LayerThumb assetId={layer.assetId} shape={layer.shape} name={layer.name} />
 
                   {isEditing ? (
                     <input
@@ -638,6 +727,15 @@ export function LayerPanel() {
 
       <div className="mm-panel-foot">
         <AddLayerMenu />
+        <button
+          type="button"
+          className="mm-btn mm-btn-block"
+          title="사각형을 한 장 넣습니다. 종류와 색은 인스펙터에서 바꿉니다."
+          onClick={() => addSingleShape('rect')}
+        >
+          <IconShape />
+          도형 추가
+        </button>
       </div>
     </section>
   )

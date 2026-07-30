@@ -28,6 +28,7 @@ import type {
 } from './types.ts'
 import { baseFitScale, buildLayerMatrix } from './transform.ts'
 import { resolveLayerTransformWithParents } from './evaluate.ts'
+import { layerIntrinsicSize } from './shape.ts'
 import { modifierPeak } from '@/motions/generators.ts'
 
 /** 서브픽셀 리샘플링 때문에 s = s_min 정확히에서 가장자리에 반투명 1px 라인이 생긴다. */
@@ -457,8 +458,9 @@ export function solveOverscan(
 ): OverscanMap {
   const out = new Map<string, OverscanNeed>()
   for (const layer of doc.layers) {
-    if (!layer.assetId) continue
-    const size = imageSize(layer.assetId)
+    // 도형은 에셋이 없다. 자연 크기를 ShapeSpec 에서 가져온다. 렌더러도 같은 헬퍼를
+    // 거치므로 솔버와 화면이 다른 크기를 볼 수 없다.
+    const size = layerIntrinsicSize(layer, imageSize)
     if (!size) continue
 
     const cover = solveLayerOverscan(doc, layer, size.width, size.height, options)

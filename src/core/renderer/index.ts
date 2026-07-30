@@ -26,6 +26,7 @@ import { ProgramCache } from './programCache.ts'
 import { TargetPool, type PooledTarget } from './targetPool.ts'
 import { COPY_FS, FULLSCREEN_VS, LAYER_FS, LAYER_VS } from './shaders/layer.ts'
 import { BLEND_FS, BLEND_MODE_CODE } from './shaders/blend.ts'
+import { SHAPE_FS, SHAPE_KIND_CODE } from './shaders/shape.ts'
 import {
   disposeEffectResources,
   effectWarmupCombos,
@@ -70,6 +71,9 @@ export class Renderer {
 
     this.programs.warmup([
       { vs: LAYER_VS, fs: LAYER_FS },
+      // 도형은 같은 정점 셰이더를 쓰고 프래그먼트만 다르다. 종류는 유니폼으로 가르므로
+      // 프로그램이 한 벌뿐이고, 캐시(용량 64)를 이펙트와 나눠 쓰는 부담이 없다.
+      { vs: LAYER_VS, fs: SHAPE_FS },
       { vs: FULLSCREEN_VS, fs: COPY_FS },
       { vs: FULLSCREEN_VS, fs: BLEND_FS },
       // 이펙트 셰이더는 종류가 많아 프레임 루프 안에서 컴파일하면 그대로 끊긴다.
@@ -112,7 +116,7 @@ export class Renderer {
     // 혼합 모드가 있으면 배경을 읽어야 한다. 둘 다 오프스크린을 요구한다.
     const layerNeedsPass = layers.map(
       (l) =>
-        !!l.assetId &&
+        (!!l.assetId || !!l.shape) &&
         l.visible &&
         (l.blend !== 'normal' || hasActiveEffects(l.effects, frame)),
     )
@@ -314,6 +318,12 @@ export class Renderer {
   ): void {
     if (!layer.visible) return
     if (layer.transform.opacity <= 0) return
+
+    // 도형이 먼저다. 도형 레이어는 에셋을 가리키지 않는다.
+    if (layer.shape) {
+      this.drawShapeLayer(doc, layer)
+      return
+    }
     if (!layer.assetId) return
 
     const asset = assets.get(layer.assetId)
@@ -347,6 +357,74 @@ export class Renderer {
       gl.bindTexture(gl.TEXTURE_2D, asset.texture)
       gl.uniform1i(uImage, 0)
     }
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+  }
+
+  /**
+   * 도형 레이어.
+   *
+   * 이미지 경로와 **같은 매트릭스**를 쓴다. 도형의 자연 크기(ShapeSpec.width/height)가
+   * 원본 픽셀 크기 자리에 그대로 들어가므로, 맞춤 / 기준점 / 캔버스 배율 규칙이
+   * 이미지와 한 글자도 다르지 않다. 여기서 크기 계산을 새로 하면 오버스캔 솔버와
+   * 어긋나 담기를 켠 도형이 엉뚱한 배율로 앉는다.
+   */
+  private drawShapeLayer(doc: CompositionSnapshot, layer: ResolvedLayer): void {
+    const shape = layer.shape
+    if (!shape) return
+
+    const gl = this.gl
+    const info = this.programs.get(LAYER_VS, SHAPE_FS)
+
+    const w = Math.max(1, shape.width)
+    const h = Math.max(1, shape.height)
+
+    buildLayerMatrix(
+      layer.transform,
+      layer.fit,
+      doc.canvas.w,
+      doc.canvas.h,
+      w,
+      h,
+      this.layerMatrix,
+    )
+    mat3Multiply(this.clipMatrix, this.layerMatrix, this.finalMatrix)
+
+    gl.useProgram(info.program)
+
+    const uMatrix = info.uniforms.get('u_matrix')
+    if (uMatrix) gl.uniformMatrix3fv(uMatrix, false, this.finalMatrix)
+
+    const uOpacity = info.uniforms.get('u_opacity')
+    if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
+
+    // 색은 straight alpha 로 넘긴다. premultiply 는 프래그먼트 셰이더가 마지막에 한다.
+    const uColor = info.uniforms.get('u_color')
+    if (uColor) {
+      const [r, g, b, a] = parseHexColor(shape.color)
+      gl.uniform4f(uColor, r, g, b, a)
+    }
+
+    const uSize = info.uniforms.get('u_size')
+    if (uSize) gl.uniform2f(uSize, w, h)
+
+    const uStroke = info.uniforms.get('u_stroke')
+    if (uStroke) gl.uniform1f(uStroke, Math.max(0, shape.strokeWidth))
+
+    const uRadius = info.uniforms.get('u_radius')
+    if (uRadius) gl.uniform1f(uRadius, Math.max(0, shape.cornerRadius))
+
+    const uInner = info.uniforms.get('u_inner')
+    if (uInner) gl.uniform1f(uInner, shape.innerRatio)
+
+    const uSweep = info.uniforms.get('u_sweep')
+    if (uSweep) gl.uniform1f(uSweep, (shape.sweepDeg * Math.PI) / 180)
+
+    const uKind = info.uniforms.get('u_kind')
+    if (uKind) gl.uniform1i(uKind, SHAPE_KIND_CODE[shape.kind] ?? 0)
+
+    const uPoints = info.uniforms.get('u_points')
+    if (uPoints) gl.uniform1i(uPoints, Math.max(3, Math.round(shape.points)))
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }

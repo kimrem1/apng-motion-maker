@@ -45,7 +45,7 @@ import { SPEED_STEP, formatDurationSec, pFromSpeed, speedFromP } from '@/state/s
 import { useUiStore } from '@/state/ui.ts'
 import { PreviewCanvas } from '@/ui/canvas/PreviewCanvas.tsx'
 import { ExportDialog } from '@/ui/export/ExportDialog.tsx'
-import { PresetGallery } from '@/ui/presets/PresetGallery.tsx'
+import { CreatorTabs } from '@/ui/shapes/CreatorTabs.tsx'
 import { FRAME_FIT_OPTIONS, frameFitOf, setFrameFit } from '@/ui/layers/layerDocActions.ts'
 import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
 import {
@@ -495,9 +495,9 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
         </div>
       ) : null}
 
-      {/* 좌: 프리셋 갤러리. EASY 필터(16종 + 변형 더 보기)는 갤러리가 mode 를 보고 한다. */}
+      {/* 좌: 모션 / 도형 탭. EASY 필터(16종 + 변형 더 보기)는 갤러리가 mode 를 보고 한다. */}
       <div className="mm-easy-left">
-        <PresetGallery />
+        <CreatorTabs />
       </div>
 
       {/* 중앙: 캔버스. 타임라인 없음. */}

@@ -16,6 +16,7 @@ import { AnimateToggle } from '@/ui/inspector/AnimateToggle.tsx'
 import { EffectStack } from '@/ui/effects/EffectStack.tsx'
 import { LayerProperties } from '@/ui/layers/LayerProperties.tsx'
 import { PrepPanel } from '@/ui/prep/PrepPanel.tsx'
+import { ShapeSection } from '@/ui/inspector/ShapeSection.tsx'
 import { useUiStore } from '@/state/ui.ts'
 import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
 import { NumberField, SelectField, TextField, ToggleField, type SelectOption } from '@/ui/widgets/Field.tsx'
@@ -407,12 +408,14 @@ export function Inspector() {
         {layer ? (
           <>
             <LayerSection key={layer.id} layer={layer} />
+            {/* 도형이면 모양부터. "이게 무엇인가" 다음에 "남들과 어떤 관계인가" 가 온다 */}
+            {layer.shape ? <ShapeSection key={`shape:${layer.id}`} layer={layer} /> : null}
             {/* 레이어 고유 속성: 혼합, 깊이감, 부모, 캔버스 채움, 오버스캔 진단 */}
             <LayerProperties layer={layer} />
             {/* 이펙트 스택. 글리치와 자글자글이 여기 쌓인다 */}
             <EffectStack layer={layer} />
-            {/* 배경 제거와 크롭 */}
-            <PrepPanel />
+            {/* 배경 제거와 크롭. 도형은 픽셀이 없어 다듬을 것이 없다 */}
+            {layer.shape ? null : <PrepPanel />}
           </>
         ) : (
           <section className="mm-section">

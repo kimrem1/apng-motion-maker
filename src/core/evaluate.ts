@@ -241,6 +241,10 @@ export function resolveComposition(
       blend: layer.blend,
       transform,
       effects: layer.effects,
+      // 도형이 아닌 레이어에는 키 자체를 만들지 않는다. JSON 비교로 결정론을
+      // 확인하는 테스트가 있어서 undefined 를 실어 보내도 결과는 같지만,
+      // 뜻이 없는 키를 남기지 않는 편이 읽기 쉽다.
+      ...(layer.shape ? { shape: layer.shape } : {}),
     })
   }
   resolved.sort((a, b) => a.z - b.z)

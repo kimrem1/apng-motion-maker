@@ -1,0 +1,222 @@
+/*
+ * 도형 패널 스타일.
+ *
+ * tokens.css / app.css 는 건드리지 않는다. 여기 클래스는 전부 .mm-shape- 접두어를
+ * 쓴다. 칩(.mm-chip)과 안내(.mm-preset-notice)는 모션 갤러리와 같은 것을 쓴다.
+ * 두 패널이 탭으로 번갈아 나오므로 같은 요소가 다르게 보이면 자리가 흔들린다.
+ *
+ * 선택 표시는 색 하나로 하지 않는다. 테두리와 배경과 왼쪽 표시자를 함께 바꾼다.
+ */
+
+.mm-shape-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+/* --------------------------------------------------------------------------
+ * 도형 하나 넣기
+ * ------------------------------------------------------------------------ */
+
+.mm-shape-kinds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: var(--sp-1);
+}
+
+.mm-shape-kind {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--sp-2) 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.2;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-shape-kind:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.mm-shape-help {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.mm-shape-help strong {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+ * 노브
+ * ------------------------------------------------------------------------ */
+
+.mm-shape-knobs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.mm-shape-color {
+  grid-column: 1 / -1;
+}
+
+.mm-shape-knob input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------
+ * 세트 카드
+ * ------------------------------------------------------------------------ */
+
+.mm-shape-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: var(--sp-2);
+  list-style: none;
+}
+
+.mm-shape-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-overshoot);
+}
+
+.mm-shape-card:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.mm-shape-card.is-applied {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* 색 말고도 알 수 있게 왼쪽에 표시자를 하나 더 둔다. */
+.mm-shape-card.is-applied::before {
+  content: '';
+  position: absolute;
+  inset: var(--sp-2) auto var(--sp-2) 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.mm-shape-glyph {
+  width: 100%;
+  height: 34px;
+  color: var(--accent);
+  opacity: 0.9;
+}
+
+.mm-shape-card-name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.mm-shape-card-hint {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.35;
+}
+
+.mm-shape-card-badge {
+  margin-top: 2px;
+  padding: 0 var(--sp-2);
+  border-radius: 999px;
+  background: var(--surface-active);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+/* --------------------------------------------------------------------------
+ * 패널 전환 탭
+ * ------------------------------------------------------------------------ */
+
+/*
+ * 도크 안에서 갤러리가 있던 자리를 그대로 이어받는다.
+ * app.css 의 `.mm-left-dock > .mm-preset-gallery` 규칙이 더 이상 닿지 않으므로
+ * 같은 값(남은 높이 전부 + min-height 0 + 윗선)을 여기서 다시 준다.
+ */
+.mm-left-dock > .mm-dock-panels {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.mm-dock-panels {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 목록이 길어져도 도크 밖으로 흘러나가지 않는다. */
+.mm-dock-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.mm-dock-tabs {
+  display: flex;
+  flex: none;
+  gap: var(--sp-1);
+  padding: var(--sp-2);
+}
+
+.mm-dock-tab {
+  flex: 1;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+
+.mm-dock-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.mm-dock-tab[aria-selected='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+}

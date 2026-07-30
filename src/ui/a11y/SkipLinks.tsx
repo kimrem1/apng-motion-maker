@@ -58,7 +58,7 @@ export const DEFAULT_SKIP_LINKS: readonly SkipLinkItem[] = [
     missingMessage: '본문을 찾지 못했습니다.',
   },
   {
-    label: '모션 프리셋 목록으로',
+    label: '움직임 고르기로',
     targetId: SKIP_TARGET_IDS.presets,
     selectors: [
       '#mm-preset-list',
@@ -67,8 +67,11 @@ export const DEFAULT_SKIP_LINKS: readonly SkipLinkItem[] = [
       '.mm-preset-grid:not(.is-compare)',
       '.mm-preset-gallery input[type="search"]',
       '.mm-preset-gallery',
+      // 도형 탭을 보고 있을 때. 탭 줄로 보내면 모션으로 되돌아갈 수도 있다.
+      '.mm-shape-panel',
+      '.mm-dock-tabs [role="tab"]',
     ],
-    missingMessage: '모션 목록을 찾지 못했습니다. 먼저 이미지를 넣어 주세요.',
+    missingMessage: '움직임 목록을 찾지 못했습니다. 먼저 이미지나 도형을 넣어 주세요.',
   },
   {
     label: '내보내기로',

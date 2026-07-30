@@ -309,7 +309,7 @@ const uiStore = () => useUiStore.getState()
 const timelineStore = () => useTimelineUiStore.getState()
 const layerStore = () => useLayerUiStore.getState()
 
-const NO_LAYER = '먼저 이미지를 넣어 주세요'
+const NO_LAYER = '먼저 이미지나 도형을 넣어 주세요'
 const NOT_WIRED = '아직 연결되지 않았습니다'
 const NO_TRACK = '타임라인에서 속성을 먼저 고르세요'
 

@@ -278,6 +278,67 @@ export interface EffectInstance {
 // 레이어
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 도형
+// ---------------------------------------------------------------------------
+
+/**
+ * 절차형 도형의 종류.
+ *
+ * 픽셀이 아니라 수식(SDF)으로 그린다. 그래서 크기를 아무리 키워도 가장자리가
+ * 뭉개지지 않고, 파일도 늘어나지 않는다. 회전과 확대는 이미지 레이어와 똑같이
+ * 트랙이 맡으므로 여기에는 **모양을 정하는 값만** 들어간다.
+ */
+export type ShapeKind =
+  | 'rect'
+  | 'circle'
+  | 'triangle'
+  | 'polygon'
+  | 'star'
+  | 'cross'
+  | 'arc'
+
+export const SHAPE_KIND_LIST: ShapeKind[] = [
+  'rect',
+  'circle',
+  'triangle',
+  'polygon',
+  'star',
+  'cross',
+  'arc',
+]
+
+/** 도형의 기본 크기 상한. 캔버스 상한과 같은 이유로 4000 을 넘길 이유가 없다. */
+export const SHAPE_SIZE_MIN = 2
+export const SHAPE_SIZE_MAX = 4000
+
+export interface ShapeSpec {
+  kind: ShapeKind
+  /** 채우기 색. `#rrggbb` 또는 `#rrggbbaa`. */
+  color: string
+  /**
+   * 이 도형의 자연 크기(px). 이미지 레이어의 원본 픽셀 크기와 같은 자리다.
+   *
+   * fit 이 '원본 크기'(none)면 이 값이 그대로 화면 크기가 되고, 캔버스 해상도를
+   * 바꾸면 Layer.baseScale 이 같은 비율로 따라간다. 즉 이미지와 완전히 같은 규칙을 탄다.
+   */
+  width: number
+  height: number
+  /**
+   * 0 이면 꽉 찬 도형, 0 보다 크면 그 두께(px)의 테두리만 그린다.
+   * 테두리는 안쪽으로 물리므로 두께를 올려도 이 레이어가 차지하는 크기는 그대로다.
+   */
+  strokeWidth: number
+  /** 사각형 모서리 반지름(px). 짧은 변의 절반까지 올리면 알약이 된다. */
+  cornerRadius: number
+  /** 다각형과 별의 꼭짓점 수. */
+  points: number
+  /** 별의 안쪽 반지름 비율. 작을수록 뾰족하다. */
+  innerRatio: number
+  /** 부채꼴이 도는 각도. 360 이면 원이 된다. */
+  sweepDeg: number
+}
+
 export type FitMode = 'cover' | 'contain' | 'fill' | 'none'
 
 /**
@@ -297,7 +358,7 @@ export type FrameFit = 'contain' | 'crop' | 'cover'
 
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'lighten' | 'darken'
 
-export type LayerType = 'image' | 'solid' | 'group'
+export type LayerType = 'image' | 'solid' | 'group' | 'shape'
 
 export interface Layer {
   id: string
@@ -361,6 +422,13 @@ export interface Layer {
    * import 하지 않기 위해서다.
    */
   motionExitsFrame: boolean
+  /**
+   * 도형 레이어의 모양. type 이 'shape' 일 때만 있다.
+   *
+   * 이미지 레이어에는 이 키를 아예 넣지 않는다. 넣으면 저장된 프로젝트의 JSON 이
+   * 왕복에서 달라져 "한 글자도 바꾸지 않는다" 는 계약이 깨진다 (project/migrate.ts).
+   */
+  shape?: ShapeSpec
   /**
    * 담기 배율의 기준값. 세기를 최대(1.0)로 올렸을 때도 담기는 배율이다.
    *
@@ -491,6 +559,13 @@ export interface ResolvedLayer {
   blend: BlendMode
   transform: ResolvedTransform
   effects: EffectInstance[]
+  /**
+   * 도형 레이어의 모양. 렌더러가 에셋 대신 이걸 그린다.
+   *
+   * 렌더러에 원본 Layer 를 넘기지 않는 이유는 그리기 루프가 문서를 다시 뒤지면
+   * 레이어 수의 제곱만큼 탐색이 늘기 때문이다. 평가 단계에서 한 번만 실어 보낸다.
+   */
+  shape?: ShapeSpec
 }
 
 // ---------------------------------------------------------------------------

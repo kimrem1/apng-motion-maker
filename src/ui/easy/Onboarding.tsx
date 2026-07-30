@@ -21,9 +21,23 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { importImageFile, toErrorMessage } from '@/imageprep/index.ts'
 import { useDocumentStore } from '@/state/document.ts'
+import { applyShapeScene } from '@/state/shapeActions.ts'
+import { useShapeUiStore } from '@/state/shapeUi.ts'
 import { useUiStore } from '@/state/ui.ts'
 
 import './easy.css'
+
+/**
+ * 이미지 없이 시작하는 도형 세트.
+ *
+ * 24종을 다 늘어놓지 않는다. 첫 화면에서 필요한 것은 "고르는 일" 이 아니라
+ * "무엇이든 하나 움직이는 것을 보는 일" 이다. 성격이 뚜렷하게 다른 셋만 둔다.
+ */
+const SHAPE_STARTERS: readonly { sceneId: string; label: string }[] = [
+  { sceneId: 'pulse.ripple', label: '물결 파동' },
+  { sceneId: 'bars.equalizer', label: '음악 막대' },
+  { sceneId: 'accent.pop', label: '쫀득 팝' },
+]
 
 // ---------------------------------------------------------------------------
 // 샘플 그리기
@@ -479,6 +493,37 @@ export function Onboarding() {
         </div>
         <p className="mm-easy-note">
           샘플도 투명 배경입니다. 파일을 고르지 않아도 바로 만들어 볼 수 있어요.
+        </p>
+      </div>
+
+      {/*
+        이미지 없이 시작하는 길.
+        도형 레이어는 에셋이 없어도 되는 유일한 레이어라, 이 버튼 하나가 "이미지가
+        있어야 시작할 수 있다" 는 전제를 없앤다. 넣고 나면 나머지 화면은 완전히 같다.
+      */}
+      <div className="mm-onb-samples">
+        <p className="mm-onb-formats">이미지 없이 도형으로 시작</p>
+        <div className="mm-onb-samples-row">
+          {SHAPE_STARTERS.map((starter) => (
+            <button
+              key={starter.sceneId}
+              type="button"
+              className="mm-btn"
+              disabled={busy}
+              onClick={() => {
+                applyShapeScene(starter.sceneId)
+                useShapeUiStore.getState().setTab('shape')
+                // 이미지 경로와 같다. 넣자마자 움직이는 것을 보여 준다.
+                useUiStore.getState().setPlaying(true)
+              }}
+            >
+              {starter.label}
+            </button>
+          ))}
+        </div>
+        <p className="mm-easy-note">
+          도형만으로도 바로 내보낼 수 있습니다. 왼쪽 <strong>도형</strong> 탭에 24가지가
+          더 있습니다.
         </p>
       </div>
 
