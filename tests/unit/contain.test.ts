@@ -218,10 +218,19 @@ describe('카탈로그 전체 회귀', () => {
 
   const exiting = MOTION_PRESETS.filter((p) => p.overscan === 'allowEmpty').map((p) => p.id)
 
-  it('프레임 밖으로 나가는 프리셋은 세 종뿐이다', () => {
+  it('프레임 밖으로 나가는 프리셋 목록이 그대로다', () => {
     // 이 목록이 늘면 담기에서 빠지는 프리셋이 늘었다는 뜻이다. 의도한 것인지
     // 확인하고 여기를 고쳐야 한다.
-    expect(exiting.sort()).toEqual(['combo.slideFadeGlitch', 'slide.inFade', 'slide.outFade'])
+    // 가로질러 지나가기 4종은 정의상 프레임 밖에서 시작해 밖으로 빠진다.
+    expect(exiting.sort()).toEqual([
+      'combo.slideFadeGlitch',
+      'slide.crossDown',
+      'slide.crossLeft',
+      'slide.crossRight',
+      'slide.crossUp',
+      'slide.inFade',
+      'slide.outFade',
+    ])
   })
 
   for (const preset of MOTION_PRESETS) {

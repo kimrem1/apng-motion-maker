@@ -80,8 +80,8 @@ function maxStep(values: number[]): number {
 // ---------------------------------------------------------------------------
 
 describe('카탈로그 구성', () => {
-  it('아홉 카테고리 57종이다', () => {
-    expect(MOTION_PRESETS).toHaveLength(57)
+  it('아홉 카테고리 61종이다', () => {
+    expect(MOTION_PRESETS).toHaveLength(61)
     expect(byCategory('shake')).toHaveLength(6)
     expect(byCategory('boil')).toHaveLength(5)
     expect(byCategory('glitch')).toHaveLength(8)

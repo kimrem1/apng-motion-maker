@@ -454,3 +454,54 @@ describe('히스토리와 에셋 재동기화', () => {
     assetRegistry.delete(b.assetId)
   })
 })
+
+/**
+ * 캔버스 크기와 그림 크기.
+ *
+ * 해상도를 바꾸는 컨트롤은 그림도 같은 비율로 데려가야 한다. 캔버스만 줄이면
+ * fit 이 '원본 크기'인 레이어가 제자리에 남아, 화면에서는 그림이 커지고 사방이
+ * 잘린 것으로 보인다. 사용자가 고른 것은 해상도이지 확대가 아니다.
+ */
+describe('캔버스 크기와 내용 배율', () => {
+  it('해상도를 줄이면 그림도 같은 비율로 줄어든다', () => {
+    // 200x200 원본, 캔버스도 200x200 에서 시작한다.
+    s().setCanvasSize(200, 200)
+    s().setCanvasSize(100, 100, { scaleContent: true })
+    expect(s().doc.canvas.w).toBe(100)
+    expect(s().doc.layers[0]!.baseScale).toBeCloseTo(0.5, 9)
+  })
+
+  it('여러 번 바꾸면 누적된다', () => {
+    s().setCanvasSize(200, 200)
+    s().setCanvasSize(100, 100, { scaleContent: true })
+    s().setCanvasSize(400, 400, { scaleContent: true })
+    // 0.5 * 4 = 2. 원본 200px 이 400px 캔버스를 채운다.
+    expect(s().doc.layers[0]!.baseScale).toBeCloseTo(2, 9)
+  })
+
+  it('자르기처럼 원본이 달라진 경우는 건드리지 않는다', () => {
+    s().setCanvasSize(200, 200)
+    s().setCanvasSize(120, 120)
+    expect(s().doc.layers[0]!.baseScale).toBe(1)
+  })
+
+  it('한 축만 키우면 그림은 그대로다', () => {
+    s().setCanvasSize(200, 200)
+    s().setCanvasSize(200, 400, { scaleContent: true })
+    // 세로만 넓혔다. 그림이 세로로 늘어나면 안 된다.
+    expect(s().doc.layers[0]!.baseScale).toBe(1)
+  })
+
+  it('한 축만 줄이면 그 축에 맞춰 들어간다', () => {
+    s().setCanvasSize(200, 200)
+    s().setCanvasSize(100, 200, { scaleContent: true })
+    expect(s().doc.layers[0]!.baseScale).toBeCloseTo(0.5, 9)
+  })
+
+  it('채우기/담기 레이어는 fit 이 이미 캔버스를 따라가므로 손대지 않는다', () => {
+    s().setLayerFit(L, 'cover')
+    s().setCanvasSize(200, 200)
+    s().setCanvasSize(100, 100, { scaleContent: true })
+    expect(s().doc.layers[0]!.baseScale).toBe(1)
+  })
+})

@@ -1,5 +1,5 @@
 /**
- * C. 계속 움직이기. 10종 전부.
+ * C. 계속 움직이기. 14종 전부.
  *
  * 이동 거리 d 에서 필요한 배율은 k = 1 + 2d 다. 하지만 프리셋은 그 배율을 직접 심지 않는다.
  * 오버스캔 솔버가 결합이 끝난 뒤 같은 값을 스스로 유도하기 때문이다.
@@ -141,7 +141,8 @@ function slidePreset(id: string, label: string, hint: string, direction: string)
     tags: ['move'],
     loopSafe: 'pingPongOnly',
     overscan: 'required',
-    easy: false,
+    // 방향이 분명한 이동은 EASY 에서도 자주 찾는다. 접어 두면 못 찾는다.
+    easy: true,
     size: 'light',
     defaultDurationMs: 800,
     params: [
@@ -165,6 +166,92 @@ const slideLeft = slidePreset('slide.left', '왼쪽으로 이동', '왼쪽으로
 const slideRight = slidePreset('slide.right', '오른쪽으로 이동', '오른쪽으로 미끄러진다.', 'right')
 const slideUp = slidePreset('slide.up', '위로 이동', '위로 미끄러진다.', 'up')
 const slideDown = slidePreset('slide.down', '아래로 이동', '아래로 미끄러진다.', 'down')
+
+/**
+ * 화면을 가로질러 지나가기 4종.
+ *
+ * 위의 slidePreset 과 다른 점은 **프레임 밖에서 시작해 프레임 밖으로 빠진다**는 것이다.
+ * 그쪽은 화면 안에서 조금 밀리고 마는 강조 동작이고, 이쪽은 지나가는 동작이다.
+ * 흘러가는 배너, 화면을 건너는 캐릭터가 이 모양이다.
+ *
+ * 이동량은 캔버스 비율(percentOfCanvas)이다. 그림이 캔버스와 비슷한 크기일 때
+ * 기본값 120% 면 시작에서 오른쪽 끝이 왼쪽 경계 밖(-10%)에 있고, 끝에서 왼쪽 끝이
+ * 오른쪽 경계 밖(+10%)에 있다. 즉 양끝에서 완전히 사라진다.
+ *
+ * 나가는 것이 의도이므로 오버스캔은 allowEmpty 다. 담기 솔버가 개입하면 빠져나가야
+ * 할 그림이 가장자리에 붙어 멈춘다.
+ *
+ * 이징은 linear 다. 반복 재생에서 매 사이클 급가속이 되풀이되면 싸구려로 보인다.
+ */
+function crossPreset(id: string, label: string, hint: string, direction: string): MotionPreset {
+  return {
+    id,
+    label,
+    hint,
+    category: 'move',
+    tags: ['move'],
+    // 시작과 끝이 다르다. 반복하면 반대쪽에서 다시 들어온다. 그게 이 모션의 쓰임새다.
+    loopSafe: 'once',
+    overscan: 'allowEmpty',
+    easy: true,
+    size: 'normal',
+    defaultDurationMs: 1600,
+    params: [
+      {
+        key: 'travel',
+        label: '지나가는 거리',
+        type: 'number',
+        min: 60,
+        max: 220,
+        step: 5,
+        unit: '%',
+        default: 120,
+      },
+    ],
+    emit(ctx): PresetEmission {
+      const span = resolveSpan(ctx, 1600)
+      const end = lastFrame(span, 'once')
+      const dir = directionVector(direction)
+      const travel = clamp(num(ctx.params, 'travel', 120) * gainOf(ctx.strength), 20, 320)
+      // 가운데를 지나가게 반씩 나눈다. 한쪽에서만 재면 화면 중앙을 안 지난다.
+      const half = travel / 2
+
+      const tracks = [
+        track(
+          dir.prop,
+          'percentOfCanvas',
+          buildKeys([{ f: 0, v: -half * dir.sign }, { f: end, v: half * dir.sign }], 'linear'),
+        ),
+      ]
+      return { tracks, durationFrames: emitDuration(span, tracks), suggestedLoop: loopFor('once') }
+    },
+  }
+}
+
+const crossRight = crossPreset(
+  'slide.crossRight',
+  '왼쪽에서 오른쪽으로',
+  '왼쪽 밖에서 들어와 오른쪽 밖으로 빠진다.',
+  'right',
+)
+const crossLeft = crossPreset(
+  'slide.crossLeft',
+  '오른쪽에서 왼쪽으로',
+  '오른쪽 밖에서 들어와 왼쪽 밖으로 빠진다.',
+  'left',
+)
+const crossDown = crossPreset(
+  'slide.crossDown',
+  '위에서 아래로',
+  '위쪽 밖에서 내려와 아래쪽 밖으로 빠진다.',
+  'down',
+)
+const crossUp = crossPreset(
+  'slide.crossUp',
+  '아래에서 위로',
+  '아래쪽 밖에서 올라와 위쪽 밖으로 빠진다.',
+  'up',
+)
 
 /** 대각선 흐름. 등속으로 흐르다 끝에서만 감속한다. */
 const slideDiagonal: MotionPreset = {
@@ -241,6 +328,10 @@ export const MOVE_PRESETS: MotionPreset[] = [
   slideRight,
   slideUp,
   slideDown,
+  crossRight,
+  crossLeft,
+  crossDown,
+  crossUp,
   slideDiagonal,
   slideDrift,
 ]

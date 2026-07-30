@@ -127,6 +127,26 @@ export function baseFitScale(
  * 레이어의 최종 매트릭스를 만든다.
  * 입력 정점은 [0,1]^2 유닛 사각형이고, 출력은 캔버스 픽셀 좌표
  * (원점 = 캔버스 중심, +x 오른쪽, +y 아래)다.
+ *
+ * ---------------------------------------------------------------------------
+ * 기준점은 축이지 배치 원점이 아니다
+ * ---------------------------------------------------------------------------
+ * 원래 식은 M = T(pos)·R·K·S·T(-anchor)·L 이었다. 이러면 **기준점으로 찍은 그 점이
+ * 캔버스 중앙에 온다.** 기준점을 왼쪽 위로 옮기는 순간 그림이 오른쪽 아래로
+ * 반 장씩 튀어 나간다. 사용자가 원한 것은 "회전과 확대가 도는 축을 옮기는 것"
+ * 이지 "그림을 옮기는 것" 이 아니다.
+ *
+ * 그래서 기준점이 중앙에서 벗어난 만큼(q)을 다시 더해 준다.
+ *
+ *   M = T(pos + S_base·q) · R·K·S · T(-anchor)·L,   q = (anchor - 0.5) * 이미지크기
+ *
+ * 더하는 양은 **움직이지 않는 배율(S_base)** 로만 잰다. 애니메이션되는 scaleX 로
+ * 재면 확대할 때 보정도 같이 커져서 그림이 제자리에서 커지고, 기준점이 아무
+ * 일도 하지 않는다. S_base 로 재면 이렇게 된다.
+ *
+ *   - 정지 상태(배율 1, 회전 0): 기준점이 어디든 그림은 캔버스 중앙에 그대로 있다
+ *   - 확대: 기준점이 박힌 채로 그 반대쪽으로 자란다
+ *   - 회전: 기준점을 축으로 돈다
  */
 export function buildLayerMatrix(
   t: ResolvedTransform,
@@ -137,7 +157,10 @@ export function buildLayerMatrix(
   imageH: number,
   out?: Mat3,
 ): Mat3 {
-  const base = baseFitScale(fit, canvasW, canvasH, imageW, imageH)
+  const fitBase = baseFitScale(fit, canvasW, canvasH, imageW, imageH)
+  // 캔버스 해상도를 바꿨을 때 따라붙는 고정 배율. 옛 문서에는 없다.
+  const layerScale = Number.isFinite(t.baseScale) && t.baseScale > 0 ? t.baseScale : 1
+  const base = { sx: fitBase.sx * layerScale, sy: fitBase.sy * layerScale }
 
   // 유닛 사각형 -> 앵커 기준 이미지 로컬 픽셀
   const local = mat3Identity()
@@ -149,7 +172,10 @@ export function buildLayerMatrix(
   const s = mat3Scaling(base.sx * t.scaleX, base.sy * t.scaleY)
   const k = mat3Skew(t.skewX, t.skewY)
   const r = mat3Rotation(degToRad(t.rotate))
-  const p = mat3Translation(t.translateX, t.translateY)
+  const p = mat3Translation(
+    t.translateX + base.sx * (t.anchorX - 0.5) * imageW,
+    t.translateY + base.sy * (t.anchorY - 0.5) * imageH,
+  )
 
   const m = out ?? new Float32Array(9)
   mat3Multiply(p, r, m)
@@ -172,6 +198,7 @@ export function canvasToClip(canvasW: number, canvasH: number, out?: Mat3): Mat3
 
 export function identityTransform(): ResolvedTransform {
   return {
+    baseScale: 1,
     scaleX: 1,
     scaleY: 1,
     rotate: 0,

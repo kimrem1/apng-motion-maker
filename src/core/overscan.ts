@@ -19,7 +19,13 @@
  *    사용자가 만든 속도감이 뭉개진다. 전 구간 최댓값 하나를 곱한다.
  */
 
-import type { CompositionSnapshot, Layer, ResolvedTransform, SafeZonePolicy } from './types.ts'
+import type {
+  CompositionSnapshot,
+  FitMode,
+  Layer,
+  ResolvedTransform,
+  SafeZonePolicy,
+} from './types.ts'
 import { baseFitScale, buildLayerMatrix } from './transform.ts'
 import { resolveLayerTransformWithParents } from './evaluate.ts'
 import { modifierPeak } from '@/motions/generators.ts'
@@ -112,6 +118,22 @@ export function requiredScaleAt(
   return Math.max(needW, needH)
 }
 
+/**
+ * fit 기준 배율에 레이어 고정 배율(Layer.baseScale)을 곱한 값.
+ * 렌더러가 쓰는 것과 같은 배율이어야 솔버가 다른 그림을 재지 않는다.
+ */
+function layerBaseScale(
+  layer: Layer,
+  canvasW: number,
+  canvasH: number,
+  imageW: number,
+  imageH: number,
+): { sx: number; sy: number } {
+  const fit = baseFitScale(layer.fit, canvasW, canvasH, imageW, imageH)
+  const k = typeof layer.baseScale === 'number' && layer.baseScale > 0 ? layer.baseScale : 1
+  return { sx: fit.sx * k, sy: fit.sy * k }
+}
+
 /** 이 레이어가 오버스캔 대상인가. */
 export function isSolverTarget(layer: Layer, policy: SafeZonePolicy): boolean {
   if (policy === 'allowEmpty') return false
@@ -201,11 +223,14 @@ function containScaleAt(
   imageW: number,
   imageH: number,
   t: ResolvedTransform,
+  fit: FitMode,
 ): number {
-  const full = buildLayerMatrix(t, 'none', canvasW, canvasH, imageW, imageH)
+  // fit 과 baseScale 을 미리 곱해 넘기면 안 된다. 기준점 보정이 그 둘로 계산되므로
+  // (transform.ts buildLayerMatrix), 접어 넣는 순간 솔버가 렌더러와 다른 위치를 본다.
+  const full = buildLayerMatrix(t, fit, canvasW, canvasH, imageW, imageH)
   const origin = buildLayerMatrix(
     { ...t, scaleX: 0, scaleY: 0 },
-    'none',
+    fit,
     canvasW,
     canvasH,
     imageW,
@@ -271,9 +296,6 @@ export function solveLayerContain(
   const canvasW = doc.canvas.w
   const canvasH = doc.canvas.h
 
-  // fit 기준 배율은 담기 계산에도 그대로 들어가야 한다. containScaleAt 은 fit 을
-  // 'none' 으로 부르므로 여기서 미리 곱해 넘긴다.
-  const base = baseFitScale(layer.fit, canvasW, canvasH, imageW, imageH)
   const frames = sampleFrames(doc, layer, options.sampleCount ?? doc.safeZone.sampleCount)
 
   let worst = Infinity
@@ -294,12 +316,7 @@ export function solveLayerContain(
    */
   for (const f of frames) {
     const t = resolveLayerTransformWithParents(doc, layer, f)
-    const probe: ResolvedTransform = {
-      ...t,
-      scaleX: base.sx * t.scaleX,
-      scaleY: base.sy * t.scaleY,
-    }
-    const c = containScaleAt(canvasW, canvasH, imageW, imageH, probe)
+    const c = containScaleAt(canvasW, canvasH, imageW, imageH, t, layer.fit)
     if (c < worst) {
       worst = c
       worstFrame = f
@@ -338,7 +355,7 @@ export function solveLayerOverscan(
   const canvasW = doc.canvas.w
   const canvasH = doc.canvas.h
 
-  const base = baseFitScale(layer.fit, canvasW, canvasH, imageW, imageH)
+  const base = layerBaseScale(layer, canvasW, canvasH, imageW, imageH)
   const s0 = Math.max(base.sx, base.sy)
 
   const idle: OverscanNeed = {

@@ -184,7 +184,18 @@ interface DocumentState {
     handles: { out?: Handle; in?: Handle },
   ): void
 
-  setCanvasSize(w: number, h: number): void
+  /**
+   * 캔버스 크기를 바꾼다.
+   *
+   * scaleContent 는 **해상도를 바꾸는 컨트롤만** 켠다 (EASY 의 크기, 인스펙터의
+   * 폭/높이). 그때는 그림도 같은 비율로 따라가야 한다. 켜지 않으면 fit 이
+   * '원본 크기'인 레이어가 제자리에 남아, 캔버스를 줄인 만큼 그림이 커 보이고
+   * 사방이 잘린다 (Layer.baseScale 주석).
+   *
+   * 자르기 / 여백 제거처럼 **원본 픽셀 자체가 달라져서** 캔버스가 따라가는 경우는
+   * 끈 채로 부른다. 그림은 이미 그만큼 작아져 있으므로 또 줄이면 두 번 줄어든다.
+   */
+  setCanvasSize(w: number, h: number, options?: { scaleContent?: boolean }): void
   setBackgroundType(type: BackgroundType): void
   setBackgroundColor(color: string): void
   setFps(fps: number): void
@@ -884,10 +895,37 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       }, `handles:${layerId}:${prop}`)
     },
 
-    setCanvasSize(w, h) {
+    setCanvasSize(w, h, options) {
       mutateDoc('캔버스 크기', (d) => {
-        d.canvas.w = clamp(Math.round(w), CANVAS_MIN, CANVAS_MAX)
-        d.canvas.h = clamp(Math.round(h), CANVAS_MIN, CANVAS_MAX)
+        const beforeW = d.canvas.w
+        const beforeH = d.canvas.h
+        const nextW = clamp(Math.round(w), CANVAS_MIN, CANVAS_MAX)
+        const nextH = clamp(Math.round(h), CANVAS_MIN, CANVAS_MAX)
+        d.canvas.w = nextW
+        d.canvas.h = nextH
+
+        if (options?.scaleContent !== true) return
+        if (beforeW <= 0 || beforeH <= 0) return
+
+        /*
+         * 두 축 비율 중 **작은 쪽**을 쓴다.
+         *
+         * 해상도 컨트롤은 비율을 유지하므로 둘이 같다. 인스펙터에서 한 축만 줄인
+         * 경우에만 갈리는데, 그때 작은 쪽을 쓰면 줄인 축에 맞춰 그림이 들어가고
+         * 한 축만 키운 경우에는 1 이 되어 그림이 그대로 남는다. 큰 쪽을 쓰면
+         * 폭만 늘렸는데 그림이 세로로 삐져나간다.
+         */
+        const factor = Math.min(nextW / beforeW, nextH / beforeH)
+        if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) < 1e-9) return
+
+        for (const layer of d.layers) {
+          // 채우기/담기/늘이기는 fit 기준 배율이 이미 캔버스를 따라간다.
+          // 여기서 또 곱하면 두 번 적용된다.
+          if (layer.fit !== 'none') continue
+          const current =
+            typeof layer.baseScale === 'number' && layer.baseScale > 0 ? layer.baseScale : 1
+          layer.baseScale = clamp(current * factor, 0.001, 1000)
+        }
       }, 'canvasSize')
     },
 

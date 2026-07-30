@@ -529,6 +529,11 @@ function normalizeLayer(
     fit: pick(raw.fit, FIT_MODES, 'cover'),
     anchor: [num(anchor[0], 0.5, 0, 1), num(anchor[1], 0.5, 0, 1)],
     keepPlaceOnAnchorChange: bool(raw.keepPlaceOnAnchorChange, true),
+    /*
+     * 캔버스 해상도를 바꾼 만큼의 고정 배율. 이 필드가 없는 파일은 그 기능이
+     * 생기기 전에 저장된 것이므로 1 이 맞다. 0 이나 음수는 그림을 없애 버린다.
+     */
+    baseScale: num(raw.baseScale, 1, 0.001, 1000),
     blend: pick(raw.blend, BLEND_MODES, 'normal'),
     parallaxFactor: num(raw.parallaxFactor, 1, 0, 3),
     fillsCanvas: bool(raw.fillsCanvas, index === 0),

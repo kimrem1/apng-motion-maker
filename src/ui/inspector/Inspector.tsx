@@ -17,6 +17,7 @@ import { EffectStack } from '@/ui/effects/EffectStack.tsx'
 import { LayerProperties } from '@/ui/layers/LayerProperties.tsx'
 import { PrepPanel } from '@/ui/prep/PrepPanel.tsx'
 import { useUiStore } from '@/state/ui.ts'
+import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
 import { NumberField, SelectField, TextField, ToggleField, type SelectOption } from '@/ui/widgets/Field.tsx'
 
 const FIT_OPTIONS: readonly SelectOption<FitMode>[] = [
@@ -33,19 +34,6 @@ const LOOP_OPTIONS: readonly SelectOption<LoopMode>[] = [
   { value: 'loopWithHold', label: '반복 + 멈춤' },
 ]
 
-/** 기준점 3x3 그리드. 값은 이미지 로컬 비율 [0,1] 이다. */
-const ANCHOR_CELLS: readonly { ax: number; ay: number; label: string }[] = [
-  { ax: 0, ay: 0, label: '왼쪽 위' },
-  { ax: 0.5, ay: 0, label: '가운데 위' },
-  { ax: 1, ay: 0, label: '오른쪽 위' },
-  { ax: 0, ay: 0.5, label: '왼쪽 가운데' },
-  { ax: 0.5, ay: 0.5, label: '정중앙' },
-  { ax: 1, ay: 0.5, label: '오른쪽 가운데' },
-  { ax: 0, ay: 1, label: '왼쪽 아래' },
-  { ax: 0.5, ay: 1, label: '가운데 아래' },
-  { ax: 1, ay: 1, label: '오른쪽 아래' },
-]
-
 /** <input type="color"> 는 #rrggbb 만 받는다. 알파가 붙은 값은 잘라 낸다. */
 function toHex6(color: string): string {
   if (/^#[0-9a-fA-F]{8}$/.test(color)) return color.slice(0, 7)
@@ -58,8 +46,6 @@ function toHex6(color: string): string {
   }
   return '#ffffff'
 }
-
-const near = (a: number, b: number): boolean => Math.abs(a - b) < 0.001
 
 const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v))
 
@@ -107,7 +93,8 @@ function CanvasSection() {
       else if (cw !== Math.round(w)) ch = clamp(Math.round(cw / ratio), CANVAS_MIN, CANVAS_MAX)
     }
     lastWrittenRef.current = [cw, ch]
-    setCanvasSize(cw, ch)
+    // 폭/높이는 결과물 해상도다. 그림도 같은 비율로 따라가야 잘리지 않는다.
+    setCanvasSize(cw, ch, { scaleContent: true })
   }
 
   function changeWidth(w: number): void {
@@ -274,26 +261,18 @@ function LayerSection({ layer }: { layer: Layer }) {
 
         <div className="mm-field">
           <span className="mm-field-label" id="mm-anchor-label">
-            기준점
+            모션 기준점
           </span>
-          <div className="mm-anchor-grid" role="group" aria-labelledby="mm-anchor-label">
-            {ANCHOR_CELLS.map((cell) => {
-              const active = near(ax, cell.ax) && near(ay, cell.ay)
-              return (
-                <button
-                  key={cell.label}
-                  type="button"
-                  className="mm-anchor-cell"
-                  aria-pressed={active}
-                  title={cell.label}
-                  aria-label={`기준점 ${cell.label}`}
-                  onClick={() => setLayerAnchor(layer.id, cell.ax, cell.ay)}
-                >
-                  <span className="mm-anchor-dot" />
-                </button>
-              )
-            })}
-          </div>
+          <AnchorGrid
+            ax={ax}
+            ay={ay}
+            labelledBy="mm-anchor-label"
+            onChange={(nx, ny) => setLayerAnchor(layer.id, nx, ny)}
+          />
+          <p className="mm-field-hint">
+            회전과 확대가 도는 축입니다. 지금은 {anchorLabelOf(ax, ay)}. 기준점을 옮겨도 그림
+            자리는 캔버스 가운데 그대로입니다.
+          </p>
         </div>
 
         <div className="mm-row-2">

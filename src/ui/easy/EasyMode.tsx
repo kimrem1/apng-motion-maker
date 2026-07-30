@@ -47,6 +47,7 @@ import { PreviewCanvas } from '@/ui/canvas/PreviewCanvas.tsx'
 import { ExportDialog } from '@/ui/export/ExportDialog.tsx'
 import { PresetGallery } from '@/ui/presets/PresetGallery.tsx'
 import { FRAME_FIT_OPTIONS, frameFitOf, setFrameFit } from '@/ui/layers/layerDocActions.ts'
+import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
 import {
   restoreAssetOriginal,
   trimAssetMargins,
@@ -54,6 +55,7 @@ import {
 } from '@/ui/prep/trimAsset.ts'
 
 import { Onboarding } from './Onboarding.tsx'
+import { QuickCrop } from './QuickCrop.tsx'
 import { QuickExport } from './QuickExport.tsx'
 
 import './easy.css'
@@ -164,6 +166,7 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
   const doc = useDocumentStore((s) => s.doc)
   const setLoopMode = useDocumentStore((s) => s.setLoopMode)
   const setCanvasSize = useDocumentStore((s) => s.setCanvasSize)
+  const setLayerAnchor = useDocumentStore((s) => s.setLayerAnchor)
   const setBackgroundType = useDocumentStore((s) => s.setBackgroundType)
   const setBackgroundColor = useDocumentStore((s) => s.setBackgroundColor)
 
@@ -349,6 +352,8 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
    */
   const [trimUndo, setTrimUndo] = useState<CanvasSize | null>(null)
   const [trimming, setTrimming] = useState(false)
+  /** 자유 자르기 다이얼로그. 영역을 직접 끌어 정한다. */
+  const [cropOpen, setCropOpen] = useState(false)
 
   const firstAssetId = doc.assets[0]?.id ?? null
 
@@ -365,7 +370,7 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           return
         }
         setTrimUndo(result.previousCanvas)
-        setNotice(`여백을 잘라 ${result.width} x ${result.height} 로 맞췄습니다.`)
+        setNotice(`여백을 잘라 ${result.canvas.w} x ${result.canvas.h} 로 맞췄습니다.`)
       })
       .catch((err: unknown) => {
         if (aliveRef.current) setNotice(toErrorMessage(err))
@@ -411,7 +416,11 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
   const setLongestEdge = (next: number): void => {
     if (next === longestEdge || longestEdge <= 0) return
     const scale = next / longestEdge
-    setCanvasSize(Math.round(doc.canvas.w * scale), Math.round(doc.canvas.h * scale))
+    // 여기서 고르는 것은 결과물 해상도다. 그림도 같이 커지고 작아져야 한다.
+    // 캔버스만 바꾸면 그림은 제자리에 남아 잘리거나 가운데 작게 뜬다.
+    setCanvasSize(Math.round(doc.canvas.w * scale), Math.round(doc.canvas.h * scale), {
+      scaleContent: true,
+    })
   }
 
   const background = readBackground(doc.canvas.background.type, doc.canvas.background.color)
@@ -647,6 +656,33 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           </fieldset>
         ) : null}
 
+        {/*
+          모션 기준점. 회전과 확대가 도는 축이다.
+          PRO 인스펙터에만 두면 EASY 사용자는 "왼쪽 위를 축으로 돌리기" 를 영원히 못 한다.
+          기준점을 옮겨도 그림 자리는 캔버스 가운데 그대로다 (core/transform.ts).
+        */}
+        {hasImage ? (
+          <div className="mm-easy-group">
+            <span className="mm-field-label" id="mm-easy-anchor">
+              모션 기준점
+            </span>
+            <AnchorGrid
+              ax={targetLayer?.anchor[0] ?? 0.5}
+              ay={targetLayer?.anchor[1] ?? 0.5}
+              disabled={targetLayerId === null}
+              labelledBy="mm-easy-anchor"
+              onChange={(ax, ay) => {
+                if (targetLayerId) setLayerAnchor(targetLayerId, ax, ay)
+              }}
+            />
+            <p className="mm-easy-note">
+              회전과 확대가 이 점을 축으로 돕니다. 지금은{' '}
+              {anchorLabelOf(targetLayer?.anchor[0] ?? 0.5, targetLayer?.anchor[1] ?? 0.5)}. 그림이
+              놓이는 자리는 바뀌지 않습니다.
+            </p>
+          </div>
+        ) : null}
+
         <fieldset className="mm-easy-group">
           <legend>반복</legend>
           {LOOP_OPTIONS.map((option) => (
@@ -702,7 +738,7 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           파라미터 없는 원클릭만 여기 둔다. 영역을 직접 그리는 것은 PRO 몫이다.
         */}
         <div className="mm-easy-group">
-          <span className="mm-field-label">여백</span>
+          <span className="mm-field-label">자르기</span>
           <button
             type="button"
             className="mm-btn"
@@ -711,14 +747,23 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           >
             {trimming ? '자르는 중' : '빈 여백 잘라내기'}
           </button>
+          <button
+            type="button"
+            className="mm-btn"
+            disabled={!firstAssetId || trimming || swapping}
+            onClick={() => setCropOpen(true)}
+          >
+            직접 자르기
+          </button>
           {trimUndo ? (
             <button type="button" className="mm-btn" disabled={trimming} onClick={handleTrimUndo}>
               원래대로
             </button>
           ) : null}
           <p className="mm-easy-note">
-            그림 둘레의 투명하거나 단색인 여백을 찾아 잘라내고 크기를 거기에 맞춥니다.
-            영역을 직접 정하려면 PRO 의 [이미지 다듬기] 를 쓰세요.
+            [빈 여백 잘라내기] 는 그림 둘레의 투명하거나 단색인 여백을 찾아 잘라냅니다.
+            [직접 자르기] 는 남길 영역을 직접 끌어서 정합니다. 비율은 자유이고 1:1 같은
+            고정 비율도 고를 수 있습니다. 어느 쪽이든 캔버스가 자른 크기에 맞춰집니다.
           </p>
         </div>
 
@@ -766,6 +811,15 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           </p>
         </div>
       </aside>
+
+      {firstAssetId ? (
+        <QuickCrop
+          open={cropOpen}
+          assetId={firstAssetId}
+          onClose={() => setCropOpen(false)}
+          onDone={setNotice}
+        />
+      ) : null}
 
       {/* 호출자가 다이얼로그를 쥐고 있지 않을 때만 자기 것을 그린다. */}
       {onOpenExportSettings ? null : (

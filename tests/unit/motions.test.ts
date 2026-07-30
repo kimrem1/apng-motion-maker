@@ -1,7 +1,7 @@
 /**
  * 모션 프리셋 카탈로그 전체 규칙.
  *
- * 프리셋은 "적용해 보고 눈으로 확인"이 어려운 종류의 코드다. 57종 중 하나가 조용히
+ * 프리셋은 "적용해 보고 눈으로 확인"이 어려운 종류의 코드다. 61종 중 하나가 조용히
  * 깨져도 사용자가 그 프리셋을 고르기 전까지 아무도 모른다. 그래서 카탈로그 전체를
  * 한 번에 훑는 규칙 검사를 둔다.
  *
@@ -17,7 +17,7 @@
  *   1. 프리셋은 트랙 없이 **모디파이어만** 낼 수 있다 (흔들기, 자글자글).
  *   2. 프리셋은 트랙도 모디파이어도 없이 **이펙트만** 낼 수 있다 (지지직).
  *   3. 홀드 클럭이 있는 프리셋은 요청 길이를 홀드의 배수로 **스냅한다**.
- * F~I 고유 규칙은 motionsFGHI.test.ts 가 본다. 이 파일은 57종 공통 규칙만 본다.
+ * F~I 고유 규칙은 motionsFGHI.test.ts 가 본다. 이 파일은 61종 공통 규칙만 본다.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -159,6 +159,8 @@ const REQUIRED_IDS = [
   'zoom.slowIn', 'zoom.slowOut',
   'slide.panLR', 'slide.panUD',
   'slide.left', 'slide.right', 'slide.up', 'slide.down',
+  // 화면을 가로질러 지나가는 4종. 한쪽 밖에서 반대쪽 밖으로 빠진다.
+  'slide.crossRight', 'slide.crossLeft', 'slide.crossDown', 'slide.crossUp',
   // 시선 끌기
   'rotate.cw', 'rotate.ccw', 'rotate.spin360', 'rotate.sway',
   'zoom.punch', 'zoom.squash', 'fade.flicker',
@@ -198,7 +200,7 @@ describe('카탈로그 구성', () => {
   it('아홉 카테고리 구성이 표와 같다', () => {
     expect(byCategory('appear')).toHaveLength(6)
     expect(byCategory('disappear')).toHaveLength(4)
-    expect(byCategory('move')).toHaveLength(10)
+    expect(byCategory('move')).toHaveLength(14)
     expect(byCategory('attention')).toHaveLength(10)
     expect(byCategory('kenburns')).toHaveLength(4)
     expect(byCategory('shake')).toHaveLength(6)
@@ -207,10 +209,10 @@ describe('카탈로그 구성', () => {
     expect(byCategory('combo')).toHaveLength(4)
   })
 
-  it('전부 합쳐 57종이다 (A6 + B4 + C10 + D10 + E4 + F6 + G5 + H8 + I4)', () => {
+  it('전부 합쳐 61종이다 (A6 + B4 + C14 + D10 + E4 + F6 + G5 + H8 + I4)', () => {
     const total = CATEGORY_IDS.map((c) => byCategory(c).length).reduce((a, b) => a + b, 0)
-    expect(total).toBe(57)
-    expect(MOTION_PRESETS).toHaveLength(57)
+    expect(total).toBe(61)
+    expect(MOTION_PRESETS).toHaveLength(61)
   })
 
   it('조합 프리셋이 들어와 있다', () => {
@@ -303,7 +305,7 @@ describe('죽은 파라미터가 없다', () => {
 
 describe('카드가 미리 읽는 필드가 emit 과 어긋나지 않는다', () => {
   /*
-   * 갤러리는 57장을 그리면서 emit 을 부르지 않는다. 그래서 점멸 / 큰 원본 / 권장 fps 는
+   * 갤러리는 61장을 그리면서 emit 을 부르지 않는다. 그래서 점멸 / 큰 원본 / 권장 fps 는
    * MotionPreset 에 미리 선언해 두고 카드가 그 필드를 읽는다. 선언과 emit 이 갈리면
    * 배너에는 "번쩍입니다" 가 뜨는데 카드에는 점멸 주의 배지가 없는 상태가 된다.
    * 사본을 두기로 한 이상 어긋나지 않는다는 것은 여기서 확인해야 한다.

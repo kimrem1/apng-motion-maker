@@ -66,14 +66,41 @@ describe('buildLayerMatrix', () => {
     expect(br[0]).toBeCloseTo(300, 6)
   })
 
-  it('앵커를 좌상단으로 옮기면 그 점이 위치 원점이 된다', () => {
+  it('기준점을 옮겨도 그림 자리는 캔버스 가운데 그대로다', () => {
+    // 기준점은 회전과 확대가 도는 축이지 배치 원점이 아니다. 예전에는 좌상단으로
+    // 옮기는 순간 그림이 오른쪽 아래로 반 장 튀어 나갔다.
     const t = identityTransform()
     t.anchorX = 0
     t.anchorY = 0
     const m = buildLayerMatrix(t, 'cover', 500, 500, 600, 600)
     const tl = apply(m, 0, 0)
-    expect(tl[0]).toBeCloseTo(0, 6)
-    expect(tl[1]).toBeCloseTo(0, 6)
+    const br = apply(m, 1, 1)
+    expect(tl[0]).toBeCloseTo(-250, 6)
+    expect(tl[1]).toBeCloseTo(-250, 6)
+    expect(br[0]).toBeCloseTo(250, 6)
+    expect(br[1]).toBeCloseTo(250, 6)
+  })
+
+  it('기준점을 옮기면 확대가 그 점에서 자란다', () => {
+    // 좌상단을 축으로 1.2 배. 좌상단은 박혀 있고 우하단만 밀려 나간다.
+    const t = identityTransform()
+    t.anchorX = 0
+    t.anchorY = 0
+    t.scaleX = 1.2
+    t.scaleY = 1.2
+    const m = buildLayerMatrix(t, 'cover', 500, 500, 600, 600)
+    expect(apply(m, 0, 0)[0]).toBeCloseTo(-250, 6)
+    expect(apply(m, 1, 1)[0]).toBeCloseTo(-250 + 600, 6)
+  })
+
+  it('레이어 고정 배율은 fit 기준 배율에 곱해진다', () => {
+    // 캔버스 해상도를 절반으로 줄이면 그림도 절반이 된다 (Layer.baseScale).
+    const t = identityTransform()
+    t.baseScale = 0.5
+    const m = buildLayerMatrix(t, 'none', 500, 500, 400, 400)
+    const tl = apply(m, 0, 0)
+    const br = apply(m, 1, 1)
+    expect(br[0] - tl[0]).toBeCloseTo(200, 6)
   })
 
   it('90도 회전은 가로와 세로를 맞바꾼다', () => {

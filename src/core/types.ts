@@ -309,10 +309,37 @@ export interface Layer {
   visible: boolean
   locked: boolean
   fit: FitMode
-  /** [0,1] 이미지 로컬 비율 */
+  /**
+   * 모션 기준점. [0,1] 이미지 로컬 비율이다.
+   *
+   * **회전과 확대가 도는 축일 뿐, 배치 원점이 아니다.** 그림은 언제나 캔버스
+   * 중앙(+ translate)에 놓이고, 기준점을 옮겨도 그 자리는 그대로다. 보정은
+   * transform.ts 의 buildLayerMatrix 가 매트릭스 안에서 한다. 트랙 값을 고쳐
+   * 보정하면 프리셋을 다시 적용하는 순간(EASY 슬라이더는 드래그마다 다시 적용한다)
+   * 그 값이 통째로 갈아끼워져 그림이 튄다.
+   */
   anchor: [number, number]
-  /** 기준점을 바꿔도 화면상 위치가 유지되도록 translate 를 보정한다. */
+  /**
+   * 남아 있는 옛 필드. 지금은 보정이 항상 켜져 있다(위 anchor 주석).
+   * 저장된 프로젝트가 이 키를 들고 있으므로 스키마에서 지우지 않는다.
+   */
   keepPlaceOnAnchorChange: boolean
+  /**
+   * 캔버스 크기를 바꿨을 때 따라붙는 고정 배율. 기본 1 이다.
+   *
+   * fit 이 '원본 크기'(none)면 그림은 캔버스와 무관하게 자기 픽셀 크기로 앉는다.
+   * 그래서 캔버스만 512 에서 256 으로 줄이면 그림은 그대로인 채 프레임이 좁아져,
+   * 화면에서는 그림이 두 배로 커진 것처럼 보이고 사방이 잘린다. 반대로 키우면
+   * 가운데 작게 남는다. 사용자가 고른 것은 "결과물 해상도" 이지 "확대" 가 아니다.
+   *
+   * 그래서 해상도를 바꾸는 컨트롤(EASY 의 크기, 인스펙터의 폭/높이)은 캔버스와 함께
+   * 이 값을 같은 비율로 민다. 자르기처럼 **원본 픽셀 자체가 달라져서** 캔버스가
+   * 바뀌는 경우는 건드리지 않는다. 그쪽은 그림도 이미 그만큼 작아져 있다.
+   *
+   * 트랙이 아니라 별도 필드인 이유는 프리셋이 scale 트랙을 통째로 갈아끼우기
+   * 때문이다. 트랙에 섞어 두면 모션을 한 번 고르는 순간 사라진다.
+   */
+  baseScale?: number
   blend: BlendMode
   parallaxFactor: number
   /** true 인 레이어만 오버스캔 솔버 대상이다. */
@@ -435,6 +462,14 @@ export type CompositionSnapshot = MotionProject
 
 /** 트랙 + 모디파이어를 결합하고 오버스캔 솔버까지 적용한 최종 값. */
 export interface ResolvedTransform {
+  /**
+   * Layer.baseScale 그대로. fit 기준 배율에 곱해진다.
+   *
+   * scaleX/scaleY 에 섞지 않는 이유는 기준점 보정 때문이다. 보정은 "움직이지 않는
+   * 배율"로 재야 확대 모션이 기준점에서 자란다. 애니메이션되는 scaleX 에 섞으면
+   * 보정도 같이 커져서 기준점이 아무 일도 하지 않게 된다.
+   */
+  baseScale: number
   scaleX: number
   scaleY: number
   rotate: number

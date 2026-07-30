@@ -88,6 +88,8 @@ export function createImageLayer(asset: AssetRef, z: number): Layer {
     fit: 'none',
     anchor: [0.5, 0.5],
     keepPlaceOnAnchorChange: true,
+    // 캔버스 크기를 아직 안 건드렸다. 넣은 픽셀 그대로다.
+    baseScale: 1,
     blend: 'normal',
     parallaxFactor: 1,
     /*

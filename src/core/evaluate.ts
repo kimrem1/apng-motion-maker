@@ -129,6 +129,9 @@ export function resolveLayerTransform(
   const t = identityTransform()
   t.anchorX = layer.anchor[0]
   t.anchorY = layer.anchor[1]
+  // 캔버스 해상도를 바꾼 만큼의 고정 배율. 트랙 결합과 섞이면 안 되므로 별도 채널이다.
+  t.baseScale =
+    typeof layer.baseScale === 'number' && layer.baseScale > 0 ? layer.baseScale : 1
 
   for (const track of layer.tracks) {
     const raw = evalTrackAt(track, frame)

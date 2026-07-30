@@ -56,6 +56,7 @@ import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { NumberField } from '@/ui/widgets/Field.tsx'
+import { canvasForCrop } from './trimAsset.ts'
 import { ensurePrepOriginal } from './prepOriginals.ts'
 
 import './prep.css'
@@ -610,7 +611,10 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
       if (cropRect && fitCanvas) {
         const doc = store.doc
         canvasBeforeRef.current = { w: doc.canvas.w, h: doc.canvas.h }
-        store.setCanvasSize(result.width, result.height)
+        // 사용자가 크기(해상도)를 낮춰 뒀다면 그림은 원본 픽셀이 아니라 그 배율로
+        // 그려지고 있다. 원본 크기로 잡으면 잘라낸 그림이 프레임 일부만 채운다.
+        const canvas = canvasForCrop(asset.id, result.width, result.height)
+        store.setCanvasSize(canvas.w, canvas.h)
       } else {
         canvasBeforeRef.current = null
       }
