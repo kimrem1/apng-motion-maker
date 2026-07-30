@@ -505,3 +505,19 @@ describe('캔버스 크기와 내용 배율', () => {
     expect(s().doc.layers[0]!.baseScale).toBe(1)
   })
 })
+
+describe('캔버스 크기와 손으로 넣은 위치', () => {
+  it('px 위치도 같은 비율로 따라간다', () => {
+    s().setCanvasSize(200, 200)
+    s().setStaticValue(L, 'translateX', 40)
+    s().setCanvasSize(100, 100, { scaleContent: true })
+    expect(readStaticValue(s().doc.layers[0]!, 'translateX')).toBeCloseTo(20, 9)
+  })
+
+  it('내용 배율을 안 켜면 위치도 그대로다', () => {
+    s().setCanvasSize(200, 200)
+    s().setStaticValue(L, 'translateX', 40)
+    s().setCanvasSize(100, 100)
+    expect(readStaticValue(s().doc.layers[0]!, 'translateX')).toBe(40)
+  })
+})

@@ -919,6 +919,20 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) < 1e-9) return
 
         for (const layer of d.layers) {
+          /*
+           * 손으로 넣은 px 단위 위치도 같이 민다.
+           *
+           * 프리셋의 이동은 percentOfCanvas 라 캔버스를 따라 저절로 줄어든다.
+           * 인스펙터에서 직접 입력한 위치만 px 이고, 그것을 그대로 두면 캔버스를
+           * 절반으로 줄였을 때 같은 50px 이 화면에서 두 배로 커진다. fit 과 무관하게
+           * 위치는 언제나 캔버스 픽셀이므로 이 보정은 모든 레이어에 적용한다.
+           */
+          for (const track of layer.tracks) {
+            if (track.unit !== 'px') continue
+            if (track.prop !== 'translateX' && track.prop !== 'translateY') continue
+            for (const key of track.keys) key.v *= factor
+          }
+
           // 채우기/담기/늘이기는 fit 기준 배율이 이미 캔버스를 따라간다.
           // 여기서 또 곱하면 두 번 적용된다.
           if (layer.fit !== 'none') continue
