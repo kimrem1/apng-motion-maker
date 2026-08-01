@@ -80,8 +80,8 @@ function maxStep(values: number[]): number {
 // ---------------------------------------------------------------------------
 
 describe('카탈로그 구성', () => {
-  it('아홉 카테고리 61종이다', () => {
-    expect(MOTION_PRESETS).toHaveLength(61)
+  it('아홉 카테고리 76종이다', () => {
+    expect(MOTION_PRESETS).toHaveLength(76)
     expect(byCategory('shake')).toHaveLength(6)
     expect(byCategory('boil')).toHaveLength(5)
     expect(byCategory('glitch')).toHaveLength(8)
@@ -92,8 +92,8 @@ describe('카탈로그 구성', () => {
     // combo.popGlitchIn 은 등장, combo.slideFadeGlitch 는 사라짐에 속한다.
     expect(MOTION_PRESET_BY_ID.get('combo.popGlitchIn')?.category).toBe('appear')
     expect(MOTION_PRESET_BY_ID.get('combo.slideFadeGlitch')?.category).toBe('disappear')
-    expect(byCategory('appear')).toHaveLength(6)
-    expect(byCategory('disappear')).toHaveLength(4)
+    expect(byCategory('appear')).toHaveLength(12)
+    expect(byCategory('disappear')).toHaveLength(9)
   })
 
   it('id 가 중복되지 않는다', () => {

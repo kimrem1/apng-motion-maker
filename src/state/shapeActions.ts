@@ -41,7 +41,11 @@ useDocumentStore.subscribe((state) => {
 function fingerprintOf(layer: Layer): string {
   const shape = layer.shape
   const tracks = layer.tracks.map((t) => `${t.prop}:${t.unit}:${t.keys.length}`).join(',')
-  return `${layer.name}|${shape ? JSON.stringify(shape) : '-'}|${tracks}|${layer.effects.length}`
+  // 가리기와 원근을 통째로 담는다. 일부만 담으면 경계 흐림 하나 바꾼 세트를
+  // 슬라이더가 못 알아보고 그대로 갈아끼운다.
+  const reveal = layer.reveal ? JSON.stringify(layer.reveal) : '-'
+  const persp = layer.perspective ?? '-'
+  return `${layer.name}|${shape ? JSON.stringify(shape) : '-'}|${tracks}|${layer.effects.length}|${reveal}|${persp}`
 }
 
 function signatureOf(doc: MotionProject, layerIds: readonly string[]): string {

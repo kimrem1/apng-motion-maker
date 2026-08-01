@@ -17,12 +17,13 @@ import type {
   ResolvedLayer,
 } from '../types.ts'
 import { parseHexColor, premultiply } from '../color.ts'
+import { REVEAL_MODE_CODE } from '../reveal.ts'
 import { resolveComposition } from '../evaluate.ts'
 import { solveOverscan, type OverscanMap } from '../overscan.ts'
 import { buildLayerMatrix, canvasToClip, mat3Multiply, type Mat3 } from '../transform.ts'
 import { secToFrame } from '../time.ts'
 import { setPremultipliedBlend, type GlCapabilities } from './gl.ts'
-import { ProgramCache } from './programCache.ts'
+import { ProgramCache, type ProgramInfo } from './programCache.ts'
 import { TargetPool, type PooledTarget } from './targetPool.ts'
 import { COPY_FS, FULLSCREEN_VS, LAYER_FS, LAYER_VS } from './shaders/layer.ts'
 import { BLEND_FS, BLEND_MODE_CODE } from './shaders/blend.ts'
@@ -39,6 +40,43 @@ import {
  * 모디파이어와 이펙트가 같은 문서에서 같은 난수 계보를 쓴다.
  */
 const PROJECT_SEED = 0x4d4d
+
+/**
+ * 가리기 유니폼. 이미지 경로와 도형 경로가 같은 함수를 부른다.
+ *
+ * 가리기가 없는 레이어에서도 `u_revealMode` 를 0 으로 **반드시 써야 한다.** 프로그램은
+ * 캐시되고 유니폼은 프로그램에 남으므로, 앞 레이어가 켜 둔 값이 그대로 남아 다음
+ * 레이어까지 잘려 나간다.
+ */
+function setRevealUniforms(
+  gl: WebGL2RenderingContext,
+  info: ProgramInfo,
+  layer: ResolvedLayer,
+): void {
+  const uMode = info.uniforms.get('u_revealMode')
+  const spec = layer.reveal
+  if (!spec || spec.mode === 'none') {
+    if (uMode) gl.uniform1i(uMode, 0)
+    return
+  }
+
+  if (uMode) gl.uniform1i(uMode, REVEAL_MODE_CODE[spec.mode] ?? 0)
+
+  const uProgress = info.uniforms.get('u_reveal')
+  if (uProgress) gl.uniform1f(uProgress, layer.transform.reveal)
+
+  const uSoft = info.uniforms.get('u_revealSoft')
+  if (uSoft) gl.uniform1f(uSoft, spec.softness)
+
+  const uSlats = info.uniforms.get('u_revealSlats')
+  if (uSlats) gl.uniform1f(uSlats, Math.max(1, spec.slats))
+
+  const uAngle = info.uniforms.get('u_revealAngle')
+  if (uAngle) gl.uniform1f(uAngle, (spec.angle * Math.PI) / 180)
+
+  const uFlip = info.uniforms.get('u_revealFlip')
+  if (uFlip) gl.uniform1f(uFlip, spec.invert ? 1 : 0)
+}
 
 export class Renderer {
   readonly gl: WebGL2RenderingContext
@@ -351,6 +389,8 @@ export class Renderer {
     const uOpacity = info.uniforms.get('u_opacity')
     if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
 
+    setRevealUniforms(gl, info, layer)
+
     const uImage = info.uniforms.get('u_image')
     if (uImage) {
       gl.activeTexture(gl.TEXTURE0)
@@ -397,6 +437,8 @@ export class Renderer {
 
     const uOpacity = info.uniforms.get('u_opacity')
     if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
+
+    setRevealUniforms(gl, info, layer)
 
     // 색은 straight alpha 로 넘긴다. premultiply 는 프래그먼트 셰이더가 마지막에 한다.
     const uColor = info.uniforms.get('u_color')

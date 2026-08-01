@@ -153,11 +153,28 @@ export type TrackProp =
   | 'scaleX'
   | 'scaleY'
   | 'rotate'
+  /**
+   * 3D 회전. rotateX 는 가로축을 중심으로(위아래로 눕는다), rotateY 는 세로축을
+   * 중심으로(좌우로 돈다) 돈다. 단위는 도이고 rotate 와 같이 쌓을 수 있다.
+   *
+   * 둘 다 0 이면 매트릭스가 지금까지와 한 글자도 달라지지 않는다. 그래서 옛 문서의
+   * 픽셀은 바뀌지 않는다 (transform.ts buildLayerMatrix).
+   */
+  | 'rotateX'
+  | 'rotateY'
   | 'translateX'
   | 'translateY'
   | 'skewX'
   | 'skewY'
   | 'opacity'
+  /**
+   * 가리기 진행률. 0 이면 완전히 가려지고 1 이면 전부 보인다.
+   *
+   * 투명도와 다르다. 투명도는 그림 전체가 옅어지고, 이쪽은 **경계선이 지나간
+   * 자리만** 보인다. 어느 모양으로 지나갈지는 Layer.reveal 이 정한다.
+   * 항등값이 1 이라 트랙이 없으면 아무 일도 일어나지 않는다.
+   */
+  | 'reveal'
   | 'anchorX'
   | 'anchorY'
 
@@ -297,6 +314,12 @@ export type ShapeKind =
   | 'star'
   | 'cross'
   | 'arc'
+  /** 가운데에서 뻗는 살. 바람개비 / 집중선 / 방사 눈금이 전부 이것이다. */
+  | 'burst'
+  /** 일정한 간격으로 늘어선 짧은 막대. 자 눈금과 점선이 이것이다. */
+  | 'ticks'
+  /** 변이 안으로 파인 별빛. 별(star)은 변이 직선이라 이 모양이 나오지 않는다. */
+  | 'sparkle'
 
 export const SHAPE_KIND_LIST: ShapeKind[] = [
   'rect',
@@ -306,6 +329,9 @@ export const SHAPE_KIND_LIST: ShapeKind[] = [
   'star',
   'cross',
   'arc',
+  'burst',
+  'ticks',
+  'sparkle',
 ]
 
 /** 도형의 기본 크기 상한. 캔버스 상한과 같은 이유로 4000 을 넘길 이유가 없다. */
@@ -338,6 +364,81 @@ export interface ShapeSpec {
   /** 부채꼴이 도는 각도. 360 이면 원이 된다. */
   sweepDeg: number
 }
+
+// ---------------------------------------------------------------------------
+// 가리기 (와이프 / 마스크)
+// ---------------------------------------------------------------------------
+
+/**
+ * 경계선이 지나가는 모양.
+ *
+ * 진행률은 여기 없다. `reveal` 트랙이 시간에 따라 0 에서 1 로 민다. 모양과 진행률을
+ * 나눠 두는 이유는 프리셋이 트랙만 갈아끼우기 때문이다. 한 덩어리로 두면 세기
+ * 슬라이더를 움직일 때마다 모양까지 새로 정해진다.
+ */
+export type RevealMode =
+  | 'none'
+  /** 한쪽 끝에서 반대쪽으로 쓸고 지나간다. */
+  | 'left'
+  | 'right'
+  | 'up'
+  | 'down'
+  /** 가운데에서 양쪽으로 갈라진다. 양문이 열리는 모양이다. */
+  | 'splitX'
+  | 'splitY'
+  /** 가운데에서 원이 자란다. */
+  | 'iris'
+  /** 시계바늘처럼 한 바퀴 돈다. 도형에 걸면 테두리가 그려지는 모양이 된다. */
+  | 'clock'
+  /** 가로 칸마다 따로 열린다. 블라인드다. */
+  | 'blinds'
+
+export const REVEAL_MODE_LIST: RevealMode[] = [
+  'none',
+  'left',
+  'right',
+  'up',
+  'down',
+  'splitX',
+  'splitY',
+  'iris',
+  'clock',
+  'blinds',
+]
+
+export const REVEAL_SLATS_MIN = 2
+export const REVEAL_SLATS_MAX = 40
+
+export interface RevealSpec {
+  mode: RevealMode
+  /**
+   * 경계의 부드러움. 0 이면 칼로 자른 듯 끊기고, 1 이면 폭의 절반에 걸쳐 흐려진다.
+   * 진행률 0 과 1 에서는 부드러움과 무관하게 완전히 가려지고 완전히 보인다.
+   */
+  softness: number
+  /** 블라인드 칸 수. 다른 모양에서는 쓰지 않는다. */
+  slats: number
+  /** 시계 모양이 시작하는 각도(도). 0 이 12시이고 시계 방향이 양수다. */
+  angle: number
+  /**
+   * 경계선이 지나가는 방향을 뒤집는다.
+   *
+   * **진행률을 되감는 것이 아니다.** 되감기는 트랙이 하는 일이고(1 에서 0 으로 키를
+   * 찍으면 된다), 이 값은 "왼쪽에서" 를 "오른쪽에서" 로 바꾸는 것이다. 진행률 0 이면
+   * 완전히 가려지고 1 이면 전부 보인다는 계약은 이 값과 무관하게 유지된다.
+   */
+  invert: boolean
+}
+
+/**
+ * 원근 카메라 거리의 기본값. 레이어 긴 변의 몇 배인가로 잰다.
+ *
+ * px 가 아니라 배수인 이유는 캔버스 크기를 바꿔도 같은 그림이 나와야 하기 때문이다.
+ * px 로 두면 512 캔버스에서 만든 카드 뒤집기가 2048 캔버스에서는 거의 평면이 된다.
+ * 값이 작을수록 원근이 세다. 0 은 원근 없음(평행 투영)이다.
+ */
+export const PERSPECTIVE_DEFAULT = 2.5
+export const PERSPECTIVE_MAX = 20
 
 export type FitMode = 'cover' | 'contain' | 'fill' | 'none'
 
@@ -430,6 +531,19 @@ export interface Layer {
    */
   shape?: ShapeSpec
   /**
+   * 경계선이 지나가는 모양. `reveal` 트랙이 진행률을 민다.
+   *
+   * 없으면 가리기가 없다는 뜻이다. 렌더러가 마스크 계산을 통째로 건너뛰므로
+   * 옛 문서에는 비용이 0 이다. 프리셋이 이 값을 정하고, 인스펙터에서 손대면
+   * 다른 수동 편집과 똑같이 프리셋이 dirty 로 표시된다.
+   */
+  reveal?: RevealSpec
+  /**
+   * 3D 회전에 쓰는 카메라 거리. 레이어 긴 변의 배수다 (PERSPECTIVE_DEFAULT 주석).
+   * 없으면 기본값을 쓴다. rotateX / rotateY 가 둘 다 0 이면 아무 데도 쓰이지 않는다.
+   */
+  perspective?: number
+  /**
    * 담기 배율의 기준값. 세기를 최대(1.0)로 올렸을 때도 담기는 배율이다.
    *
    * 지금 세기로 매번 다시 풀면 안 된다. 담기는 "안 잘리는 선에서 최대한 크게" 를
@@ -476,6 +590,15 @@ export interface PresetRef {
    * 사용자가 직접 추가한 이펙트는 이 목록에 없으므로 살아남는다.
    */
   effectIds?: string[]
+  /**
+   * 이 프리셋이 레이어의 가리기 / 원근 거리를 심었는가.
+   *
+   * 트랙의 `props` 와 이펙트의 `effectIds` 와 같은 자리다. 둘 다 값이 하나뿐이라
+   * 목록 대신 불리언이다. 이게 없으면 사용자가 인스펙터에서 직접 만든 가리기가
+   * 다음 프리셋 클릭에 말없이 지워진다 (motions/merge.ts).
+   */
+  ownsReveal?: boolean
+  ownsPerspective?: boolean
   /**
    * 속도 1 일 때의 재생 시간(초). 속도 노브의 기준선이다.
    *
@@ -541,6 +664,14 @@ export interface ResolvedTransform {
   scaleX: number
   scaleY: number
   rotate: number
+  /** 3D 회전(도). 둘 다 0 이면 매트릭스가 지금까지와 완전히 같다. */
+  rotateX: number
+  rotateY: number
+  /**
+   * 3D 회전에 쓸 카메라 거리(레이어 긴 변의 배수). Layer.perspective 를 그대로 옮긴다.
+   * 트랙이 아니라 별도 채널인 이유는 baseScale 과 같다. 애니메이션되지 않는 값이다.
+   */
+  perspective: number
   translateX: number
   translateY: number
   skewX: number
@@ -548,6 +679,8 @@ export interface ResolvedTransform {
   anchorX: number
   anchorY: number
   opacity: number
+  /** 가리기 진행률. 1 이면 전부 보인다. */
+  reveal: number
 }
 
 export interface ResolvedLayer {
@@ -566,6 +699,11 @@ export interface ResolvedLayer {
    * 레이어 수의 제곱만큼 탐색이 늘기 때문이다. 평가 단계에서 한 번만 실어 보낸다.
    */
   shape?: ShapeSpec
+  /**
+   * 가리기 모양. 진행률은 transform.reveal 이다.
+   * shape 과 같은 이유로 있을 때만 키를 만든다 (JSON 결정론).
+   */
+  reveal?: RevealSpec
 }
 
 // ---------------------------------------------------------------------------

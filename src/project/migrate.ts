@@ -23,6 +23,7 @@ import {
   SPEED_DEFAULT,
   SPEED_MAX,
   SPEED_MIN,
+  PERSPECTIVE_MAX,
   RENDER_REVISION,
   SCHEMA_ID,
   type BackgroundType,
@@ -41,6 +42,7 @@ import {
   type ModifierTarget,
   type ModifierType,
   type MotionProject,
+  type RevealSpec,
   type SafeZonePolicy,
   type ShapeSpec,
   type SpringFit,
@@ -51,6 +53,7 @@ import {
 } from '@/core/types.ts'
 import { TRACK_DEFAULTS, createEmptyProject } from '@/core/factory.ts'
 import { normalizeShapeSpec } from '@/core/shape.ts'
+import { normalizeRevealSpec } from '@/core/reveal.ts'
 import { EFFECT_BY_ID } from '@/effects/registry.ts'
 
 // ---------------------------------------------------------------------------
@@ -556,6 +559,16 @@ function normalizeLayer(
     ...(isRecord(raw.shape)
       ? { shape: { ...raw.shape, ...normalizeShapeSpec(raw.shape as Partial<ShapeSpec>) } }
       : {}),
+    // 가리기도 도형과 같은 규칙이다. 있을 때만 넣고 값 규칙은 core/reveal.ts 한 곳에만 있다.
+    ...(isRecord(raw.reveal)
+      ? { reveal: { ...raw.reveal, ...normalizeRevealSpec(raw.reveal as Partial<RevealSpec>) } }
+      : {}),
+    // 원근 거리. 0 은 "원근 없음" 이라는 뜻이 있으므로 살려 둔다.
+    ...(typeof raw.perspective === 'number' &&
+    Number.isFinite(raw.perspective) &&
+    raw.perspective >= 0
+      ? { perspective: Math.min(raw.perspective, PERSPECTIVE_MAX) }
+      : {}),
     // 0 이나 음수는 그림을 없애 버린다. 범위 밖이면 없는 것으로 보고 문서에서 다시 푼다.
     ...(typeof raw.containScale === 'number' && raw.containScale > 0 && raw.containScale <= 1
       ? { containScale: raw.containScale }
@@ -564,6 +577,32 @@ function normalizeLayer(
     modifiers,
     effects,
   } as Layer
+
+  /*
+   * 범위 밖 선택 필드는 **지운다.**
+   *
+   * 위의 조건부 스프레드만으로는 부족하다. 객체가 `...raw` 로 시작하므로 조건이
+   * 거짓이면 원본의 잘못된 값이 그대로 살아남는다. "모르는 필드는 버리지 않는다" 는
+   * 원칙은 **모르는** 필드에 대한 것이고, 아는 필드의 잘못된 값은 없는 것으로
+   * 돌려야 한다. 없으면 기본값을 쓰는 필드라 그것이 가장 조용한 복구다.
+   */
+  if (
+    'perspective' in layer &&
+    !(typeof layer.perspective === 'number' && Number.isFinite(layer.perspective) && layer.perspective >= 0)
+  ) {
+    delete layer.perspective
+    bag.add('원근 거리 값이 범위를 벗어나 기본값으로 되돌렸습니다.')
+  }
+  if (
+    'containScale' in layer &&
+    !(typeof layer.containScale === 'number' && layer.containScale > 0 && layer.containScale <= 1)
+  ) {
+    delete layer.containScale
+    bag.add('담기 배율 값이 범위를 벗어나 문서에서 다시 계산합니다.')
+  }
+  if ('reveal' in layer && !isRecord(layer.reveal)) {
+    delete layer.reveal
+  }
 
   return layer
 }
@@ -692,6 +731,16 @@ function normalizePresetRef(raw: unknown): MotionProject['presetRef'] | undefine
   if (typeof raw.baseFps === 'number' && Number.isFinite(raw.baseFps) && raw.baseFps > 0) {
     ref.baseFps = pickFps(raw.baseFps)
   }
+
+  /*
+   * 가리기 / 원근의 소유권. 없으면 "이 프리셋이 심지 않았다" 는 뜻이고, 그것이
+   * 옛 프로젝트를 그대로 재현하는 값이다. 사용자가 손으로 만든 것을 다음 프리셋이
+   * 지우지 않는다는 쪽으로 기울어야 안전하다 (motions/merge.ts).
+   */
+  if (raw.ownsReveal === true) ref.ownsReveal = true
+  else delete ref.ownsReveal
+  if (raw.ownsPerspective === true) ref.ownsPerspective = true
+  else delete ref.ownsPerspective
 
   if (Array.isArray(raw.props)) {
     ref.props = raw.props.filter(

@@ -28,6 +28,7 @@ import { SHAKE_PRESETS } from './presets/shake.ts'
 import { BOIL_PRESETS } from './presets/boil.ts'
 import { GLITCH_PRESETS } from './presets/glitch.ts'
 import { COMBO_PRESETS } from './presets/combo.ts'
+import { REVEAL_PRESETS } from './presets/reveal.ts'
 import { clamp, clamp01 } from './presets/shared.ts'
 
 /**
@@ -78,6 +79,7 @@ export const MOTION_PRESETS: MotionPreset[] = [
   ...BOIL_PRESETS,
   ...GLITCH_PRESETS,
   ...COMBO_PRESETS,
+  ...REVEAL_PRESETS,
 ]
 
 export const MOTION_PRESET_BY_ID: ReadonlyMap<string, MotionPreset> = new Map(

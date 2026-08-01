@@ -29,6 +29,25 @@ export function ShapeKindIcon({ kind }: { kind: ShapeKind }) {
         <path d="M9.6 3.5h4.8v6.1h6.1v4.8h-6.1v6.1H9.6v-6.1H3.5V9.6h6.1z" {...common} />
       ) : null}
       {kind === 'arc' ? <path d="M12 12 L12 3 A9 9 0 0 1 20.1 15.2 Z" {...common} /> : null}
+      {kind === 'burst' ? (
+        <g stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+          <path d="M12 3v5M12 16v5M3 12h5M16 12h5M5.6 5.6l3.6 3.6M14.8 14.8l3.6 3.6M18.4 5.6l-3.6 3.6M9.2 14.8l-3.6 3.6" />
+        </g>
+      ) : null}
+      {kind === 'ticks' ? (
+        <g {...common}>
+          <rect x="3" y="8" width="2.6" height="8" rx="1" />
+          <rect x="8.2" y="8" width="2.6" height="8" rx="1" />
+          <rect x="13.4" y="8" width="2.6" height="8" rx="1" />
+          <rect x="18.6" y="8" width="2.6" height="8" rx="1" />
+        </g>
+      ) : null}
+      {kind === 'sparkle' ? (
+        <path
+          d="M12 2 C12.9 8.2 15.8 11.1 22 12 C15.8 12.9 12.9 15.8 12 22 C11.1 15.8 8.2 12.9 2 12 C8.2 11.1 11.1 8.2 12 2 Z"
+          {...common}
+        />
+      ) : null}
     </svg>
   )
 }
@@ -90,6 +109,14 @@ export function SceneGlyph({ group }: { group: ShapeSceneGroup }) {
           <path d="M24 5 L26.6 13 L34.5 13 L28.2 17.8 L30.6 25.5 L24 20.7 L17.4 25.5 L19.8 17.8 L13.5 13 L21.4 13 Z" />
           <circle cx="9" cy="8" r="2" opacity="0.6" />
           <circle cx="39" cy="22" r="2.6" opacity="0.45" />
+        </g>
+      ) : null}
+
+      {group === 'stage' ? (
+        <g fill="currentColor">
+          <rect x="6" y="6" width="14" height="20" rx="1.5" opacity="0.9" />
+          <rect x="28" y="6" width="14" height="20" rx="1.5" opacity="0.55" />
+          <rect x="22.4" y="4" width="1.6" height="24" rx="0.8" opacity="0.35" />
         </g>
       ) : null}
 

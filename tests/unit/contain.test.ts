@@ -57,8 +57,11 @@ function overflowPx(doc: MotionProject, resolved: ReturnType<typeof resolveCompo
   const halfH = doc.canvas.h / 2
   let out = -Infinity
   for (const [u, v] of [[0, 0], [1, 0], [0, 1], [1, 1]] as [number, number][]) {
-    const x = m[0]! * u + m[3]! * v + m[6]!
-    const y = m[1]! * u + m[4]! * v + m[7]!
+    // 정점 셰이더와 같은 나눗셈을 한다 (shaders/layer.ts). 3D 회전이 없으면 w 가
+    // 정확히 1 이라 예전 계산과 한 자리도 다르지 않다.
+    const w = m[2]! * u + m[5]! * v + m[8]!
+    const x = (m[0]! * u + m[3]! * v + m[6]!) / w
+    const y = (m[1]! * u + m[4]! * v + m[7]!) / w
     out = Math.max(out, Math.abs(x) - halfW, Math.abs(y) - halfH)
   }
   return out
@@ -222,8 +225,16 @@ describe('카탈로그 전체 회귀', () => {
     // 이 목록이 늘면 담기에서 빠지는 프리셋이 늘었다는 뜻이다. 의도한 것인지
     // 확인하고 여기를 고쳐야 한다.
     // 가로질러 지나가기 4종은 정의상 프레임 밖에서 시작해 밖으로 빠진다.
+    // 입체 뒤집기 5종은 나가는 것이 아니라 **비는 것**이 의도다. 90도에 가까워지면
+    // 화면에 닿는 폭이 0 에 수렴하는데, 채우기 솔버가 그 빈 곳을 메우려 들면
+    // 원본을 스무 배까지 확대한다 (presets/reveal.ts 머리주석).
     expect(exiting.sort()).toEqual([
       'combo.slideFadeGlitch',
+      'flip3d.cardIn',
+      'flip3d.cardOut',
+      'flip3d.sway',
+      'flip3d.turn',
+      'flip3d.unfoldIn',
       'slide.crossDown',
       'slide.crossLeft',
       'slide.crossRight',

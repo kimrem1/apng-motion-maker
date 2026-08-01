@@ -188,9 +188,12 @@ const ROW_ORDER: readonly TrackProp[] = [
   'scaleX',
   'scaleY',
   'rotate',
+  'rotateX',
+  'rotateY',
   'skewX',
   'skewY',
   'opacity',
+  'reveal',
   'anchorX',
   'anchorY',
 ]
@@ -202,9 +205,12 @@ export const PROP_LABELS: Record<TrackProp, string> = {
   scaleX: '가로 크기',
   scaleY: '세로 크기',
   rotate: '회전',
+  rotateX: '가로축 회전',
+  rotateY: '세로축 회전',
   skewX: '가로 기울임',
   skewY: '세로 기울임',
   opacity: '불투명도',
+  reveal: '가리기',
   anchorX: '기준점 가로',
   anchorY: '기준점 세로',
 }
@@ -261,8 +267,11 @@ export function formatPropValue(prop: TrackProp, value: number): string {
     case 'scaleX':
     case 'scaleY':
     case 'opacity':
+    case 'reveal':
       return `${round(value * 100, 1)}퍼센트`
     case 'rotate':
+    case 'rotateX':
+    case 'rotateY':
     case 'skewX':
     case 'skewY':
       return `${round(value, 2)}도`

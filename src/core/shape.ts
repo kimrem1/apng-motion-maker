@@ -29,16 +29,43 @@ export const SHAPE_KIND_LABELS: Record<ShapeKind, string> = {
   star: '별',
   cross: '십자',
   arc: '부채꼴',
+  burst: '방사살',
+  ticks: '눈금',
+  sparkle: '별빛',
 }
 
-/** 파라미터 범위. 인스펙터의 입력 상자와 마이그레이션이 같은 표를 본다. */
+/**
+ * 파라미터 범위. 인스펙터의 입력 상자와 마이그레이션이 같은 표를 본다.
+ *
+ * points 상한이 12 에서 36 으로 올라간 것은 방사살과 눈금 때문이다. 살이 12개까지만
+ * 되면 집중선도 자 눈금도 만들어지지 않는다. 옛 문서에는 12 를 넘는 값이 없으므로
+ * 저장 / 열기 왕복이 달라지지 않는다.
+ */
 export const SHAPE_LIMITS = {
   strokeWidth: { min: 0, max: 400 },
   cornerRadius: { min: 0, max: 2000 },
-  points: { min: 3, max: 12 },
+  points: { min: 3, max: 36 },
   innerRatio: { min: 0.05, max: 0.95 },
   sweepDeg: { min: 5, max: 360 },
 } as const
+
+/**
+ * 이 종류는 테두리 두께를 "테두리" 가 아니라 다른 뜻으로 쓴다.
+ *
+ * 방사살은 두께가 살 한 줄의 굵기다. 짧은 변의 절반이라는 상한(테두리가 도형을
+ * 통째로 메우는 지점)이 여기서는 뜻이 없다. 살 굵기는 훨씬 자유롭게 열어 둔다.
+ */
+function strokeIsThickness(kind: ShapeKind): boolean {
+  return kind === 'burst'
+}
+
+/** 종류별 기본 꼭짓점 / 개수. 없으면 6 이다. */
+const DEFAULT_POINTS: Partial<Record<ShapeKind, number>> = {
+  star: 5,
+  burst: 12,
+  ticks: 10,
+  sparkle: 4,
+}
 
 /** 기본 도형. 색은 호출부가 정한다. */
 export function createShapeSpec(kind: ShapeKind, overrides: Partial<ShapeSpec> = {}): ShapeSpec {
@@ -47,10 +74,12 @@ export function createShapeSpec(kind: ShapeKind, overrides: Partial<ShapeSpec> =
     color: '#ffffffff',
     width: 240,
     height: 240,
-    strokeWidth: 0,
+    // 방사살은 두께가 0 이면 아무것도 안 보인다.
+    strokeWidth: kind === 'burst' ? 6 : 0,
     cornerRadius: kind === 'rect' ? 24 : 0,
-    points: kind === 'star' ? 5 : 6,
-    innerRatio: 0.45,
+    points: DEFAULT_POINTS[kind] ?? 6,
+    // 별빛은 뾰족할수록 별빛답고, 방사살은 가운데가 비어야 바람개비가 된다.
+    innerRatio: kind === 'sparkle' ? 0.3 : kind === 'burst' ? 0.15 : 0.45,
     sweepDeg: 360,
     ...overrides,
   })
@@ -76,11 +105,16 @@ export function normalizeShapeSpec(raw: Partial<ShapeSpec> & { kind?: unknown })
     height,
     // 테두리는 안쪽으로 물린다. 짧은 변의 절반을 넘으면 도형이 통째로 메워져
     // "테두리를 두껍게 했더니 꽉 찬 도형이 됐다" 로 보인다. 거기서 끊는다.
+    // 살 굵기로 쓰는 종류는 그 상한이 뜻이 없으므로 전체 상한만 건다.
     strokeWidth: num(
       raw.strokeWidth,
-      0,
-      SHAPE_LIMITS.strokeWidth.min,
-      Math.min(SHAPE_LIMITS.strokeWidth.max, Math.min(width, height) / 2),
+      strokeIsThickness(kind) ? 1 : 0,
+      // 살 굵기는 0 이면 아무것도 안 보인다. 다른 종류에서 굵기 0(꽉 찬 도형)으로
+      // 두었다가 종류만 방사살로 바꿨을 때 "넣었는데 화면에 없다" 가 되는 자리다.
+      strokeIsThickness(kind) ? 1 : SHAPE_LIMITS.strokeWidth.min,
+      strokeIsThickness(kind)
+        ? SHAPE_LIMITS.strokeWidth.max
+        : Math.min(SHAPE_LIMITS.strokeWidth.max, Math.min(width, height) / 2),
     ),
     cornerRadius: num(
       raw.cornerRadius,

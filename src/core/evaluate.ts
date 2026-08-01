@@ -24,9 +24,13 @@ const DEFAULT_COMPOSITE: Record<TrackProp, CompositeOp> = {
   scaleX: 'multiply',
   scaleY: 'multiply',
   opacity: 'multiply',
+  // 가리기는 투명도와 같은 규칙이다. 항등값 1 에 곱해지므로 트랙 하나면 그 값이 그대로다.
+  reveal: 'multiply',
   translateX: 'add',
   translateY: 'add',
   rotate: 'add',
+  rotateX: 'add',
+  rotateY: 'add',
   skewX: 'add',
   skewY: 'add',
   anchorX: 'replace',
@@ -96,6 +100,15 @@ function writeChannel(
     case 'rotate':
       t.rotate = applyOp(t.rotate, value, op)
       return
+    case 'rotateX':
+      t.rotateX = applyOp(t.rotateX, value, op)
+      return
+    case 'rotateY':
+      t.rotateY = applyOp(t.rotateY, value, op)
+      return
+    case 'reveal':
+      t.reveal = applyOp(t.reveal, value, op)
+      return
     case 'translateX':
       t.translateX = applyOp(t.translateX, value, op)
       return
@@ -132,6 +145,10 @@ export function resolveLayerTransform(
   // 캔버스 해상도를 바꾼 만큼의 고정 배율. 트랙 결합과 섞이면 안 되므로 별도 채널이다.
   t.baseScale =
     typeof layer.baseScale === 'number' && layer.baseScale > 0 ? layer.baseScale : 1
+  // 원근 거리도 애니메이션되지 않는 값이라 같은 자리에서 옮긴다.
+  if (typeof layer.perspective === 'number' && Number.isFinite(layer.perspective)) {
+    t.perspective = Math.max(0, layer.perspective)
+  }
 
   for (const track of layer.tracks) {
     const raw = evalTrackAt(track, frame)
@@ -245,6 +262,8 @@ export function resolveComposition(
       // 확인하는 테스트가 있어서 undefined 를 실어 보내도 결과는 같지만,
       // 뜻이 없는 키를 남기지 않는 편이 읽기 쉽다.
       ...(layer.shape ? { shape: layer.shape } : {}),
+      // 가리기도 같은 규칙이다. 'none' 이면 아예 싣지 않아 렌더러가 유니폼조차 만지지 않는다.
+      ...(layer.reveal && layer.reveal.mode !== 'none' ? { reveal: layer.reveal } : {}),
     })
   }
   resolved.sort((a, b) => a.z - b.z)

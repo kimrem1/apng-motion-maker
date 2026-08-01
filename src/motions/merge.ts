@@ -26,17 +26,62 @@
  * 두 목록 어디에도 없는 것은 사용자가 직접 만든 것이므로 살아남는다.
  */
 
-import type { EffectInstance, PresetRef, Track, TrackProp } from '@/core/types.ts'
+import type { EffectInstance, PresetRef, RevealSpec, Track, TrackProp } from '@/core/types.ts'
 
 /** 앞 프리셋이 심어 둔 것의 목록. doc.presetRef 에서 그대로 읽는다. */
 export interface PresetOwnership {
   props: readonly TrackProp[]
   effectIds: readonly string[]
+  /** 지금 문서의 가리기를 앞 프리셋이 심었는가. */
+  reveal: boolean
+  /** 지금 문서의 원근 거리를 앞 프리셋이 심었는가. */
+  perspective: boolean
 }
 
 /** presetRef 가 없으면(프리셋을 한 번도 안 썼으면) 아무것도 소유하지 않는다. */
 export function ownershipOf(ref: PresetRef | undefined): PresetOwnership {
-  return { props: ref?.props ?? [], effectIds: ref?.effectIds ?? [] }
+  return {
+    props: ref?.props ?? [],
+    effectIds: ref?.effectIds ?? [],
+    reveal: ref?.ownsReveal === true,
+    perspective: ref?.ownsPerspective === true,
+  }
+}
+
+/**
+ * 가리기 병합.
+ *
+ * ---------------------------------------------------------------------------
+ * 사용자가 손으로 넣은 것은 지우지 않는다
+ * ---------------------------------------------------------------------------
+ * 트랙 / 이펙트와 **같은 규칙**이다. 예전에는 이 둘만 언제나 통째로 대체했는데,
+ * 인스펙터에 「가리기」 섹션이 생긴 뒤로는 사용자가 직접 만드는 값이 되었다.
+ * 그런데도 대체를 유지하면, 손으로 블라인드를 걸어 둔 레이어에 아무 프리셋이나
+ * 한 번 누르는 순간 말없이 사라진다. dirty 플래그는 이 경로를 막지 못한다.
+ * 그 플래그를 보는 곳은 EASY 슬라이더 재적용뿐이고 갤러리 카드 클릭은 곧장
+ * 적용으로 간다.
+ *
+ * 그래서 소유권을 본다. 앞 프리셋이 심은 것만 걷어내고 사용자 것은 살린다.
+ * 반환값 undefined 는 "가리기 없음" 이다.
+ */
+export function mergePresetReveal(
+  existing: RevealSpec | undefined,
+  emitted: RevealSpec | undefined,
+  owned: PresetOwnership,
+): RevealSpec | undefined {
+  if (emitted && emitted.mode !== 'none') return emitted
+  // 앞 프리셋 것이면 걷어낸다. 사용자 것이면 그대로 둔다.
+  return owned.reveal ? undefined : existing
+}
+
+/** 원근 거리도 같은 규칙이다. */
+export function mergePresetPerspective(
+  existing: number | undefined,
+  emitted: number | undefined,
+  owned: PresetOwnership,
+): number | undefined {
+  if (typeof emitted === 'number' && Number.isFinite(emitted) && emitted >= 0) return emitted
+  return owned.perspective ? undefined : existing
 }
 
 /**

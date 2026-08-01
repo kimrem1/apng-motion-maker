@@ -291,6 +291,15 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
     baseSec: result.baseSec,
     baseFps: result.baseFps,
     ...(result.containScale !== undefined ? { containScale: result.containScale } : {}),
+    /*
+     * 가리기와 원근은 조건부로 넘기지 않는다.
+     *
+     * 이펙트와 반대다. 이 둘은 프리셋에서 파생된 사실이므로 값이 없으면 "지우라"는
+     * 뜻이고, 스토어가 그렇게 처리한다. 여기서 키를 빼면 앞 프리셋이 걸어 둔
+     * 경계선이 다음 프리셋에도 그대로 남아 그림이 계속 잘린다.
+     */
+    reveal: result.reveal,
+    perspective: result.perspective,
     macro: { speed: presetUi.speed, strength: presetUi.strength },
   })
 

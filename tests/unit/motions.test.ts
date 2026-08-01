@@ -169,7 +169,20 @@ const REQUIRED_IDS = [
 ]
 
 /** 진폭이 정의상 고정인 프리셋. 완전한 페이드와 정확히 한 바퀴 회전은 세기로 줄일 수 없다. */
-const FIXED_AMPLITUDE = new Set(['fade.in', 'fade.out', 'fade.inOut', 'rotate.spin360'])
+/*
+ * 세기가 진폭을 바꾸지 않는 프리셋.
+ *
+ * 전부 "끝값이 정의상 고정" 인 경우다. 페이드는 0 에서 1 까지가 페이드이고,
+ * 한 바퀴는 정확히 360도여야 이음새가 닫힌다. 카드 한 바퀴도 같은 이유다.
+ * 세기는 이쪽에서 속도나 원근처럼 다른 축에 걸린다.
+ */
+const FIXED_AMPLITUDE = new Set([
+  'fade.in',
+  'fade.out',
+  'fade.inOut',
+  'rotate.spin360',
+  'flip3d.turn',
+])
 
 const CATEGORY_IDS = Object.keys(CATEGORY_LABELS) as MotionCategory[]
 
@@ -198,10 +211,10 @@ const M3_PRESETS = MOTION_PRESETS.filter(
 
 describe('카탈로그 구성', () => {
   it('아홉 카테고리 구성이 표와 같다', () => {
-    expect(byCategory('appear')).toHaveLength(6)
-    expect(byCategory('disappear')).toHaveLength(4)
+    expect(byCategory('appear')).toHaveLength(12)
+    expect(byCategory('disappear')).toHaveLength(9)
     expect(byCategory('move')).toHaveLength(14)
-    expect(byCategory('attention')).toHaveLength(10)
+    expect(byCategory('attention')).toHaveLength(14)
     expect(byCategory('kenburns')).toHaveLength(4)
     expect(byCategory('shake')).toHaveLength(6)
     expect(byCategory('boil')).toHaveLength(5)
@@ -209,10 +222,10 @@ describe('카탈로그 구성', () => {
     expect(byCategory('combo')).toHaveLength(4)
   })
 
-  it('전부 합쳐 61종이다 (A6 + B4 + C14 + D10 + E4 + F6 + G5 + H8 + I4)', () => {
+  it('전부 합쳐 76종이다 (A12 + B9 + C14 + D14 + E4 + F6 + G5 + H8 + I4)', () => {
     const total = CATEGORY_IDS.map((c) => byCategory(c).length).reduce((a, b) => a + b, 0)
-    expect(total).toBe(61)
-    expect(MOTION_PRESETS).toHaveLength(61)
+    expect(total).toBe(76)
+    expect(MOTION_PRESETS).toHaveLength(76)
   })
 
   it('조합 프리셋이 들어와 있다', () => {
@@ -471,8 +484,9 @@ describe('이음새 없는 루프', () => {
         // 한 주기가 정확히 durationFrames 여야 0..N-1 출력이 한 바퀴가 된다.
         expect(last.f, `${t.prop} 의 마지막 키가 주기 끝에 없다`).toBe(e.durationFrames)
 
-        // 회전은 360도 = 0도 다. 나머지는 값이 그대로 같아야 한다.
-        const norm = (v: number): number => (t.prop === 'rotate' ? ((v % 360) + 360) % 360 : v)
+        // 회전은 360도 = 0도 다. 세 회전축이 모두 같은 규칙이다. 나머지는 값이 그대로 같아야 한다.
+        const isRotation = t.prop === 'rotate' || t.prop === 'rotateX' || t.prop === 'rotateY'
+        const norm = (v: number): number => (isRotation ? ((v % 360) + 360) % 360 : v)
         expect(norm(last.v), `${t.prop} 의 이음새가 벌어진다`).toBeCloseTo(norm(first.v), 9)
       }
     })

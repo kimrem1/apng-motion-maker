@@ -319,6 +319,8 @@ function estimateTravelPx(prop: TrackProp, dv: number, w: number, h: number): nu
     case 'scaleY':
       return d * Math.max(w, h) * 0.5
     case 'rotate':
+    case 'rotateX':
+    case 'rotateY':
     case 'skewX':
     case 'skewY':
       return ((d * Math.PI) / 180) * halfDiag
@@ -326,6 +328,9 @@ function estimateTravelPx(prop: TrackProp, dv: number, w: number, h: number): nu
       return d * w
     case 'anchorY':
       return d * h
+    case 'reveal':
+      // 경계선이 지나간 거리다. 한 프레임에 반 장을 건너뛰면 뚝뚝 끊겨 보인다.
+      return d * halfDiag
     case 'opacity':
     default:
       // 불투명도는 화면에서 움직이지 않는다. 변위 경고 대상이 아니다.

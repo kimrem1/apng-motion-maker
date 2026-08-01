@@ -16,6 +16,7 @@ import type {
   BlendMode,
   LoopMode,
   Modifier,
+  RevealSpec,
   ShapeSpec,
   Track,
 } from '@/core/types.ts'
@@ -24,7 +25,7 @@ import type {
  * 사용자에게 보이는 분류. 이름은 전부 "무엇을 하고 싶은가" 다.
  * 기술 용어(파티클, 트랜지션, 이퀄라이저)를 쓰지 않는다.
  */
-export type ShapeSceneGroup = 'pulse' | 'bars' | 'wipe' | 'spin' | 'accent' | 'ambient'
+export type ShapeSceneGroup = 'pulse' | 'bars' | 'wipe' | 'spin' | 'accent' | 'ambient' | 'stage'
 
 export const SHAPE_GROUP_LABELS: Record<ShapeSceneGroup, string> = {
   pulse: '퍼지기',
@@ -33,9 +34,11 @@ export const SHAPE_GROUP_LABELS: Record<ShapeSceneGroup, string> = {
   spin: '돌기',
   accent: '강조',
   ambient: '배경 장식',
+  stage: '연출',
 }
 
 export const SHAPE_GROUP_ORDER: ShapeSceneGroup[] = [
+  'stage',
   'pulse',
   'bars',
   'spin',
@@ -54,6 +57,8 @@ export interface SceneLayer {
   blend?: BlendMode
   /** 회전과 확대가 도는 축. 아래에서 자라는 막대는 [0.5, 1] 이다. */
   anchor?: [number, number]
+  /** 경계선이 지나가는 모양. 진행률은 `reveal` 트랙이 민다. */
+  reveal?: RevealSpec
 }
 
 export interface SceneEmission {

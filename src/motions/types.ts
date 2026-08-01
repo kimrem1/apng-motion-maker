@@ -10,7 +10,7 @@
  * 내부 id 는 어떤 형태로도 UI 에 노출하지 않는다. label 만 보여준다.
  */
 
-import type { EffectInstance, LoopMode, Modifier, Track } from '@/core/types.ts'
+import type { EffectInstance, LoopMode, Modifier, RevealSpec, Track } from '@/core/types.ts'
 
 /**
  * 사용자에게 보이는 1차 분류는 의도 기반이다.
@@ -120,6 +120,20 @@ export interface PresetEmission {
    * 이 된다. seed 는 EmitContext.seed 에서 결정론적으로 유도한다.
    */
   effects?: EffectInstance[]
+  /**
+   * 이 프리셋이 요구하는 가리기 모양.
+   *
+   * 진행률은 여기 없다. `reveal` 트랙이 민다. 둘을 나눠야 세기 슬라이더가 모양을
+   * 다시 정하지 않는다.
+   *
+   * **motionExitsFrame 과 같은 규칙이다.** 호출부가 언제나 통째로 대체하므로,
+   * 값을 내지 않은 프리셋으로 갈아타면 앞 프리셋의 경계선이 깨끗이 사라진다.
+   * 이펙트와 달리 undefined 와 "비움" 을 구별하지 않는다. 가리기는 사용자가
+   * 손으로 쌓아 올리는 스택이 아니라 프리셋 한 벌에 딸린 값 하나이기 때문이다.
+   */
+  reveal?: RevealSpec
+  /** 3D 회전에 쓰는 카메라 거리(레이어 긴 변의 배수). 생략하면 기본값이다. */
+  perspective?: number
   /** 이 프리셋에 어울리는 반복 모드 제안 */
   suggestedLoop?: LoopMode
   /** 권장 지속 프레임 수 */

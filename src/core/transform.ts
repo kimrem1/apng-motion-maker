@@ -16,7 +16,7 @@
  *   m[2] m[5] m[8]
  */
 
-import type { FitMode, ResolvedTransform } from './types.ts'
+import { PERSPECTIVE_DEFAULT, type FitMode, type ResolvedTransform } from './types.ts'
 
 export type Mat3 = Float32Array
 
@@ -89,6 +89,82 @@ export function mat3Skew(skewXDeg: number, skewYDeg: number, out?: Mat3): Mat3 {
 
 export function degToRad(deg: number): number {
   return (deg * Math.PI) / 180
+}
+
+/**
+ * 3D 회전 + 원근을 mat3 하나로 접는다.
+ *
+ * ---------------------------------------------------------------------------
+ * 왜 mat4 가 아닌가
+ * ---------------------------------------------------------------------------
+ * 평면 한 장을 3D 로 돌려 화면에 투영하는 것은 **호모그래피**다. z 는 언제나
+ * 회전 뒤에 곧바로 나눗셈으로 사라지므로 3x3 으로 정확히 표현된다. mat4 를 들이면
+ * 매트릭스 파이프라인 전체가 갈라지고, 오버스캔 솔버가 쓰는 "배율만 0 으로 둔
+ * 매트릭스" 같은 요령이 전부 다시 쓰여야 한다.
+ *
+ * 점 (x, y, 0) 을 rotateY(β) 다음 rotateX(α) 로 돌리면
+ *   X = x·cosβ
+ *   Y = y·cosα + x·sinα·sinβ
+ *   Z = -x·cosα·sinβ + y·sinα
+ * 이고, 카메라까지의 거리 d 로 나누는 투영은 w = 1 - Z/d 다. 부호는 CSS 의
+ * rotateX / rotateY 와 같다. 양의 rotateY 는 오른쪽 변을 뒤로 보낸다.
+ *
+ * **d 가 0 이면 평행 투영이다.** 원근 없이 각도만큼 눌리는, 종이 인형 같은 뒤집기가 된다.
+ *
+ * 정점 셰이더가 `gl_Position = vec4(p.xy, 0.0, p.z)` 로 넘기므로 나눗셈과
+ * 원근 보정 UV 보간은 래스터라이저가 한다 (shaders/layer.ts).
+ */
+export function mat3Perspective(
+  rotateXDeg: number,
+  rotateYDeg: number,
+  distance: number,
+  out?: Mat3,
+): Mat3 {
+  const m = mat3Identity(out)
+  if (rotateXDeg === 0 && rotateYDeg === 0) return m
+
+  const a = degToRad(rotateXDeg)
+  const b = degToRad(rotateYDeg)
+  const ca = Math.cos(a)
+  const sa = Math.sin(a)
+  const cb = Math.cos(b)
+  const sb = Math.sin(b)
+
+  m[0] = cb
+  m[1] = sa * sb
+  m[4] = ca
+
+  if (distance > 0) {
+    m[2] = (ca * sb) / distance
+    m[5] = -sa / distance
+  }
+  return m
+}
+
+/**
+ * 원근 회전이 만드는 z 의 최대 절댓값.
+ *
+ * ---------------------------------------------------------------------------
+ * 기준점이 가운데라고 가정하면 안 된다
+ * ---------------------------------------------------------------------------
+ * mat3Perspective 에 들어가는 좌표는 `local` 이 만든 **기준점 기준** 로컬 픽셀이라
+ * x 는 [-anchorX·W, (1-anchorX)·W] 범위다. 기준점이 왼쪽 끝이면 |x| 의 최댓값이
+ * W/2 가 아니라 W 다. 절반으로 잡으면 안전 거리가 필요한 값의 절반이 되고,
+ * w 가 음수로 내려가 쿼드가 화면 전체로 찢어진다.
+ */
+export function perspectiveZMax(
+  rotateXDeg: number,
+  rotateYDeg: number,
+  imageW: number,
+  imageH: number,
+  anchorX: number,
+  anchorY: number,
+): number {
+  const a = degToRad(rotateXDeg)
+  const b = degToRad(rotateYDeg)
+  const reachX = Math.max(Math.abs(anchorX), Math.abs(1 - anchorX)) * imageW
+  const reachY = Math.max(Math.abs(anchorY), Math.abs(1 - anchorY)) * imageH
+  return Math.abs(Math.cos(a) * Math.sin(b)) * reachX + Math.abs(Math.sin(a)) * reachY
 }
 
 /**
@@ -181,6 +257,38 @@ export function buildLayerMatrix(
   mat3Multiply(p, r, m)
   mat3Multiply(m, k, m)
   mat3Multiply(m, s, m)
+
+  /*
+   * 원근 회전은 **배율보다 안쪽**에 들어간다. 순서가 뒤집히면 담기 솔버가 깨진다.
+   *
+   * 솔버는 "배율 채널에 c 를 곱했을 때 꼭짓점이 pos + c·D 라는 1차식" 이라는 성질로
+   * 배율을 닫힌 형태로 푼다 (overscan.ts containScaleAt). 원근을 배율 바깥에 두면
+   * c 가 나눗셈 안으로 들어가 그 성질이 깨지고, 이분 탐색 없이는 풀 수 없게 된다.
+   * 안쪽에 두면 나눗셈이 c 와 무관해져 1차식이 그대로 유지된다.
+   *
+   * 어파인 변환은 원근 나눗셈과 교환된다(마지막 행이 [0,0,1] 이므로). 그래서
+   * "먼저 투영하고 그 결과를 확대·회전한다" 와 결과가 같다. CSS 의
+   * transform-style: flat 과 같은 모형이다.
+   */
+  if (t.rotateX !== 0 || t.rotateY !== 0) {
+    const distRatio = Number.isFinite(t.perspective) ? Math.max(0, t.perspective) : 0
+    let d = distRatio * Math.max(imageW, imageH)
+    if (d > 0) {
+      /*
+       * w 가 0 이하로 내려가지 않게 바닥을 둔다.
+       *
+       * w 가 0 을 지나면 그 꼭짓점이 카메라 뒤로 넘어간다. gl_Position.z 가 상수 0 이라
+       * 근평면이 정확히 w=0 이고, 클리퍼가 거기서 자른 모서리는 무한대로 늘어나
+       * 화면 전체를 덮는 얼룩이 된다. 사용자가 원근을 아무리 세게 밀어도 그 그림은
+       * 보여 줄 가치가 없다. 1.05 여유는 최악의 꼭짓점에서 w >= 0.047 을 남긴다.
+       */
+      const zMax = perspectiveZMax(t.rotateX, t.rotateY, imageW, imageH, t.anchorX, t.anchorY)
+      d = Math.max(d, zMax * 1.05)
+    }
+    const h = mat3Perspective(t.rotateX, t.rotateY, d)
+    mat3Multiply(m, h, m)
+  }
+
   mat3Multiply(m, local, m)
   return m
 }
@@ -202,6 +310,9 @@ export function identityTransform(): ResolvedTransform {
     scaleX: 1,
     scaleY: 1,
     rotate: 0,
+    rotateX: 0,
+    rotateY: 0,
+    perspective: PERSPECTIVE_DEFAULT,
     translateX: 0,
     translateY: 0,
     skewX: 0,
@@ -209,5 +320,6 @@ export function identityTransform(): ResolvedTransform {
     anchorX: 0.5,
     anchorY: 0.5,
     opacity: 1,
+    reveal: 1,
   }
 }

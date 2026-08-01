@@ -30,13 +30,21 @@ import {
   type LoopMode,
   type Modifier,
   type MotionProject,
+  type RevealSpec,
   type Track,
 } from '@/core/types.ts'
 import { solveLayerContain } from '@/core/overscan.ts'
+import { normalizeRevealSpec } from '@/core/reveal.ts'
 import { layerIntrinsicSize } from '@/core/shape.ts'
 import type { EmitContext, MotionPreset, PresetEmission } from './types.ts'
 import { MOTION_PRESET_BY_ID, applyPreset, resolveParams } from './registry.ts'
-import { mergePresetEffects, mergePresetTracks, ownershipOf } from './merge.ts'
+import {
+  mergePresetEffects,
+  mergePresetPerspective,
+  mergePresetReveal,
+  mergePresetTracks,
+  ownershipOf,
+} from './merge.ts'
 
 // ---------------------------------------------------------------------------
 // 공개 타입
@@ -85,6 +93,15 @@ export interface PresetApplyResult {
    * 담기가 필요 없는 모션이면 없다.
    */
   containScale?: number
+  /**
+   * 프리셋이 요구하는 가리기 모양. Layer.reveal 로 들어간다.
+   *
+   * 이펙트와 달리 undefined 와 "비움" 을 구별하지 않는다. 호출부가 언제나 통째로
+   * 대체하므로 값이 없으면 앞 프리셋의 경계선이 지워진다 (motions/types.ts 주석).
+   */
+  reveal?: RevealSpec
+  /** 3D 회전에 쓰는 카메라 거리. 없으면 기본값으로 되돌아간다. */
+  perspective?: number
   /** 프리셋이 요구하는 반복 방식. 없으면 현재 설정을 유지한다. */
   suggestedLoop?: LoopMode
   /**
@@ -232,6 +249,8 @@ interface ReadEmission {
   suggestedLoop?: LoopMode
   effects?: EffectInstance[]
   suggestedFps?: number
+  reveal?: RevealSpec
+  perspective?: number
 }
 
 function readEmission(emission: PresetEmission): ReadEmission {
@@ -242,6 +261,13 @@ function readEmission(emission: PresetEmission): ReadEmission {
   // 이펙트를 안 쓰는 프리셋이 사용자의 이펙트 스택을 지우게 된다.
   const effects = Array.isArray(e['effects']) ? (e['effects'] as EffectInstance[]) : undefined
   const fps = readNumber(e, ['suggestedFps'])
+  // 값 규칙은 core/reveal.ts 한 곳에만 있다. 'none' 은 가리기가 없는 것과 같다.
+  const rawReveal = e['reveal']
+  const reveal =
+    typeof rawReveal === 'object' && rawReveal !== null
+      ? normalizeRevealSpec(rawReveal as Partial<RevealSpec>)
+      : undefined
+  const perspective = readNumber(e, ['perspective'])
   return {
     tracks,
     modifiers,
@@ -250,6 +276,8 @@ function readEmission(emission: PresetEmission): ReadEmission {
     effects,
     // 0 이하 fps 는 타임라인을 멈춘다. 읽지 않은 것과 같이 다룬다.
     ...(fps !== undefined && fps > 0 ? { suggestedFps: fps } : {}),
+    ...(reveal && reveal.mode !== 'none' ? { reveal } : {}),
+    ...(perspective !== undefined && perspective >= 0 ? { perspective } : {}),
   }
 }
 
@@ -403,6 +431,8 @@ export function applyPresetToLayer(args: PresetApplyArgs): PresetApplyResult {
   // 키 자체가 없는 것은 여기서는 같지만, 호출부가 in 연산자를 쓰게 되면 갈린다.
   if (read.effects) result.effects = read.effects
   if (read.suggestedFps !== undefined) result.suggestedFps = read.suggestedFps
+  if (read.reveal) result.reveal = read.reveal
+  if (read.perspective !== undefined) result.perspective = read.perspective
   if (!allowExit) {
     const reference = containReferenceScale({
       doc: args.doc,
@@ -575,6 +605,13 @@ export function withPresetApplied(
           // 그림 크기가 미리보기에서만 달라진다.
           motionExitsFrame: result.allowExit,
           containScale: result.containScale,
+          /*
+           * 가리기와 원근도 미리보기에서 그대로 보여야 한다. 빼면 호버에서는
+           * 경계선 없이 열려 있다가 클릭하는 순간 갑자기 잘린 그림이 나온다.
+           * 소유권 규칙도 확정 적용과 **같은 헬퍼**를 써야 두 결과가 갈리지 않는다.
+           */
+          reveal: mergePresetReveal(layer.reveal, result.reveal, owned),
+          perspective: mergePresetPerspective(layer.perspective, result.perspective, owned),
         }
       : layer,
   )

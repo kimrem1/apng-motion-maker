@@ -30,8 +30,18 @@ export function ShapeSection({ layer }: { layer: Layer }) {
   const shape = layer.shape
   if (!shape) return null
 
-  const round = shape.kind === 'rect' || shape.kind === 'cross'
-  const many = shape.kind === 'polygon' || shape.kind === 'star'
+  const round = shape.kind === 'rect' || shape.kind === 'cross' || shape.kind === 'ticks'
+  // 개수 노브를 쓰는 종류. 꼭짓점 / 살 / 눈금이 전부 같은 필드를 나눠 쓴다.
+  const many =
+    shape.kind === 'polygon' ||
+    shape.kind === 'star' ||
+    shape.kind === 'burst' ||
+    shape.kind === 'ticks' ||
+    shape.kind === 'sparkle'
+
+  /** 개수 노브의 이름. 종류마다 뜻이 다르다. */
+  const countLabel =
+    shape.kind === 'burst' ? '살 개수' : shape.kind === 'ticks' ? '눈금 개수' : '꼭짓점'
 
   return (
     <section className="mm-section" aria-labelledby="mm-sec-shape">
@@ -91,7 +101,11 @@ export function ShapeSection({ layer }: { layer: Layer }) {
           min={SHAPE_LIMITS.strokeWidth.min}
           max={SHAPE_LIMITS.strokeWidth.max}
           suffix="px"
-          hint="0 이면 안을 꽉 채웁니다. 올리면 테두리만 남습니다."
+          hint={
+            shape.kind === 'burst'
+              ? '살 한 줄의 굵기입니다.'
+              : '0 이면 안을 꽉 채웁니다. 올리면 테두리만 남습니다.'
+          }
           ariaLabel="도형 선 두께(px)"
           onChange={(strokeWidth) => setShapeSpec(layer.id, { strokeWidth })}
         />
@@ -111,12 +125,12 @@ export function ShapeSection({ layer }: { layer: Layer }) {
 
         {many ? (
           <NumberField
-            label="꼭짓점"
+            label={countLabel}
             value={shape.points}
             min={SHAPE_LIMITS.points.min}
             max={SHAPE_LIMITS.points.max}
             suffix="개"
-            ariaLabel="꼭짓점 수"
+            ariaLabel={countLabel}
             onChange={(points) => setShapeSpec(layer.id, { points })}
           />
         ) : null}
@@ -142,6 +156,45 @@ export function ShapeSection({ layer }: { layer: Layer }) {
             max={SHAPE_LIMITS.innerRatio.max}
             step={0.05}
             ariaLabel="십자 팔 두께 비율"
+            onChange={(innerRatio) => setShapeSpec(layer.id, { innerRatio })}
+          />
+        ) : null}
+
+        {shape.kind === 'burst' ? (
+          <NumberField
+            label="가운데 빈 곳"
+            value={shape.innerRatio}
+            min={SHAPE_LIMITS.innerRatio.min}
+            max={SHAPE_LIMITS.innerRatio.max}
+            step={0.05}
+            hint="0 에 가까울수록 살이 가운데까지 모입니다."
+            ariaLabel="방사살 안쪽 반지름 비율"
+            onChange={(innerRatio) => setShapeSpec(layer.id, { innerRatio })}
+          />
+        ) : null}
+
+        {shape.kind === 'ticks' ? (
+          <NumberField
+            label="눈금 굵기"
+            value={shape.innerRatio}
+            min={SHAPE_LIMITS.innerRatio.min}
+            max={SHAPE_LIMITS.innerRatio.max}
+            step={0.05}
+            hint="1 에 가까우면 빈틈이 사라져 한 줄이 됩니다."
+            ariaLabel="눈금 한 칸에서 막대가 차지하는 비율"
+            onChange={(innerRatio) => setShapeSpec(layer.id, { innerRatio })}
+          />
+        ) : null}
+
+        {shape.kind === 'sparkle' ? (
+          <NumberField
+            label="뾰족함"
+            value={shape.innerRatio}
+            min={SHAPE_LIMITS.innerRatio.min}
+            max={SHAPE_LIMITS.innerRatio.max}
+            step={0.05}
+            hint="작을수록 날카롭습니다."
+            ariaLabel="별빛 뾰족함"
             onChange={(innerRatio) => setShapeSpec(layer.id, { innerRatio })}
           />
         ) : null}

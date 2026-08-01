@@ -1,8 +1,8 @@
 /**
  * 도형 모션 세트 레지스트리.
  *
- * 카탈로그는 여섯 묶음 24종이다.
- *   퍼지기 4 / 소리 그래프 4 / 화면 전환 4 / 돌기 4 / 강조 5 / 배경 장식 3
+ * 카탈로그는 일곱 묶음 34종이다.
+ *   연출 10 / 퍼지기 4 / 소리 그래프 4 / 화면 전환 4 / 돌기 4 / 강조 5 / 배경 장식 3
  *
  * 이 파일이 UI 와 만나는 유일한 면이다. UI 는 label / hint / group 만 읽고
  * 내부 id 는 어떤 형태로도 화면에 내보내지 않는다.
@@ -15,6 +15,7 @@
 
 import { FRAMES_MAX, SPEED_MAX, SPEED_MIN, type Track } from '@/core/types.ts'
 import { normalizeShapeSpec } from '@/core/shape.ts'
+import { normalizeRevealSpec } from '@/core/reveal.ts'
 import { clamp, clamp01 } from './shared.ts'
 import type { SceneContext, SceneEmission, SceneLayer, ShapeScene, ShapeSceneGroup } from './types.ts'
 import { PULSE_SCENES } from './scenes/pulse.ts'
@@ -23,8 +24,10 @@ import { WIPE_SCENES } from './scenes/wipe.ts'
 import { SPIN_SCENES } from './scenes/spin.ts'
 import { ACCENT_SCENES } from './scenes/accent.ts'
 import { AMBIENT_SCENES } from './scenes/ambient.ts'
+import { STAGE_SCENES } from './scenes/stage.ts'
 
 export const SHAPE_SCENES: ShapeScene[] = [
+  ...STAGE_SCENES,
   ...PULSE_SCENES,
   ...BARS_SCENES,
   ...SPIN_SCENES,
@@ -97,6 +100,13 @@ function sanitizeLayer(layer: SceneLayer): SceneLayer {
   return {
     ...layer,
     shape: normalizeShapeSpec(layer.shape),
+    // 가리기도 같은 문을 통과시킨다. 'none' 이면 필드 자체를 만들지 않는다.
+    ...(layer.reveal
+      ? (() => {
+          const reveal = normalizeRevealSpec(layer.reveal)
+          return reveal.mode === 'none' ? {} : { reveal }
+        })()
+      : {}),
     tracks,
   }
 }

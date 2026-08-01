@@ -26,7 +26,7 @@ import type {
   ResolvedTransform,
   SafeZonePolicy,
 } from './types.ts'
-import { baseFitScale, buildLayerMatrix } from './transform.ts'
+import { baseFitScale, buildLayerMatrix, perspectiveZMax } from './transform.ts'
 import { resolveLayerTransformWithParents } from './evaluate.ts'
 import { layerIntrinsicSize } from './shape.ts'
 import { modifierPeak } from '@/motions/generators.ts'
@@ -87,6 +87,10 @@ export interface OverscanNeed {
  *
  * skew 는 정확한 해가 복잡하다. tan 만큼 폭이 늘어나는 것으로 보수적으로 근사한다.
  * 과하게 잡히는 쪽이라 캔버스가 비는 일은 없다.
+ *
+ * 3D 회전도 같은 방식이다. 원근 투영은 가까운 쪽을 키우고 먼 쪽을 줄이는데,
+ * 캔버스를 채우려면 **가장 많이 줄어든 곳**을 기준으로 잡아야 한다. 그래서 각도가
+ * 만드는 최소 배율의 역수를 곱한다. 이것도 과하게 잡히는 쪽이다.
  */
 export function requiredScaleAt(
   canvasW: number,
@@ -116,7 +120,51 @@ export function requiredScaleAt(
 
   const needW = (wPrime + hPrime * kx + 2 * txPrime) / imageW
   const needH = (hPrime + wPrime * ky + 2 * tyPrime) / imageH
-  return Math.max(needW, needH)
+  return Math.max(needW, needH) / perspectiveShrink(imageW, imageH, t)
+}
+
+/**
+ * 3D 회전이 만드는 **최소** 선형 배율. 1 이면 회전이 없다는 뜻이다.
+ *
+ * ---------------------------------------------------------------------------
+ * min(cos) 이 아니라 최소 특이값이다
+ * ---------------------------------------------------------------------------
+ * 호모그래피의 어파인 부분은 [[cosβ, 0], [sinα·sinβ, cosα]] 이고, 대각 성분 말고
+ * **전단 성분 sinα·sinβ** 가 있다. 한 축만 돌면 그 항이 0 이라 min(|cosα|, |cosβ|)
+ * 가 정확한 답이지만, 두 축이 동시에 돌면 틀린다. 예를 들어 두 각이 모두 60도면
+ * 실제 최소 배율은 0.25 인데 min(cos) 은 0.5 를 준다. 정확히 두 배 낙관이고,
+ * 그만큼 캔버스가 빈다.
+ *
+ * 2x2 행렬의 최소 특이값은 닫힌 형태로 나온다. 한 축만 도는 경우에는 이 식이
+ * min(|cosα|, |cosβ|) 와 정확히 같은 값을 주므로 기존 계산이 달라지지 않는다.
+ */
+function perspectiveShrink(imageW: number, imageH: number, t: ResolvedTransform): number {
+  if (t.rotateX === 0 && t.rotateY === 0) return 1
+
+  const a = (t.rotateX * Math.PI) / 180
+  const b = (t.rotateY * Math.PI) / 180
+  const ca = Math.cos(a)
+  const cb = Math.cos(b)
+  const shear = Math.sin(a) * Math.sin(b)
+
+  // [[cb, 0], [shear, ca]] 의 특이값. sigma = |Q - R|, |Q + R|.
+  const e = (cb + ca) / 2
+  const f = (cb - ca) / 2
+  const g = shear / 2
+  const q = Math.hypot(e, g)
+  const r = Math.hypot(f, g)
+
+  // 각도가 90도에 붙으면 배율이 발산한다. 솔버가 무한대를 물지 않게 바닥을 둔다.
+  let k = Math.max(Math.abs(q - r), 0.05)
+
+  const distRatio = Number.isFinite(t.perspective) ? Math.max(0, t.perspective) : 0
+  if (distRatio > 0) {
+    const d = distRatio * Math.max(imageW, imageH)
+    // 기준점이 가운데가 아니면 로컬 좌표가 한쪽으로 더 멀리 뻗는다 (transform.ts).
+    const zMax = perspectiveZMax(t.rotateX, t.rotateY, imageW, imageH, t.anchorX, t.anchorY)
+    k /= 1 + zMax / Math.max(d, 1e-6)
+  }
+  return k
 }
 
 /**
@@ -217,6 +265,14 @@ export interface SolveOptions {
  * pos 와 D 를 손으로 유도하지 않는다. 배율만 0 으로 둔 매트릭스를 한 번 더 만들면
  * 형상이 한 점으로 collapse 되어 이동 성분만 남는다. 그것이 pos 다. 회전 / 기울임 /
  * 앵커 / fit 기준 배율을 여기서 다시 계산하지 않으므로 렌더러와 어긋날 수 없다.
+ *
+ * ---------------------------------------------------------------------------
+ * 3D 회전이 있어도 1차식이 유지된다
+ * ---------------------------------------------------------------------------
+ * 원근 나눗셈은 배율 **안쪽**에서 일어난다 (transform.ts buildLayerMatrix 주석).
+ * 그래서 꼭짓점의 w 성분은 c 와 무관하고, 나눈 뒤에도 좌표는 여전히 c 의 1차식이다.
+ * 나눗셈만 여기서 한 번 해 주면 나머지 논리는 그대로다. 3D 회전이 없으면 w 가
+ * 정확히 1 이므로 옛 문서에서는 나눗셈이 아무 일도 하지 않는다.
  */
 function containScaleAt(
   canvasW: number,
@@ -237,9 +293,6 @@ function containScaleAt(
     imageW,
     imageH,
   )
-  const posX = origin[6]!
-  const posY = origin[7]!
-
   const halfW = canvasW / 2
   const halfH = canvasH / 2
 
@@ -252,8 +305,16 @@ function containScaleAt(
     [1, 1],
   ]
   for (const [u, v] of corners) {
-    const dx = full[0]! * u + full[3]! * v + full[6]! - posX
-    const dy = full[1]! * u + full[4]! * v + full[7]! - posY
+    // 두 매트릭스의 마지막 행은 같다. 배율은 원근 나눗셈에 영향을 주지 않는다.
+    const w = full[2]! * u + full[5]! * v + full[8]!
+    // 꼭짓점이 카메라 뒤로 넘어갔다. 어떤 배율로도 담기지 않는다.
+    if (!(w > 1e-9)) return 0
+
+    const posX = (origin[0]! * u + origin[3]! * v + origin[6]!) / w
+    const posY = (origin[1]! * u + origin[4]! * v + origin[7]!) / w
+
+    const dx = (full[0]! * u + full[3]! * v + full[6]!) / w - posX
+    const dy = (full[1]! * u + full[4]! * v + full[7]!) / w - posY
 
     // posX + c*dx <= halfW  그리고  posX + c*dx >= -halfW
     if (dx > 1e-9) c = Math.min(c, (halfW - posX) / dx)

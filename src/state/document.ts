@@ -16,6 +16,8 @@ import {
   CANVAS_MIN,
   FPS_CHOICES,
   FRAMES_MAX,
+  PERSPECTIVE_DEFAULT,
+  PERSPECTIVE_MAX,
   type AssetPrep,
   type AssetRef,
   type BackgroundType,
@@ -29,6 +31,7 @@ import {
   type Layer,
   type LoopMode,
   type MotionProject,
+  type RevealSpec,
   type ShapeSpec,
   type Track,
   type TrackProp,
@@ -42,9 +45,16 @@ import {
   nextId,
 } from '@/core/factory.ts'
 import { normalizeShapeSpec } from '@/core/shape.ts'
+import { createRevealSpec, normalizeRevealSpec } from '@/core/reveal.ts'
 import { evalTrack, insertKeyframe } from '@/easing/curve.ts'
 import { EASING_PRESET_BY_ID } from '@/easing/presets.ts'
-import { mergePresetEffects, mergePresetTracks, ownershipOf } from '@/motions/merge.ts'
+import {
+  mergePresetEffects,
+  mergePresetPerspective,
+  mergePresetReveal,
+  mergePresetTracks,
+  ownershipOf,
+} from '@/motions/merge.ts'
 import { probeAlpha } from '@/imageprep/alphaProbe.ts'
 import { assetRegistry } from './assets.ts'
 
@@ -93,6 +103,8 @@ export interface ShapeLayerInput {
   modifiers?: Modifier[]
   blend?: BlendMode
   anchor?: [number, number]
+  /** 경계선이 지나가는 모양. 진행률은 `reveal` 트랙이 민다. */
+  reveal?: RevealSpec
 }
 
 export interface AddShapeSceneInput {
@@ -145,6 +157,15 @@ interface DocumentState {
   addShapeScene(input: AddShapeSceneInput): { layerIds: string[] }
   /** 도형의 모양을 바꾼다. 값 규칙은 core/shape.ts 한 곳에만 있다. */
   setShapeSpec(layerId: string, patch: Partial<ShapeSpec>): void
+  /**
+   * 가리기 모양을 바꾼다. 값 규칙은 core/reveal.ts 한 곳에만 있다.
+   *
+   * 'none' 으로 되돌리면 필드를 지운다. 남겨 두면 저장 파일에 아무 일도 하지 않는
+   * 객체가 남아 왕복 JSON 이 달라진다.
+   */
+  setLayerReveal(layerId: string, patch: Partial<RevealSpec>): void
+  /** 3D 회전에 쓰는 카메라 거리. 기본값과 같으면 필드를 지운다. */
+  setLayerPerspective(layerId: string, value: number): void
   removeLayer(layerId: string): void
   reorderLayer(layerId: string, direction: -1 | 1): void
 
@@ -214,6 +235,15 @@ interface DocumentState {
     allowExit?: boolean
     /** 세기 최대치 기준 담기 배율. 없으면 문서에서 직접 푼다. */
     containScale?: number
+    /**
+     * 이 프리셋이 요구하는 가리기 모양. **언제나 통째로 대체한다.**
+     *
+     * motionExitsFrame 과 같은 규칙이다. 프리셋에서 파생된 사실이므로 프리셋을
+     * 갈아탈 때 앞 프리셋의 경계선이 남아 있으면 안 된다. 없으면 지운다.
+     */
+    reveal?: RevealSpec
+    /** 3D 회전에 쓰는 카메라 거리. 없으면 지운다(기본값으로 되돌아간다). */
+    perspective?: number
     /** 속도 1 기준 재생 시간(초). 속도 노브의 기준선이다. */
     baseSec?: number
     /** 속도 1 기준 fps. 속도 유도 fps 의 천장이다. */
@@ -534,6 +564,9 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
               layer.anchor = [clamp(input.anchor[0], 0, 1), clamp(input.anchor[1], 0, 1)]
             }
             if (input.blend) layer.blend = input.blend
+            if (input.reveal && input.reveal.mode !== 'none') {
+              layer.reveal = normalizeRevealSpec(input.reveal)
+            }
             // id 는 여기서 다시 매긴다. 장면 정의는 같은 id 를 여러 레이어에 쓴다.
             layer.tracks = input.tracks.map((t) => ({ ...t, id: nextId('t') }))
             layer.modifiers = (input.modifiers ?? []).map((m) => ({ ...m, id: nextId('m') }))
@@ -574,6 +607,45 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           layer.shape = normalizeShapeSpec({ ...layer.shape, ...patch })
         },
         `shape:${layerId}`,
+      )
+    },
+
+    setLayerReveal(layerId, patch) {
+      mutateDoc(
+        '가리기 변경',
+        (d) => {
+          const layer = findLayer(d, layerId)
+          if (!layer) return
+          const next = normalizeRevealSpec({ ...createRevealSpec('none'), ...layer.reveal, ...patch })
+          if (next.mode === 'none') delete layer.reveal
+          else layer.reveal = next
+          // 손으로 만졌으므로 EASY 의 세기/속도 슬라이더가 이 값을 덮지 않게 한다.
+          markPresetDirty(d)
+        },
+        `reveal:${layerId}`,
+      )
+    },
+
+    setLayerPerspective(layerId, value) {
+      mutateDoc(
+        '원근 변경',
+        (d) => {
+          const layer = findLayer(d, layerId)
+          if (!layer) return
+          /*
+           * 기본값이어도 필드를 남긴다.
+           *
+           * 예전에는 기본값이면 지웠는데, 인스펙터의 원근 입력행이 그 필드의 존재로
+           * 표시 여부를 정한다. 숫자 칸은 글자 하나마다 값을 보내므로 "2.5" 를 치는
+           * 순간 필드가 지워지고 입력행이 발밑에서 사라졌다. 사용자가 직접 정한 값은
+           * 기본값과 같더라도 사용자가 정했다는 사실 자체가 정보다.
+           */
+          layer.perspective = Number.isFinite(value)
+            ? clamp(value, 0, PERSPECTIVE_MAX)
+            : PERSPECTIVE_DEFAULT
+          markPresetDirty(d)
+        },
+        `persp:${layerId}`,
       )
     },
 
@@ -818,7 +890,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
     },
 
-    applyPresetTracks({ layerId, presetId, tracks, modifiers, effects, durationFrames, loopMode, fps, allowExit, containScale, baseSec, baseFps, macro }) {
+    applyPresetTracks({ layerId, presetId, tracks, modifiers, effects, durationFrames, loopMode, fps, allowExit, containScale, reveal, perspective, baseSec, baseFps, macro }) {
       mutateDoc('모션 프리셋 적용', (d) => {
         const layer = findLayer(d, layerId)
         if (!layer) return
@@ -837,6 +909,21 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         layer.modifiers = modifiers.map((m) => ({ ...m, id: m.id || nextId('m') }))
         layer.effects = mergePresetEffects(layer.effects, effects ? nextFx : undefined, owned)
 
+        /*
+         * 가리기와 원근도 트랙 / 이펙트와 같은 소유권 규칙을 탄다.
+         * 앞 프리셋이 심은 것만 걷어내고 사용자가 인스펙터에서 만든 것은 살린다.
+         */
+        const nextReveal = mergePresetReveal(layer.reveal, reveal, owned)
+        if (nextReveal) layer.reveal = normalizeRevealSpec(nextReveal)
+        else delete layer.reveal
+
+        const nextPerspective = mergePresetPerspective(layer.perspective, perspective, owned)
+        if (nextPerspective !== undefined) {
+          layer.perspective = clamp(nextPerspective, 0, PERSPECTIVE_MAX)
+        } else {
+          delete layer.perspective
+        }
+
         if (durationFrames !== undefined) {
           d.timeline.durationFrames = clamp(Math.round(durationFrames), 2, FRAMES_MAX)
         }
@@ -852,6 +939,9 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           dirty: false,
           props: tracks.map((t) => t.prop),
           effectIds: nextFx.map((e) => e.id),
+          // 다음 프리셋이 "이건 내가 지워도 되는 것" 을 알아보는 표식이다.
+          ...(reveal && reveal.mode !== 'none' ? { ownsReveal: true } : {}),
+          ...(perspective !== undefined ? { ownsPerspective: true } : {}),
           // 요청한 기준선을 그대로 보관한다. 지금 durationFrames 는 프리셋이 홀드
           // 배수로 스냅한 결과라, 그걸 되먹이면 속도를 왕복할 때마다 길이가 늘어난다.
           ...(baseSec !== undefined ? { baseSec } : {}),

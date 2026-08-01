@@ -94,11 +94,14 @@ const PROP_LABEL: Record<TrackProp, string> = {
   scaleX: '가로 크기',
   scaleY: '세로 크기',
   rotate: '회전',
+  rotateX: '가로축 회전',
+  rotateY: '세로축 회전',
   translateX: '가로 위치',
   translateY: '세로 위치',
   skewX: '가로 기울기',
   skewY: '세로 기울기',
   opacity: '투명도',
+  reveal: '가리기',
   anchorX: '기준점 가로',
   anchorY: '기준점 세로',
 }
@@ -145,7 +148,10 @@ function checkValueJump(layer: Layer, track: Track, durationFrames: number): Sea
 
   let diff = wrap - head
   // 0도 -> 360도 는 시각적으로 같은 자세다. spin360 을 오검출하면 안 된다.
-  if (track.prop === 'rotate') diff = wrapDegrees(diff)
+  // 세 회전축이 모두 같은 규칙이다. 한 축만 보면 카드 한 바퀴가 이음새로 잡힌다.
+  if (track.prop === 'rotate' || track.prop === 'rotateX' || track.prop === 'rotateY') {
+    diff = wrapDegrees(diff)
+  }
   if (Math.abs(diff) <= VALUE_TOLERANCE[track.unit]) return null
 
   const label = PROP_LABEL[track.prop]

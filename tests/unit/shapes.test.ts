@@ -14,7 +14,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { createEmptyProject, createImageLayer, createShapeLayer, resetIdCounter } from '@/core/factory.ts'
-import { createShapeSpec, layerIntrinsicSize, normalizeShapeSpec, shiftColor, toHex6, withAlpha } from '@/core/shape.ts'
+import { SHAPE_LIMITS, createShapeSpec, layerIntrinsicSize, normalizeShapeSpec, shiftColor, toHex6, withAlpha } from '@/core/shape.ts'
 import { resolveComposition } from '@/core/evaluate.ts'
 import { solveOverscan } from '@/core/overscan.ts'
 import { SHAPE_FS, SHAPE_KIND_CODE } from '@/core/renderer/shaders/shape.ts'
@@ -85,7 +85,7 @@ describe('도형 값 규칙', () => {
     expect(bad.color).toBe('#ffffffff')
     expect(bad.width).toBeGreaterThan(0)
     expect(bad.height).toBeGreaterThan(0)
-    expect(bad.points).toBeLessThanOrEqual(12)
+    expect(bad.points).toBeLessThanOrEqual(SHAPE_LIMITS.points.max)
     expect(bad.innerRatio).toBeLessThanOrEqual(0.95)
     expect(bad.sweepDeg).toBeGreaterThanOrEqual(5)
   })
@@ -123,8 +123,8 @@ describe('도형 값 규칙', () => {
 // ---------------------------------------------------------------------------
 
 describe('도형 세트 카탈로그', () => {
-  it('스물네 종이고 id 가 겹치지 않는다', () => {
-    expect(SHAPE_SCENES).toHaveLength(24)
+  it('서른네 종이고 id 가 겹치지 않는다', () => {
+    expect(SHAPE_SCENES).toHaveLength(34)
     expect(SHAPE_SCENE_BY_ID.size).toBe(SHAPE_SCENES.length)
   })
 
@@ -454,7 +454,7 @@ describe('도형 레이어 스토어', () => {
     const { layerId } = s().addShape({ name: '별', shape: createShapeSpec('star') })
     s().setShapeSpec(layerId, { points: 99, innerRatio: -1 })
     const shape = s().doc.layers[0]!.shape as ShapeSpec
-    expect(shape.points).toBe(12)
+    expect(shape.points).toBe(SHAPE_LIMITS.points.max)
     expect(shape.innerRatio).toBeGreaterThan(0)
     expect(shape.kind).toBe('star')
   })

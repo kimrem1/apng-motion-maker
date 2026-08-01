@@ -20,6 +20,8 @@
  *    프리뷰와 내보내기가 갈릴 여지가 생긴다.
  */
 
+import { REVEAL_GLSL } from './reveal.ts'
+
 /** u_kind 로 넘기는 코드. ShapeKind 의 순서와 같아야 한다. */
 export const SHAPE_KIND_CODE: Record<string, number> = {
   rect: 0,
@@ -29,6 +31,9 @@ export const SHAPE_KIND_CODE: Record<string, number> = {
   star: 4,
   cross: 5,
   arc: 6,
+  burst: 7,
+  ticks: 8,
+  sparkle: 9,
 }
 
 export const SHAPE_FS = /* glsl */ `#version 300 es
@@ -43,6 +48,7 @@ uniform float u_inner;
 uniform float u_sweep;
 uniform int u_kind;
 uniform int u_points;
+${REVEAL_GLSL}
 
 in vec2 v_uv;
 out vec4 fragColor;
@@ -135,6 +141,72 @@ float sdWedge(vec2 p, float halfAngle) {
   return m * sign(c.y * q.x - c.x * q.y);
 }
 
+/*
+ * 방사살. 가운데에서 뻗어 나가는 막대 n 개다.
+ *
+ * 막대 하나하나를 도형으로 두면 살 24개짜리 집중선에 레이어가 24장 필요하다.
+ * 각도 구간으로 접으면 한 장이면 된다. 살까지의 가로 거리는 **각거리가 아니라
+ * 픽셀 거리**로 잰다. 각거리로 재면 바깥으로 갈수록 살이 두꺼워진다.
+ *
+ * thick 은 살 굵기(px), inner 는 가운데 빈 반지름의 비율이다.
+ */
+float sdBurst(vec2 p, vec2 ext, int n, float inner, float thick) {
+  float scale = min(ext.x, ext.y);
+  vec2 q = p / ext;
+  float r = length(q);
+  if (r < 1e-6) return -thick * 0.5;
+
+  float count = float(max(n, 1));
+  float seg = 2.0 * MM_PI / count;
+  // 첫 살이 화면 위(-y)를 향하도록 기준 각도를 옮긴다.
+  float a = atan(q.y, q.x) + MM_PI * 0.5;
+  a = a - floor(a / seg) * seg - seg * 0.5;
+
+  // 살 중심선까지의 수직 거리. 반지름에 비례해 벌어지는 각거리를 픽셀로 되돌린다.
+  float across = abs(sin(a)) * r * scale - thick * 0.5;
+  float radial = max(r - 1.0, inner - r) * scale;
+  return max(across, radial);
+}
+
+/*
+ * 눈금. 가로로 늘어선 짧은 막대 n 개다. 자 눈금과 점선이 이 모양이다.
+ *
+ * mod 로 접으면 도형 밖까지 무한히 반복되므로 바깥 사각형과 교집합을 잡는다.
+ * duty 는 한 칸에서 막대가 차지하는 비율이다. 1 이면 빈틈이 사라진다.
+ */
+float sdTicks(vec2 p, vec2 ext, int n, float duty, float r) {
+  float count = float(max(n, 1));
+  float cell = (ext.x * 2.0) / count;
+  float x = p.x + ext.x;
+  float local = x - floor(x / cell) * cell - cell * 0.5;
+  float halfBar = max(cell * 0.5 * clamp(duty, 0.02, 1.0), 0.5);
+
+  float bar = sdRoundBox(vec2(local, p.y), vec2(halfBar, ext.y), min(r, min(halfBar, ext.y)));
+  float box = max(abs(p.x) - ext.x, abs(p.y) - ext.y);
+  return max(bar, box);
+}
+
+/*
+ * 별빛. 변이 **안으로 파인** 뾰족한 별이다.
+ *
+ * 별(star)은 꼭짓점 사이를 직선으로 잇는다. 반짝임에 쓰면 뾰족하지 않고 종이별처럼
+ * 보인다. 여기서는 극좌표 반지름을 |cos| 의 거듭제곱으로 깎아 사이를 오목하게 만든다.
+ * 지수가 클수록 날카롭다.
+ *
+ * 진짜 거리장은 아니지만 경계 근처에서 단조롭게 부호가 바뀌므로 fwidth
+ * 안티에일리어싱에는 충분하다 (sdWedge 와 같은 근사다).
+ */
+float sdSparkle(vec2 p, vec2 ext, int n, float sharp) {
+  float scale = min(ext.x, ext.y);
+  vec2 q = p / ext;
+  float r = length(q);
+  if (r < 1e-6) return -scale;
+  float count = float(max(n, 2));
+  float a = atan(q.y, q.x) + MM_PI * 0.5;
+  float lobe = pow(abs(cos(a * count * 0.5)), sharp);
+  return (r - lobe) * scale;
+}
+
 void main() {
   // 테두리는 안쪽으로 물린다. 두께를 올려도 레이어가 차지하는 크기가 그대로여야 한다.
   vec2 ext = max(u_size * 0.5 - vec2(u_stroke * 0.5), vec2(0.5));
@@ -171,6 +243,16 @@ void main() {
     } else {
       d = sdPie(p / ext, min(u_sweep * 0.5, MM_PI - 1e-3), 1.0) * minExt;
     }
+  } else if (u_kind == 7) {
+    // 살 굵기가 곧 u_stroke 다. 테두리처럼 안으로 물리면 원판이 굵기만큼 작아진다.
+    vec2 full = max(u_size * 0.5, vec2(0.5));
+    d = sdBurst(p, full, u_points, u_inner, max(u_stroke, 1.0));
+    banded = true;
+  } else if (u_kind == 8) {
+    d = sdTicks(p, ext, u_points, u_inner, u_radius);
+  } else if (u_kind == 9) {
+    // innerRatio 가 작을수록 날카롭다. 0.05~0.95 를 지수 6~1 로 옮긴다.
+    d = sdSparkle(p, ext, u_points, mix(6.0, 1.0, clamp((u_inner - 0.05) / 0.9, 0.0, 1.0)));
   } else {
     d = sdRoundBox(p, ext, min(u_radius, minExt));
   }
@@ -181,7 +263,7 @@ void main() {
   float aa = max(fwidth(d), 1e-4);
   float cov = 1.0 - smoothstep(-aa * 0.5, aa * 0.5, d);
 
-  float a = cov * u_color.a * u_opacity;
+  float a = cov * u_color.a * u_opacity * mmRevealMask(v_uv);
   fragColor = vec4(u_color.rgb * a, a);
 }
 `

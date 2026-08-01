@@ -10,7 +10,18 @@
 
 import { useRef, useState } from 'react'
 
-import { CANVAS_MAX, CANVAS_MIN, type FitMode, type Layer, type LoopMode } from '@/core/types.ts'
+import {
+  CANVAS_MAX,
+  CANVAS_MIN,
+  PERSPECTIVE_DEFAULT,
+  PERSPECTIVE_MAX,
+  REVEAL_MODE_LIST,
+  type FitMode,
+  type Layer,
+  type LoopMode,
+  type RevealMode,
+} from '@/core/types.ts'
+import { REVEAL_LIMITS, REVEAL_MODE_LABELS } from '@/core/reveal.ts'
 import { isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
 import { AnimateToggle } from '@/ui/inspector/AnimateToggle.tsx'
 import { EffectStack } from '@/ui/effects/EffectStack.tsx'
@@ -27,6 +38,11 @@ const FIT_OPTIONS: readonly SelectOption<FitMode>[] = [
   { value: 'fill', label: '늘여 채우기' },
   { value: 'none', label: '원본 크기' },
 ]
+
+const REVEAL_OPTIONS: readonly SelectOption<RevealMode>[] = REVEAL_MODE_LIST.map((mode) => ({
+  value: mode,
+  label: REVEAL_MODE_LABELS[mode],
+}))
 
 const LOOP_OPTIONS: readonly SelectOption<LoopMode>[] = [
   { value: 'once', label: '한 번만' },
@@ -194,6 +210,7 @@ function LayerSection({ layer }: { layer: Layer }) {
   const setLayerAnchor = useDocumentStore((s) => s.setLayerAnchor)
   const setStaticValue = useDocumentStore((s) => s.setStaticValue)
   const setValueAtFrame = useDocumentStore((s) => s.setValueAtFrame)
+  const setLayerPerspective = useDocumentStore((s) => s.setLayerPerspective)
   const frame = useUiStore((s) => s.playheadFrame)
 
   /**
@@ -237,6 +254,8 @@ function LayerSection({ layer }: { layer: Layer }) {
   const ty = read('translateY')
   const scalePercent = read('scale') * 100
   const rotate = read('rotate')
+  const rotateX = read('rotateX')
+  const rotateY = read('rotateY')
   const opacityPercent = read('opacity') * 100
 
   return (
@@ -334,6 +353,57 @@ function LayerSection({ layer }: { layer: Layer }) {
           </div>
         </div>
 
+        <div className="mm-row-2">
+          <div className="mm-anim-row">
+            <AnimateToggle layerId={layer.id} prop="rotateY" frame={frame} label="세로축 회전" />
+            <NumberField
+              label="세로축 회전"
+              value={rotateY}
+              step={1}
+              suffix="도"
+              ariaLabel="세로축 회전(도)"
+              onEditStart={beginEdit}
+              onEditEnd={endEdit}
+              onChange={(v) => write('rotateY', v)}
+            />
+          </div>
+          <div className="mm-anim-row">
+            <AnimateToggle layerId={layer.id} prop="rotateX" frame={frame} label="가로축 회전" />
+            <NumberField
+              label="가로축 회전"
+              value={rotateX}
+              step={1}
+              suffix="도"
+              ariaLabel="가로축 회전(도)"
+              onEditStart={beginEdit}
+              onEditEnd={endEdit}
+              onChange={(v) => write('rotateX', v)}
+            />
+          </div>
+        </div>
+
+        {/*
+          원근은 애니메이션되지 않는 값이라 스톱워치가 없다.
+          입체 회전을 애니메이션하면 0도를 지나는 순간이 반드시 있으므로, 지금 값이
+          아니라 **트랙의 존재**로도 판정한다. 안 그러면 재생 중에 입력행이 깜빡인다.
+        */}
+        {rotateX !== 0 ||
+        rotateY !== 0 ||
+        isAnimated(layer, 'rotateX') ||
+        isAnimated(layer, 'rotateY') ||
+        layer.perspective !== undefined ? (
+          <NumberField
+            label="원근 거리"
+            value={layer.perspective ?? PERSPECTIVE_DEFAULT}
+            min={0}
+            max={PERSPECTIVE_MAX}
+            step={0.5}
+            hint="레이어 긴 변의 몇 배만큼 떨어져서 보는가입니다. 작을수록 원근이 셉니다. 0 이면 원근 없이 각도만큼 눌립니다."
+            ariaLabel="원근 카메라 거리"
+            onChange={(v) => setLayerPerspective(layer.id, v)}
+          />
+        ) : null}
+
         {/* UI 는 0~100, 문서는 0~1 이다. */}
         <div className="mm-anim-row">
           <AnimateToggle layerId={layer.id} prop="opacity" frame={frame} label="불투명도" />
@@ -350,6 +420,128 @@ function LayerSection({ layer }: { layer: Layer }) {
             onChange={(v) => write('opacity', Math.min(1, Math.max(0, v / 100)))}
           />
         </div>
+      </div>
+    </section>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 가리기 섹션
+// ---------------------------------------------------------------------------
+
+/**
+ * 경계선이 지나가는 모양.
+ *
+ * 진행률은 여기 없다. 「가리기」 트랙이 민다. 모양과 진행률을 나눠 두는 이유는
+ * 프리셋이 트랙만 갈아끼우기 때문이다. 한 덩어리로 두면 세기 슬라이더를 움직일
+ * 때마다 모양까지 새로 정해진다.
+ */
+function RevealSection({ layer }: { layer: Layer }) {
+  const setLayerReveal = useDocumentStore((s) => s.setLayerReveal)
+  const setStaticValue = useDocumentStore((s) => s.setStaticValue)
+  const setValueAtFrame = useDocumentStore((s) => s.setValueAtFrame)
+  const frame = useUiStore((s) => s.playheadFrame)
+  const spec = layer.reveal
+  const mode: RevealMode = spec?.mode ?? 'none'
+  const active = mode !== 'none'
+  // 재생 헤드 자리의 값이다. 0 프레임으로 고정하면 애니메이션 중인 가리기를
+  // 인스펙터가 언제나 시작값으로 보여 준다.
+  const progressPercent = readStaticValue(layer, 'reveal', frame) * 100
+
+  /**
+   * 레이어 섹션과 같은 규칙이다. 애니메이션 중이면 그 프레임에 키를 찍고,
+   * 아니면 상수 키를 고친다. 이 분기가 없으면 진행률을 한 번 건드리는 순간
+   * 찍어 둔 키가 통째로 상수로 뭉개진다.
+   */
+  function writeProgress(value: number): void {
+    const ui = useUiStore.getState()
+    if (ui.playing) ui.setPlaying(false)
+    if (isAnimated(layer, 'reveal')) setValueAtFrame(layer.id, 'reveal', ui.playheadFrame, value)
+    else setStaticValue(layer.id, 'reveal', value)
+  }
+
+  return (
+    <section className="mm-section" aria-labelledby="mm-sec-reveal">
+      <h2 className="mm-section-title" id="mm-sec-reveal">
+        가리기
+      </h2>
+      <div className="mm-stack">
+        <SelectField
+          label="모양"
+          value={mode}
+          options={REVEAL_OPTIONS}
+          ariaLabel="가리기 모양"
+          onChange={(v) => setLayerReveal(layer.id, { mode: v })}
+        />
+
+        {active ? (
+          <>
+            <NumberField
+              label="경계 흐림"
+              value={(spec?.softness ?? 0) * 100}
+              min={REVEAL_LIMITS.softness.min * 100}
+              max={REVEAL_LIMITS.softness.max * 100}
+              step={1}
+              suffix="%"
+              hint="0 이면 칼로 자른 듯 끊깁니다."
+              ariaLabel="가리기 경계 흐림"
+              onChange={(v) => setLayerReveal(layer.id, { softness: clamp(v / 100, 0, 1) })}
+            />
+
+            {mode === 'blinds' ? (
+              <NumberField
+                label="칸 수"
+                value={spec?.slats ?? 8}
+                min={REVEAL_LIMITS.slats.min}
+                max={REVEAL_LIMITS.slats.max}
+                step={1}
+                suffix="칸"
+                ariaLabel="블라인드 칸 수"
+                onChange={(v) => setLayerReveal(layer.id, { slats: Math.round(v) })}
+              />
+            ) : null}
+
+            {mode === 'clock' ? (
+              <NumberField
+                label="시작 각도"
+                value={spec?.angle ?? 0}
+                min={REVEAL_LIMITS.angle.min}
+                max={REVEAL_LIMITS.angle.max}
+                step={15}
+                suffix="도"
+                hint="0 이 열두 시입니다."
+                ariaLabel="시계 가리기 시작 각도"
+                onChange={(v) => setLayerReveal(layer.id, { angle: v })}
+              />
+            ) : null}
+
+            <ToggleField
+              label="반대로 뒤집기"
+              checked={spec?.invert === true}
+              ariaLabel="드러나는 쪽과 가려지는 쪽 맞바꾸기"
+              onChange={(v) => setLayerReveal(layer.id, { invert: v })}
+            />
+
+            <div className="mm-anim-row">
+              <AnimateToggle layerId={layer.id} prop="reveal" frame={frame} label="가리기" />
+              <NumberField
+                label="진행률"
+                value={progressPercent}
+                min={0}
+                max={100}
+                step={1}
+                suffix="%"
+                hint="스톱워치를 켜면 타임라인에서 시간에 따라 밀 수 있습니다."
+                ariaLabel="가리기 진행률"
+                onChange={(v) => writeProgress(clamp(v / 100, 0, 1))}
+              />
+            </div>
+          </>
+        ) : (
+          <p className="mm-field-hint">
+            그림은 제자리에 두고 경계선만 지나가게 합니다. 모양을 고르면 설정이 나타납니다.
+          </p>
+        )}
       </div>
     </section>
   )
@@ -410,6 +602,8 @@ export function Inspector() {
             <LayerSection key={layer.id} layer={layer} />
             {/* 도형이면 모양부터. "이게 무엇인가" 다음에 "남들과 어떤 관계인가" 가 온다 */}
             {layer.shape ? <ShapeSection key={`shape:${layer.id}`} layer={layer} /> : null}
+            {/* 경계선이 지나가는 모양. 모양은 여기, 진행률은 타임라인이다 */}
+            <RevealSection key={`reveal:${layer.id}`} layer={layer} />
             {/* 레이어 고유 속성: 혼합, 깊이감, 부모, 캔버스 채움, 오버스캔 진단 */}
             <LayerProperties layer={layer} />
             {/* 이펙트 스택. 글리치와 자글자글이 여기 쌓인다 */}
