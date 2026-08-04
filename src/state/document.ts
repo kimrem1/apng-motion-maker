@@ -452,6 +452,45 @@ function markPresetDirty(doc: MotionProject): void {
   if (doc.presetRef && !doc.presetRef.dirty) doc.presetRef.dirty = true
 }
 
+/**
+ * 글자 등장은 **모양만으로는 아무 일도 하지 않는다.**
+ *
+ * 실제로 글자를 움직이는 것은 진행률(charIn) 트랙이고, 그 항등값은 1 이다.
+ * 1 은 "이미 다 들어와 제자리에 있다" 는 뜻이라, 트랙이 없으면 방향을 아무리 골라도
+ * 화면이 한 픽셀도 바뀌지 않는다. 방향을 고르는 것은 곧 "움직이게 해 달라" 는
+ * 뜻이므로 트랙이 없으면 여기서 만들어 준다.
+ *
+ * **이미 있으면 손대지 않는다.** 그래프 에디터로 다듬어 둔 곡선을 방향만 바꿨다고
+ * 지우면, 사용자가 만든 것을 말없이 되돌리는 셈이 된다.
+ *
+ * 곡선은 감속(easeOutQuint)이다. 등속으로 들어오면 글자가 미끄러지는 것처럼 보이고,
+ * 감속이 걸려야 날아와 멈추는 느낌이 난다.
+ */
+function ensureCharInTrack(d: MotionProject, layer: Layer): void {
+  if (findTrack(layer, 'charIn')) return
+
+  const end = Math.max(1, d.timeline.durationFrames - 1)
+  const track = createStaticTrack('charIn', 'ratio', 0)
+  track.animated = true
+
+  const first = track.keys[0]!
+  first.f = 0
+  first.v = 0
+
+  const last: Keyframe = { f: end, v: 1, interp: 'bezier' }
+  const preset = EASING_PRESET_BY_ID.get('easeOutQuint')
+  if (preset?.handles) {
+    first.interp = preset.interp
+    // 평가 정본이 프리셋에 있다 (setKeyframeEasing 과 같은 규칙).
+    first.easingPreset = preset.id
+    first.out = { ...preset.handles.out }
+    last.in = { ...preset.handles.in }
+  }
+  track.keys.push(last)
+
+  layer.tracks.push(track)
+}
+
 export const useDocumentStore = create<DocumentState>()((set, get) => {
   /**
    * 문서를 바꾸는 유일한 통로.
@@ -681,8 +720,13 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
             ...layer.charAnim,
             ...patch,
           })
-          if (next.mode === 'none') delete layer.charAnim
-          else layer.charAnim = next
+          if (next.mode === 'none') {
+            delete layer.charAnim
+          } else {
+            layer.charAnim = next
+            // 모양만 정하면 화면이 그대로다. 진행률 트랙이 없으면 만들어 준다.
+            ensureCharInTrack(d, layer)
+          }
           // 손으로 만졌으므로 EASY 의 세기/속도 슬라이더가 이 값을 덮지 않게 한다.
           markPresetDirty(d)
         },

@@ -21,7 +21,9 @@ import {
   type Layer,
   type TextAlign,
 } from '@/core/types.ts'
-import { useDocumentStore } from '@/state/document.ts'
+import { isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
+import { useUiStore } from '@/state/ui.ts'
+import { AnimateToggle } from '@/ui/inspector/AnimateToggle.tsx'
 import { allFontChoices, getFontsRevision, loadFontFile, subscribeFonts } from '@/ui/text/fonts.ts'
 import { NumberField, SelectField, ToggleField } from '@/ui/widgets/Field.tsx'
 
@@ -47,6 +49,9 @@ const CHAR_ORDER_OPTIONS = (
 export function TextSection({ layer }: { layer: Layer }) {
   const setTextSpec = useDocumentStore((s) => s.setTextSpec)
   const setLayerCharAnim = useDocumentStore((s) => s.setLayerCharAnim)
+  const setStaticValue = useDocumentStore((s) => s.setStaticValue)
+  const setValueAtFrame = useDocumentStore((s) => s.setValueAtFrame)
+  const frame = useUiStore((s) => s.playheadFrame)
 
   // 올린 글꼴이 들어오면 목록을 다시 그린다.
   useSyncExternalStore(subscribeFonts, getFontsRevision)
@@ -61,6 +66,21 @@ export function TextSection({ layer }: { layer: Layer }) {
   const anim = layer.charAnim
   const mode: CharInMode = anim?.mode ?? 'none'
   const animOn = mode !== 'none'
+
+  /*
+   * 진행률. 가리기와 같은 자리다.
+   *
+   * 방향을 고르면 스토어가 0 -> 1 트랙을 만들어 주므로 보통은 손댈 일이 없다.
+   * 여기 있는 이유는 "지금 이 프레임에서 얼마나 들어왔는가" 를 눈으로 확인하고,
+   * 그래프 에디터로 넘어가기 전에 손으로 찍을 수 있어야 하기 때문이다.
+   */
+  const progress = readStaticValue(layer, 'charIn', frame) ?? 1
+  const progressPercent = Math.round(progress * 100)
+
+  function writeProgress(value: number): void {
+    if (isAnimated(layer, 'charIn')) setValueAtFrame(layer.id, 'charIn', frame, value)
+    else setStaticValue(layer.id, 'charIn', value)
+  }
 
   /*
    * 글꼴 목록에 지금 값이 없을 수 있다. 올린 글꼴을 쓰던 프로젝트를 글꼴 없이 열면
@@ -312,9 +332,20 @@ export function TextSection({ layer }: { layer: Layer }) {
                 ariaLabel="무작위 방향과 순서의 시드"
                 onChange={(v) => setLayerCharAnim(layer.id, { seed: v })}
               />
-              <p className="mm-field-hint">
-                진행률은 타임라인의 `글자 등장` 트랙이 밉니다. 0 이면 출발점, 1 이면 제자리입니다.
-              </p>
+              <div className="mm-anim-row">
+                <AnimateToggle layerId={layer.id} prop="charIn" frame={frame} label="글자 등장" />
+                <NumberField
+                  label="진행률"
+                  value={progressPercent}
+                  min={0}
+                  max={100}
+                  step={1}
+                  suffix="%"
+                  hint="0 이면 출발점, 100 이면 전부 제자리입니다. 방향을 고르면 자동으로 0에서 100까지 흐릅니다."
+                  ariaLabel="글자 등장 진행률"
+                  onChange={(v) => writeProgress(Math.min(1, Math.max(0, v / 100)))}
+                />
+              </div>
             </>
           ) : null}
         </div>
