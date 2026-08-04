@@ -26,7 +26,14 @@
  * 두 목록 어디에도 없는 것은 사용자가 직접 만든 것이므로 살아남는다.
  */
 
-import type { EffectInstance, PresetRef, RevealSpec, Track, TrackProp } from '@/core/types.ts'
+import type {
+  CharAnimSpec,
+  EffectInstance,
+  PresetRef,
+  RevealSpec,
+  Track,
+  TrackProp,
+} from '@/core/types.ts'
 
 /** 앞 프리셋이 심어 둔 것의 목록. doc.presetRef 에서 그대로 읽는다. */
 export interface PresetOwnership {
@@ -36,6 +43,8 @@ export interface PresetOwnership {
   reveal: boolean
   /** 지금 문서의 원근 거리를 앞 프리셋이 심었는가. */
   perspective: boolean
+  /** 지금 레이어의 글자 등장을 앞 프리셋이 심었는가. */
+  charAnim: boolean
 }
 
 /** presetRef 가 없으면(프리셋을 한 번도 안 썼으면) 아무것도 소유하지 않는다. */
@@ -45,6 +54,7 @@ export function ownershipOf(ref: PresetRef | undefined): PresetOwnership {
     effectIds: ref?.effectIds ?? [],
     reveal: ref?.ownsReveal === true,
     perspective: ref?.ownsPerspective === true,
+    charAnim: ref?.ownsCharAnim === true,
   }
 }
 
@@ -72,6 +82,21 @@ export function mergePresetReveal(
   if (emitted && emitted.mode !== 'none') return emitted
   // 앞 프리셋 것이면 걷어낸다. 사용자 것이면 그대로 둔다.
   return owned.reveal ? undefined : existing
+}
+
+/**
+ * 글자 등장 병합. 가리기와 한 글자도 다르지 않은 규칙이다.
+ *
+ * 인스펙터에서 손으로 고른 등장 모양이 아무 프리셋이나 한 번 누르는 것으로
+ * 사라지면 안 된다. 앞 프리셋이 심은 것만 걷어낸다.
+ */
+export function mergePresetCharAnim(
+  existing: CharAnimSpec | undefined,
+  emitted: CharAnimSpec | undefined,
+  owned: PresetOwnership,
+): CharAnimSpec | undefined {
+  if (emitted && emitted.mode !== 'none') return emitted
+  return owned.charAnim ? undefined : existing
 }
 
 /** 원근 거리도 같은 규칙이다. */

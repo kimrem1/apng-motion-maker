@@ -351,7 +351,9 @@ export function BrowserSupport() {
         {
           width: PROBE_SIZE,
           height: PROBE_SIZE,
-          loopCount: PROBE_LOOP_COUNT,
+          // encodeGif 는 '재생 횟수' 를 받고 NETSCAPE 값은 그보다 1 작다.
+          // 이 진단은 "파일에 PROBE_LOOP_COUNT 를 적었을 때" 를 재는 것이므로 1 을 더한다.
+          loopCount: PROBE_LOOP_COUNT + 1,
           maxColors: 64,
           transparent: false,
           dither: 0,

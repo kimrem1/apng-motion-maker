@@ -280,7 +280,9 @@ export interface LoopMapping {
  *   GIF  NETSCAPE2.0 = N      -> **추가 반복 N회** = 총 N+1회 재생 (N=3 이면 repetitionCount 3)
  *
  * 그래서 GIF 만 1 을 빼야 세 포맷의 재생 횟수가 같아진다. 안 그러면 "3회 반복" 으로
- * 내보낸 GIF 가 혼자 4번 재생된다.
+ * 내보낸 GIF 가 혼자 4번 재생된다. **그 뺄셈은 loopCountToRepeat 한 곳에서만 한다.**
+ * 여기서 미리 빼면 값 1 이 "1회 재생" 과 "2회 재생" 두 뜻을 갖게 되어 반복 2회가
+ * GIF 에서만 조용히 1회로 깎인다.
  */
 export function mapLoop(loop: LoopSpec): LoopMapping {
   // 1회 재생. encodeGif 는 1 을 받으면 NETSCAPE 확장을 아예 안 써서 1회로 끝난다.
@@ -289,8 +291,8 @@ export function mapLoop(loop: LoopSpec): LoopMapping {
   if (count <= 0) return { apngNumPlays: 0, gifLoopCount: 0, webpLoopCount: 0 }
   return {
     apngNumPlays: count,
-    // count 회 재생 = 추가 반복 count-1 회. count 가 1 이면 확장을 생략하는 1 을 그대로 쓴다.
-    gifLoopCount: count === 1 ? 1 : count - 1,
+    // 세 포맷 모두 "재생 횟수" 하나의 의미로 통일한다.
+    gifLoopCount: count,
     webpLoopCount: Math.min(0xffff, count),
   }
 }

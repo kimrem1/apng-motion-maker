@@ -163,7 +163,9 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
     layers: emission.layers,
     durationFrames: emission.durationFrames,
     // 반복 방식은 공통 노브다. 문서에 아무것도 없을 때(첫 삽입)만 제안을 따른다.
-    ...(others.length === 0 ? { loopMode: emission.loopMode } : {}),
+    // others 로 판정하면 안 된다. 갈아끼우기(previous)를 뺀 나머지라 재적용 경로에서도
+    // 항상 비어, 슬라이더를 끄는 140ms 마다 사용자가 고른 반복 방식이 되돌아간다.
+    ...(doc.layers.length === 0 ? { loopMode: emission.loopMode } : {}),
     fps: emission.fps,
     replace: previous,
     coalesceKey: `shapeScene:${sceneId}`,

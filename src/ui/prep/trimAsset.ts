@@ -17,10 +17,21 @@
 import { cloneBitmap } from '@/imageprep/bgRemove.ts'
 import { probeAlpha } from '@/imageprep/alphaProbe.ts'
 import { autoTrimContent, cropBitmap, roundRect, type CropRect } from '@/imageprep/crop.ts'
+import type { AssetPrep } from '@/core/types.ts'
 import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
 
-import { ensurePrepOriginal } from './prepOriginals.ts'
+import { ensurePrepBase, getPrepOriginalCanvas } from './prepOriginals.ts'
+
+/**
+ * 문서에 남아 있는 배경 제거 기록.
+ *
+ * updateAssetPrep 은 prep 을 통째로 갈아 끼운다. 자르기가 crop 만 넘기면 배경 제거
+ * 기록이 같이 지워져, 프로젝트 파일에 "이 그림은 배경을 지운 것" 이라는 흔적이 사라진다.
+ */
+function keptBgRemove(assetId: string): AssetPrep['bgRemove'] | undefined {
+  return useDocumentStore.getState().doc.assets.find((a) => a.id === assetId)?.prep?.bgRemove
+}
 
 export interface CanvasSize {
   w: number
@@ -74,7 +85,9 @@ export async function trimAssetMargins(
   options: { fitCanvas?: boolean } = {},
 ): Promise<TrimMarginsResult> {
   const fitCanvas = options.fitCanvas ?? true
-  const original = await ensurePrepOriginal(assetId)
+  // 배경 제거까지 반영한 베이스에서 자른다. 원본에서 자르면 PRO 에서 지운 배경이
+  // EASY 자르기 한 번에 되살아난다.
+  const original = await ensurePrepBase(assetId)
   const before = useDocumentStore.getState().doc.canvas
   const previousCanvas: CanvasSize = { w: before.w, h: before.h }
 
@@ -94,11 +107,13 @@ export async function trimAssetMargins(
   assetRegistry.set(assetId, cropped)
 
   const store = useDocumentStore.getState()
+  const keptBg = keptBgRemove(assetId)
   store.updateAssetPrep(assetId, {
     width: cropped.width,
     height: cropped.height,
     hasAlpha,
     prep: {
+      ...(keptBg ? { bgRemove: keptBg } : {}),
       crop: [Math.round(rect.x), Math.round(rect.y), cropped.width, cropped.height],
     },
   })
@@ -131,7 +146,8 @@ export async function cropAssetTo(
   options: { fitCanvas?: boolean } = {},
 ): Promise<TrimMarginsResult> {
   const fitCanvas = options.fitCanvas ?? true
-  const original = await ensurePrepOriginal(assetId)
+  // 자르기 소스는 베이스다(배경 제거 반영, 원본과 같은 크기라 좌표계는 그대로).
+  const original = await ensurePrepBase(assetId)
   const before = useDocumentStore.getState().doc.canvas
   const previousCanvas: CanvasSize = { w: before.w, h: before.h }
 
@@ -141,11 +157,15 @@ export async function cropAssetTo(
   assetRegistry.set(assetId, cropped)
 
   const store = useDocumentStore.getState()
+  const keptBg = keptBgRemove(assetId)
   store.updateAssetPrep(assetId, {
     width: cropped.width,
     height: cropped.height,
     hasAlpha,
-    prep: { crop: [safe.x, safe.y, cropped.width, cropped.height] },
+    prep: {
+      ...(keptBg ? { bgRemove: keptBg } : {}),
+      crop: [safe.x, safe.y, cropped.width, cropped.height],
+    },
   })
   const canvas = canvasForCrop(assetId, cropped.width, cropped.height)
   // 원본 픽셀 자체가 작아졌다. 그림은 이미 그만큼 줄었으므로 표시 배율은 건드리지 않는다.
@@ -160,21 +180,35 @@ export async function cropAssetTo(
   }
 }
 
-/** 다듬기 전 원본 픽셀로 되돌린다. 캔버스 크기를 주면 그것도 같이 되돌린다. */
+/**
+ * 자르기 전 픽셀로 되돌린다.
+ *
+ * 목적지는 **베이스**다(= 배경 제거는 유지, 자르기만 취소). EASY 에는 배경 제거 UI 가
+ * 없으므로 여기서 진짜 원본까지 돌아가면 PRO 에서 지운 배경이 말없이 되살아난다.
+ * 전체 초기화는 PRO 다듬기 패널의 [되돌리기] 가 따로 맡는다.
+ *
+ * 캔버스는 보관본을 뜬 시점의 크기로 되돌린다. 호출부가 넘긴 '직전 캔버스' 를 쓰면
+ * 두 번 자른 뒤 픽셀만 원본으로 돌아가고 캔버스는 중간 크기에 남아 그림이 잘린다.
+ */
 export async function restoreAssetOriginal(
   assetId: string,
   canvas?: CanvasSize,
 ): Promise<void> {
-  const original = await ensurePrepOriginal(assetId)
+  const original = await ensurePrepBase(assetId)
   const hasAlpha = probeAlpha(original)
   // 보관본 자체를 넘기면 다음 교체에서 레지스트리가 우리 원본을 닫아 버린다.
   assetRegistry.set(assetId, await cloneBitmap(original))
 
   const store = useDocumentStore.getState()
+  const keptBg = keptBgRemove(assetId)
   store.updateAssetPrep(assetId, {
     width: original.width,
     height: original.height,
     hasAlpha,
+    // 자르기만 취소한다. crop 기록만 빠지고 배경 제거 기록은 남는다.
+    // prep 자체를 넘기지 않으면 스토어가 기록을 통째로 지운다(= 자르기 없음).
+    ...(keptBg ? { prep: { bgRemove: keptBg } } : {}),
   })
-  if (canvas) store.setCanvasSize(canvas.w, canvas.h)
+  const target = getPrepOriginalCanvas(assetId) ?? canvas
+  if (target) store.setCanvasSize(target.w, target.h)
 }

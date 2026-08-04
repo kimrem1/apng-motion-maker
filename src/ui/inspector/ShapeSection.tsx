@@ -43,6 +43,15 @@ export function ShapeSection({ layer }: { layer: Layer }) {
   const countLabel =
     shape.kind === 'burst' ? '살 개수' : shape.kind === 'ticks' ? '눈금 개수' : '꼭짓점'
 
+  /**
+   * 색 입력은 #rrggbb 만 주고받는다. 세트가 넣어 둔 반투명 알파(#rrggbbaa 의 뒤 두 자리)를
+   * 여기서 되붙이지 않으면 색을 한 번 고르는 것만으로 반투명이 사라진다.
+   * parseHexColor 는 형식이 깨졌을 때 알파 0 을 돌려주므로 쓰지 않는다.
+   */
+  const alphaHex = /^#[0-9a-f]{8}$/i.test(shape.color.trim())
+    ? shape.color.trim().slice(7).toLowerCase()
+    : 'ff'
+
   return (
     <section className="mm-section" aria-labelledby="mm-sec-shape">
       <h2 className="mm-section-title" id="mm-sec-shape">
@@ -69,7 +78,7 @@ export function ShapeSection({ layer }: { layer: Layer }) {
               type="color"
               value={toHex6(shape.color)}
               aria-label="도형 색"
-              onChange={(e) => setShapeSpec(layer.id, { color: `${e.target.value}ff` })}
+              onChange={(e) => setShapeSpec(layer.id, { color: `${e.target.value}${alphaHex}` })}
             />
           </div>
         </div>

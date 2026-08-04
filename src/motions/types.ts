@@ -10,7 +10,14 @@
  * 내부 id 는 어떤 형태로도 UI 에 노출하지 않는다. label 만 보여준다.
  */
 
-import type { EffectInstance, LoopMode, Modifier, RevealSpec, Track } from '@/core/types.ts'
+import type {
+  CharAnimSpec,
+  EffectInstance,
+  LoopMode,
+  Modifier,
+  RevealSpec,
+  Track,
+} from '@/core/types.ts'
 
 /**
  * 사용자에게 보이는 1차 분류는 의도 기반이다.
@@ -29,6 +36,8 @@ export type MotionCategory =
   | 'boil'
   | 'glitch'
   | 'combo'
+  /** 글자 레이어 전용. 글자 하나하나가 들어오는 방식이다. */
+  | 'text'
 
 /**
  * 반복 안전성.
@@ -132,6 +141,12 @@ export interface PresetEmission {
    * 손으로 쌓아 올리는 스택이 아니라 프리셋 한 벌에 딸린 값 하나이기 때문이다.
    */
   reveal?: RevealSpec
+  /**
+   * 이 프리셋이 요구하는 글자 등장 모양. 가리기와 같은 규칙이다.
+   *
+   * 진행률은 여기 없다. `charIn` 트랙이 민다. 글자 레이어가 아니면 아무 일도 없다.
+   */
+  charAnim?: CharAnimSpec
   /** 3D 회전에 쓰는 카메라 거리(레이어 긴 변의 배수). 생략하면 기본값이다. */
   perspective?: number
   /** 이 프리셋에 어울리는 반복 모드 제안 */

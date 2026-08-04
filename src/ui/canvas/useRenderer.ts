@@ -26,6 +26,7 @@ import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { getPreviewDoc, subscribePreviewDoc } from '@/state/presetActions.ts'
+import { announceFailure } from '@/ui/a11y/announce.ts'
 import { setActiveRenderer } from './rendererHandle.ts'
 
 /**
@@ -157,27 +158,114 @@ export function useRenderer(): UseRendererResult {
     }
 
     const { gl, caps } = ctx
+
+    /*
+     * 셰이더 워밍업은 Renderer 생성자 안에서 동기로 컴파일한다. 드라이버가 한 장이라도
+     * 못 만들면 여기서 던지는데, 그 예외가 이펙트 밖으로 나가면 정리 함수가 등록되지
+     * 않아 캔버스와 컨텍스트가 해제되지 않은 채 남고, 준비해 둔 안내 화면 대신
+     * ErrorBoundary 의 크래시 화면이 뜬다.
+     */
+    let renderer: Renderer | null = null
+    let cache: GpuAssetCache | null = null
+    try {
+      renderer = new Renderer(gl, caps)
+      cache = new GpuAssetCache(gl)
+    } catch (err) {
+      renderer?.dispose()
+      gl.getExtension('WEBGL_lose_context')?.loseContext()
+      canvas.remove()
+      useUiStore
+        .getState()
+        .setRendererError(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : '그래픽 초기화에 실패했습니다.',
+        )
+      setGlEpoch((n) => n + 1)
+      return
+    }
+
     useUiStore.getState().setRendererError(null)
 
     canvasRef.current = canvas
-    rendererRef.current = new Renderer(gl, caps)
-    cacheRef.current = new GpuAssetCache(gl)
+    rendererRef.current = renderer
+    cacheRef.current = cache
     targetRef.current = { gl, width: initial.canvas.w, height: initial.canvas.h, fbo: null }
 
     // 내보내기가 프리뷰와 같은 컨텍스트/에셋을 쓰게 한다.
     // 컨텍스트를 따로 만들면 "프리뷰 = 결과물" 약속이 깨진다.
-    const renderer = rendererRef.current
-    setActiveRenderer({
-      renderer,
-      getAssets: () =>
-        cacheRef.current?.sync(docRef.current.assets, (id) => assetRegistry.get(id)) ?? new Map(),
-    })
+    const publish = (r: Renderer): void => {
+      setActiveRenderer({
+        renderer: r,
+        getAssets: () =>
+          cacheRef.current?.sync(docRef.current.assets, (id) => assetRegistry.get(id)) ?? new Map(),
+      })
+    }
+    publish(renderer)
+
+    /*
+     * 컨텍스트 손실.
+     *
+     * 드라이버 리셋이나 절전 복귀로 컨텍스트가 날아가면 GL 호출이 조용히 no-op 이 된다.
+     * 풀에 이미 만들어 둔 타깃을 재사용하므로 예외조차 나지 않아서, 그림만 굳은 채
+     * 플레이헤드는 계속 흐르고 새로고침 말고는 복구 수단이 없었다.
+     *
+     * setRendererError 는 부르지 않는다. 그 순간 PreviewCanvas 가 host 를 걷어내
+     * 이 이펙트의 정리가 돌고 리스너까지 사라져 restored 를 영영 못 받는다(교착).
+     */
+    const onLost = (e: Event): void => {
+      // preventDefault 를 부르지 않으면 브라우저가 restored 를 아예 발화하지 않는다.
+      e.preventDefault()
+      setActiveRenderer(null)
+      // 참조만 끊는다. 손실된 컨텍스트의 delete* 는 어차피 no-op 이다.
+      rendererRef.current = null
+      cacheRef.current = null
+      targetRef.current = null
+      if (pendingRafRef.current !== 0) {
+        cancelAnimationFrame(pendingRafRef.current)
+        pendingRafRef.current = 0
+      }
+      // 헛도는 재생 루프를 멈춘다. 이게 없으면 그림은 굳은 채 시간만 흐른다.
+      useUiStore.getState().setPlaying(false)
+      setGlEpoch((n) => n + 1)
+      announceFailure('그래픽 장치와의 연결이 끊겼습니다. 복구를 시도합니다.')
+    }
+
+    const onRestored = (): void => {
+      let next: GlContext | null = null
+      try {
+        next = createGlContext(canvas)
+      } catch {
+        next = null
+      }
+      if (!next) return
+      let revived: Renderer | null = null
+      try {
+        revived = new Renderer(next.gl, next.caps)
+        cacheRef.current = new GpuAssetCache(next.gl)
+      } catch {
+        revived?.dispose()
+        return
+      }
+      rendererRef.current = revived
+      targetRef.current = { gl: next.gl, width: canvas.width, height: canvas.height, fbo: null }
+      publish(revived)
+      // 텍스처는 살아 돌아오지 않는다. 새 캐시가 assetRegistry 에서 전부 다시 올린다.
+      dirtyRef.current = true
+      setGlEpoch((n) => n + 1)
+      requestRender()
+    }
+
+    canvas.addEventListener('webglcontextlost', onLost)
+    canvas.addEventListener('webglcontextrestored', onRestored)
 
     dirtyRef.current = true
     setGlEpoch((n) => n + 1)
     requestRender()
 
     return () => {
+      canvas.removeEventListener('webglcontextlost', onLost)
+      canvas.removeEventListener('webglcontextrestored', onRestored)
       // dispose 보다 먼저 등록을 걷어야 내보내기가 죽은 컨텍스트를 잡지 않는다.
       setActiveRenderer(null)
       if (pendingRafRef.current !== 0) {

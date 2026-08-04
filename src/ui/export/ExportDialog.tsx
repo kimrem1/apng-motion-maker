@@ -51,6 +51,7 @@ import {
   WEBP_QUALITY_MIN,
   WEIGHT_LABELS,
   estimateDurationSec,
+  fitSettingsToCanvas,
   fitWithin,
   formatDuration,
   settingsForPurpose,
@@ -165,8 +166,19 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
   const purpose = PURPOSE_BY_ID.get(purposeId) ?? EXPORT_PURPOSES[0]!
   const isCustom = purpose.custom === true
 
+  /*
+   * 크기는 언제나 **지금 캔버스 비율**을 따른다.
+   *
+   * 이 대화상자는 닫혀 있어도 마운트된 채라 custom 은 앱을 켠 순간의 캔버스 크기로
+   * 초기화된 뒤 그대로 남는다. 그 상태에서 이미지를 넣거나 자르면 비율이 어긋나고,
+   * 내보내기가 그 비율 차이만큼 그림을 늘려 버린다(사양 라디오를 왔다 갔다 해야
+   * 고쳐지던 증상). 상태를 동기화하는 대신 파생 계산으로 못 박는다.
+   */
   const baseSettings: ExportSettings = useMemo(
-    () => (isCustom ? custom : settingsForPurpose(purpose, doc.canvas.w, doc.canvas.h)),
+    () =>
+      isCustom
+        ? fitSettingsToCanvas(custom, doc.canvas.w, doc.canvas.h)
+        : settingsForPurpose(purpose, doc.canvas.w, doc.canvas.h),
     [isCustom, custom, purpose, doc.canvas.w, doc.canvas.h],
   )
   const settingsKey = JSON.stringify(baseSettings)

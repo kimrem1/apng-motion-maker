@@ -114,6 +114,11 @@ export function NumberField({
             setDraft(formatNumber(value))
             onEditEnd?.()
           }}
+          onKeyDown={(e) => {
+            // number 입력은 Enter 로 블러되지 않는다. 편집이 끝날 때만 확정하는 쪽
+            // (캔버스 폭/높이)에서 Enter 를 눌러도 아무 일이 안 일어나 보인다.
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
           onChange={(e) => {
             const raw = e.target.value
             setDraft(raw)

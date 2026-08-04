@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import type { MotionProject } from '@/core/types.ts'
+import type { WebpWarning } from '@/export/webp/encoder.ts'
 import {
   ExportAbortError,
   exportFrames,
@@ -44,6 +45,13 @@ export interface ExportResult {
   /** 재인코딩 버튼이 기준으로 삼을 설정 */
   settings: ExportSettings
   /**
+   * 인코더가 조용히 바꾼 것들. 없으면 undefined.
+   *
+   * 무손실을 못 만들었거나 알파를 버린 경우가 여기 담긴다. 화면에 띄우지 않으면
+   * 사용자는 결과를 다른 앱에서 열어 보기 전까지 원인을 알 방법이 없다.
+   */
+  warnings?: WebpWarning[]
+  /**
    * 이 결과를 만든 문서 스냅샷.
    *
    * 참조 하나면 충분하다. immer 라 문서를 조금이라도 고치면 새 객체가 되므로
@@ -78,8 +86,8 @@ export interface UseExportResult {
 function loopLabel(doc: MotionProject): string {
   const { mode, count } = doc.timeline.loop
   if (mode === 'once') return '한 번만 재생'
-  // pingPong 은 프레임 배열이 이미 왕복이라 파일 차원에서는 무한 반복으로 낸다.
-  if (mode === 'pingPong') return '왕복 무한 반복'
+  // 프레임 배열이 이미 2N-2 로 왕복 한 번이라 count 가 곧 왕복 횟수다 (mapLoop 과 같은 규칙).
+  if (mode === 'pingPong') return count <= 0 ? '왕복 무한 반복' : `왕복 ${count}번 반복`
   return count <= 0 ? '무한 반복' : `${count}번 반복`
 }
 
@@ -219,6 +227,7 @@ export function useExport(): UseExportResult {
         fps: doc.timeline.fps,
         loopLabel: loopLabel(doc),
         settings,
+        ...(output.warnings && output.warnings.length > 0 ? { warnings: output.warnings } : {}),
         sourceDoc: doc,
       })
       setProgress({ phase: 'done', done: 100, total: 100, message: '완성' })

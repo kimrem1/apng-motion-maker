@@ -219,7 +219,7 @@ export function buildEncodeRequest(args: BuildRequestArgs): EncodeJobRequest {
     webp: {
       durationMs: delayMs,
       // ANIM loop_count 는 uint16 이다. 무한(0)이 아닌 큰 값은 잘라야 인코더가 안 던진다.
-      loopCount: Math.min(MAX_WEBP_LOOP_COUNT, Math.max(0, mapping.gifLoopCount)),
+      loopCount: Math.min(MAX_WEBP_LOOP_COUNT, Math.max(0, mapping.webpLoopCount)),
       quality: typeof rawQuality === 'number' ? rawQuality : DEFAULT_WEBP_QUALITY,
       lossless: rawLossless === true,
     },

@@ -240,10 +240,10 @@ export async function encodeGif(
 }
 
 /**
- * loopCount -> gifenc repeat 매핑.
- *   0  -> 0  (무한)
- *   1  -> -1 (NETSCAPE 확장을 아예 쓰지 않는다 = 1회 재생)
- *   n  -> n
+ * loopCount(재생 횟수) -> gifenc repeat 매핑.
+ *   0  -> 0    (무한)
+ *   1  -> -1   (NETSCAPE 확장을 아예 쓰지 않는다 = 1회 재생)
+ *   n  -> n-1  (n회 재생 = 첫 재생 + 추가 반복 n-1 회)
  *
  * **불확실성 주의**: NETSCAPE2.0 확장의 16비트 값이 "추가 반복 횟수"인지
  * "총 재생 횟수"인지는 명세가 모호하고 리더마다 해석이 갈린다.
@@ -256,7 +256,7 @@ export function loopCountToRepeat(loopCount: number): number {
   const n = Math.trunc(loopCount)
   if (n <= 0) return 0 // 무한
   if (n === 1) return -1 // 1회: 확장 자체를 생략
-  return n
+  return n - 1 // n회 재생 = 추가 반복 n-1 회
 }
 
 /**

@@ -35,7 +35,7 @@ import {
 import { toErrorMessage } from '@/imageprep/decode.ts'
 import { NumberField } from '@/ui/widgets/Field.tsx'
 import { cropAssetTo, restoreAssetOriginal, type CanvasSize } from '@/ui/prep/trimAsset.ts'
-import { ensurePrepOriginal } from '@/ui/prep/prepOriginals.ts'
+import { ensurePrepBase } from '@/ui/prep/prepOriginals.ts'
 
 // 모달 껍데기(mm-modal-*)는 내보내기 화면과 같은 스타일을 쓴다. 여기서만 따로
 // 정의하면 두 다이얼로그의 여백과 그림자가 서서히 갈라진다.
@@ -100,7 +100,9 @@ export function QuickCrop({ open, assetId, onClose, onDone }: QuickCropProps) {
 
     void (async () => {
       try {
-        const original = await ensurePrepOriginal(assetId)
+        // 미리보기 소스는 실제 자르기 소스와 같아야 한다(cropAssetTo 도 베이스에서 자른다).
+        // 원본을 보여 주면 배경을 지운 그림인데 미리보기에만 배경이 남는다.
+        const original = await ensurePrepBase(assetId)
         const long = Math.max(original.width, original.height)
         const scale = long > PREVIEW_MAX ? PREVIEW_MAX / long : 1
         const pw = Math.max(1, Math.round(original.width * scale))

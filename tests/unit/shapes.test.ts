@@ -746,3 +746,54 @@ describe('도형 셰이더', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// 재적용이 건드리면 안 되는 것
+// ---------------------------------------------------------------------------
+
+describe('도형 세트 재적용', () => {
+  beforeEach(() => {
+    useShapeUiStore.setState({ applied: null, ceilFps: null, strength: 0.5, speed: 1 })
+    s().replaceDocument(emptyDoc())
+  })
+
+  it('슬라이더 재적용이 사용자가 고른 반복 방식을 되돌리지 않는다', () => {
+    applyShapeScene('pulse.ripple')
+    s().setLoopMode('once')
+    expect(s().doc.timeline.loop.mode).toBe('once')
+
+    useShapeUiStore.setState({ strength: 0.6 })
+    const report = applyShapeScene('pulse.ripple', true)
+
+    expect(report.ok).toBe(true)
+    expect(s().doc.timeline.loop.mode).toBe('once')
+  })
+
+  it('첫 삽입에서는 세트의 제안을 따른다', () => {
+    expect(s().doc.layers).toHaveLength(0)
+    applyShapeScene('pulse.ripple')
+    expect(s().doc.timeline.loop.mode).toBe('loop')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 가리기 각도는 레이어 로컬이다
+// ---------------------------------------------------------------------------
+
+describe('조준선 세트', () => {
+  it('위아래 호가 같은 가리기 각도를 쓴다', () => {
+    const emission = buildShapeScene(
+      'stage.hud',
+      createSceneContext({ canvasW: 400, canvasH: 400, fps: 25, strength: 0.5, speed: 1, color: '#ffffff' }),
+    )
+    const arcs = (emission?.layers ?? []).filter((l) => l.name.endsWith('호'))
+    expect(arcs).toHaveLength(2)
+
+    /*
+     * u_revealAngle 은 레이어 회전을 따라 도는 로컬 좌표계 기준이다. 회전값 deg 를
+     * 각도에 더하면 이중 계산이라, 180도 돌려 둔 아래쪽 호가 진행률 0.5 를 넘기 전까지
+     * 한 픽셀도 그려지지 않는다.
+     */
+    expect(arcs[0]!.reveal?.angle).toBe(arcs[1]!.reveal?.angle)
+  })
+})

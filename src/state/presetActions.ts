@@ -299,6 +299,7 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
      * 경계선이 다음 프리셋에도 그대로 남아 그림이 계속 잘린다.
      */
     reveal: result.reveal,
+    charAnim: result.charAnim,
     perspective: result.perspective,
     macro: { speed: presetUi.speed, strength: presetUi.strength },
   })
@@ -365,11 +366,21 @@ function reapplyTargetId(): string | null {
   /*
    * **재적용은 프리셋이 실제로 얹힌 레이어에만 한다.**
    *
-   * presetRef 는 레이어 id 를 들고 있지 않고, resolveTargetLayerId 는 "지금 고른
-   * 레이어" 를 돌려준다. 그래서 도형을 하나 넣어 선택이 옮겨간 뒤 세기 슬라이더를
-   * 끌면, 이미지에 걸린 모션이 도형 위에 다시 심겨 이미지는 멈추고 도형이 혼자
-   * 튀어오른다. 프리셋이 만든 속성이 그 레이어에 남아 있는지로 판정한다.
+   * resolveTargetLayerId 는 "지금 고른 레이어" 를 돌려준다. 그래서 도형을 하나 넣어
+   * 선택이 옮겨간 뒤 세기 슬라이더를 끌면, 이미지에 걸린 모션이 도형 위에 다시 심겨
+   * 이미지는 멈추고 도형이 혼자 튀어오른다. presetRef.layerId 가 진실이다.
+   *
+   * props 로 역추적하던 옛 방식은 트랙을 내지 않는 프리셋(흔들기/자글자글/지지직
+   * 19종)에서 props 가 빈 배열이라 검사 자체가 건너뛰어졌다.
    */
+  const owner = doc.presetRef?.layerId
+  if (owner !== undefined) {
+    if (!doc.layers.some((l) => l.id === owner)) return null
+    if (resolveTargetLayerId() !== owner) return null
+    return id
+  }
+
+  // layerId 가 없는 옛 프로젝트만 props 로 근사한다.
   const props = doc.presetRef?.props
   if (props && props.length > 0) {
     const layerId = resolveTargetLayerId()

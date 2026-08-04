@@ -135,6 +135,14 @@ function amplitudeOf(emission: PresetEmission): number {
     }
     total += hi - lo
   }
+  /*
+   * 글자 프리셋의 진폭은 트랙이 아니라 charAnim 에 있다.
+   * 진행률 트랙은 언제나 0 -> 1 이고, 세기는 거리 / 각도 / 배율에 걸린다.
+   */
+  const ca = emission.charAnim
+  if (ca) {
+    total += Math.abs(ca.distance) + Math.abs(ca.rotate) / 360 + Math.abs(ca.scale - 1)
+  }
   for (const m of emission.modifiers ?? []) total += Math.abs(m.amplitude)
   for (const e of emission.effects ?? []) {
     for (const v of Object.values(e.params)) {
@@ -177,6 +185,11 @@ const REQUIRED_IDS = [
  * 세기는 이쪽에서 속도나 원근처럼 다른 축에 걸린다.
  */
 const FIXED_AMPLITUDE = new Set([
+  // 자리에서 나타나기만 하는 글자 모션. 움직임 자체가 없어 세기가 걸릴 곳이 없다.
+  'text.typewriter',
+  'text.fade',
+  // 뒤집기는 90도에서 0도까지 한 번 도는 것이 전부다. flip3d.turn 과 같은 이유다.
+  'text.flip',
   'fade.in',
   'fade.out',
   'fade.inOut',
@@ -222,10 +235,10 @@ describe('카탈로그 구성', () => {
     expect(byCategory('combo')).toHaveLength(4)
   })
 
-  it('전부 합쳐 76종이다 (A12 + B9 + C14 + D14 + E4 + F6 + G5 + H8 + I4)', () => {
+  it('전부 합쳐 94종이다 (A12 + B9 + C14 + D14 + E4 + F6 + G5 + H8 + I4 + J18)', () => {
     const total = CATEGORY_IDS.map((c) => byCategory(c).length).reduce((a, b) => a + b, 0)
-    expect(total).toBe(76)
-    expect(MOTION_PRESETS).toHaveLength(76)
+    expect(total).toBe(94)
+    expect(MOTION_PRESETS).toHaveLength(94)
   })
 
   it('조합 프리셋이 들어와 있다', () => {

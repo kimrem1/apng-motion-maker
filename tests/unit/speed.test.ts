@@ -193,3 +193,46 @@ describe('속도 왕복', () => {
     expect(applyAt('zoom.slowIn', 0.3).sec).toBeCloseTo(once, 9)
   })
 })
+
+/**
+ * 프리셋을 갈아탈 때의 기준선.
+ *
+ * 기준선(presetRef.baseSec)은 **그 프리셋의 것일 때만** 재사용해야 한다. id 를 안 보면
+ * 한 문서에서 처음 누른 카드 하나가 이후 모든 프리셋의 길이를 지배하고,
+ * MotionPreset.defaultDurationMs 가 문서당 한 번만 읽힌다.
+ */
+describe('프리셋 교체와 기준선', () => {
+  it('다른 프리셋을 고르면 그 프리셋의 권장 길이를 쓴다', () => {
+    reset()
+    const slow = applyAt('kb.classic', 1)
+    const pop = applyAt('zoom.pop', 1)
+
+    const slowMs = MOTION_PRESETS.find((p) => p.id === 'kb.classic')?.defaultDurationMs ?? 0
+    const popMs = MOTION_PRESETS.find((p) => p.id === 'zoom.pop')?.defaultDurationMs ?? 0
+    expect(slowMs).toBeGreaterThan(popMs)
+
+    // 앞 카드의 길이가 그대로 물려지면 두 값이 같아진다.
+    expect(pop.sec).toBeLessThan(slow.sec)
+    expect(pop.sec).toBeCloseTo(popMs / 1000, 1)
+  })
+
+  it('같은 프리셋을 다시 누르면 길이가 그대로다', () => {
+    reset()
+    const first = applyAt('zoom.pop', 1).frames
+    expect(applyAt('zoom.pop', 1).frames).toBe(first)
+  })
+
+  it('손으로 넣은 길이를 세기 슬라이더가 되돌리지 않는다', () => {
+    reset()
+    applyAt('zoom.slowIn', 1)
+    useDocumentStore.getState().setDurationFrames(90)
+    expect(useDocumentStore.getState().doc.timeline.durationFrames).toBe(90)
+
+    // 길이와 무관한 세기 노브만 움직여 재적용한다.
+    usePresetUiStore.getState().setStrength(0.55)
+    applyPresetToDocument('zoom.slowIn')
+
+    // 홀드 스냅으로 한두 프레임은 움직일 수 있다. 옛 기준선(75)으로 돌아가면 실패다.
+    expect(useDocumentStore.getState().doc.timeline.durationFrames).toBeGreaterThan(85)
+  })
+})

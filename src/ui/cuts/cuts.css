@@ -1,0 +1,97 @@
+/* 컷 패널. 도형 / 글자 패널과 같은 리듬을 쓴다. */
+
+.mm-cut-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.mm-cut-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.mm-cut-total {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-cut-hint,
+.mm-cut-notice {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+.mm-cut-notice {
+  color: var(--text);
+}
+
+.mm-cut-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mm-cut-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+}
+
+.mm-cut-item-head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+}
+
+.mm-cut-item-head .mm-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.mm-cut-index {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.mm-cut-actions {
+  display: flex;
+  gap: var(--sp-1);
+  flex: none;
+}
+
+.mm-cut-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+
+.mm-cut-count {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

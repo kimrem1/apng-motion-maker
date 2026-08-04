@@ -10,6 +10,8 @@ import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { nextId } from '@/core/factory.ts'
 import type { MotionProject } from '@/core/types.ts'
+// 패널이 아니라 비트맵 보관소다. React 도 DOM 패널도 참조하지 않는다.
+import { clearPrepOriginals } from '@/ui/prep/prepOriginals.ts'
 
 import {
   PROJECT_EXT,
@@ -173,6 +175,15 @@ export async function applyBundle(bundle: ProjectBundle): Promise<ApplyBundleRes
 
   reserveIdCounter(bundle.doc)
   useDocumentStore.getState().replaceDocument(bundle.doc)
+
+  /*
+   * 문서를 통째로 갈았다. 이전 문서의 다듬기 보관본은 id 가 같아도 다른 그림이다.
+   *
+   * 에셋 id 는 세션 카운터라 다른 파일에서도 첫 에셋이 'a1' 이다. 안 지우면 새로 연
+   * 사진의 다듬기 미리보기에 이전 사진이 뜨고, [적용] 하는 순간 캔버스가 그 옛 사진으로
+   * 바뀐다. 세션 내내 회수되지 않던 전체 해상도 사본도 여기서 함께 놓인다.
+   */
+  clearPrepOriginals()
 
   // 이전 문서에만 있던 픽셀을 놓아준다. 안 하면 파일을 열 때마다 메모리가 쌓인다.
   const keep = new Set(bundle.doc.assets.map((a) => a.id))

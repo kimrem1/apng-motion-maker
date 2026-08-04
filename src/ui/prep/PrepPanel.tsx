@@ -57,7 +57,7 @@ import { useDocumentStore } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { NumberField } from '@/ui/widgets/Field.tsx'
 import { canvasForCrop } from './trimAsset.ts'
-import { ensurePrepOriginal } from './prepOriginals.ts'
+import { ensurePrepOriginal, setPrepBase } from './prepOriginals.ts'
 
 import './prep.css'
 
@@ -553,6 +553,14 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
   async function buildResult(original: ImageBitmap): Promise<ImageBitmap> {
     let out: ImageBitmap | null = null
     if (settings.enabled) out = await removeBackground(original, toOptions(settings))
+    /*
+     * 배경 제거 결과를 '베이스' 로 등록한다. **크롭 전, 원본과 같은 크기일 때만** 이다.
+     *
+     * 이게 없으면 EASY 의 [빈 여백 잘라내기] / [직접 자르기] 가 언제나 원본에서 다시
+     * 잘라서, PRO 에서 지운 배경이 클릭 한 번에 되살아난다. 배경 제거를 끈 [적용] 은
+     * null 로 베이스를 비워 옛 베이스가 남지 않게 한다.
+     */
+    setPrepBase(asset.id, out ? await cloneBitmap(out) : null)
     if (cropRect) {
       const base = out ?? original
       const next = await cropBitmap(base, cropRect)
@@ -609,15 +617,25 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
        * 아무것도 안 잘린 것과 구별되지 않는다. 그래서 기본으로 같이 맞춘다.
        */
       if (cropRect && fitCanvas) {
-        const doc = store.doc
-        canvasBeforeRef.current = { w: doc.canvas.w, h: doc.canvas.h }
+        // **최초 적용 때의 캔버스만** 기억한다. 두 번째 적용이 덮어쓰면 [되돌리기] 가
+        // 이미 줄어든 중간 크기로 돌아간다.
+        if (!canvasBeforeRef.current) {
+          const doc = store.doc
+          canvasBeforeRef.current = { w: doc.canvas.w, h: doc.canvas.h }
+        }
         // 사용자가 크기(해상도)를 낮춰 뒀다면 그림은 원본 픽셀이 아니라 그 배율로
         // 그려지고 있다. 원본 크기로 잡으면 잘라낸 그림이 프레임 일부만 채운다.
         const canvas = canvasForCrop(asset.id, result.width, result.height)
         store.setCanvasSize(canvas.w, canvas.h)
-      } else {
+      } else if (!cropRect && canvasBeforeRef.current) {
+        // [자르기 해제] 후 [적용] 은 곧 자르기 취소다. 픽셀이 원본 크기로 돌아갔으니
+        // 캔버스도 자르기 전으로 함께 되돌린다. 안 그러면 큰 그림이 작은 프레임에 잘린다.
+        const before = canvasBeforeRef.current
+        store.setCanvasSize(before.w, before.h)
         canvasBeforeRef.current = null
       }
+      // 크롭은 있는데 fitCanvas 만 끈 경우는 기억을 유지한다. 지우면 [되돌리기] 가
+      // 캔버스를 복구하지 못한다.
       setApplied({ w: result.width, h: result.height })
     })
   }
@@ -626,6 +644,9 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
     void withBusy('되돌리기', async () => {
       const original = await ensurePrepOriginal(asset.id)
       const hasAlpha = probeAlpha(original)
+      // 전체 초기화다. 배경 제거 베이스도 함께 버린다. 남겨 두면 이 뒤의 EASY 자르기가
+      // 방금 되돌린 배경 제거를 다시 끌어온다.
+      setPrepBase(asset.id, null)
       assetRegistry.set(asset.id, await cloneBitmap(original))
       const store = useDocumentStore.getState()
       store.updateAssetPrep(asset.id, {

@@ -264,6 +264,19 @@ export function ResultPanel({
 
         {formatNote ? <p className="mm-callout">{formatNote}</p> : null}
 
+        {/*
+          인코더가 조용히 바꾼 것. 무손실을 못 만들었거나 알파를 버린 경우다.
+          여기 안 띄우면 사용자는 다른 앱에서 열어 보기 전까지 알 수 없다.
+          role 은 alert 가 아니라 status 다. 낡음 배너가 이미 alert 라 겹쳐 읽힌다.
+        */}
+        {result.warnings && result.warnings.length > 0 ? (
+          <div className="mm-callout is-warn" role="status">
+            {result.warnings.map((w) => (
+              <p key={w.code}>{w.message}</p>
+            ))}
+          </div>
+        ) : null}
+
         <div className="mm-result-actions">
           <p className="mm-field-label">마음에 안 드나요?</p>
           <div className="mm-btn-row">

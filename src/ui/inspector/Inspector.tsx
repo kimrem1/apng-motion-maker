@@ -27,6 +27,7 @@ import { AnimateToggle } from '@/ui/inspector/AnimateToggle.tsx'
 import { EffectStack } from '@/ui/effects/EffectStack.tsx'
 import { LayerProperties } from '@/ui/layers/LayerProperties.tsx'
 import { PrepPanel } from '@/ui/prep/PrepPanel.tsx'
+import { TextSection } from './TextSection.tsx'
 import { ShapeSection } from '@/ui/inspector/ShapeSection.tsx'
 import { useUiStore } from '@/state/ui.ts'
 import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
@@ -114,12 +115,44 @@ function CanvasSection() {
     setCanvasSize(cw, ch, { scaleContent: true })
   }
 
+  /*
+   * 타이핑 중간값을 문서에 넣지 않는다.
+   *
+   * NumberField 는 글자 하나마다 onChange 를 쏜다. "800" 을 치면 8 -> 80 -> 800 이
+   * 차례로 들어오는데, setCanvasSize 의 그림 배율 보정은 줄어들 때만 곱하는 래칫이라
+   * ('8' 에서 0.016배) 뒤이어 커진 값이 그것을 되돌리지 못한다. 결과적으로 폭 칸을
+   * 한 번 타이핑하는 것만으로 그림이 점으로 사라지고, 같은 숫자를 다시 쳐도 안 돌아온다.
+   * 그래서 편집이 끝날 때(블러 / Enter) 한 번만 확정한다.
+   */
+  const sizeEditingRef = useRef(false)
+  const pendingSizeRef = useRef<[number, number] | null>(null)
+
+  function requestSize(w: number, h: number): void {
+    if (sizeEditingRef.current) {
+      pendingSizeRef.current = [w, h]
+      return
+    }
+    commitSize(w, h)
+  }
+
+  function beginSizeEdit(): void {
+    sizeEditingRef.current = true
+    pendingSizeRef.current = null
+  }
+
+  function endSizeEdit(): void {
+    sizeEditingRef.current = false
+    const pending = pendingSizeRef.current
+    pendingSizeRef.current = null
+    if (pending) commitSize(pending[0], pending[1])
+  }
+
   function changeWidth(w: number): void {
-    commitSize(w, ratioLocked ? w / (ratioRef.current || 1) : canvas.h)
+    requestSize(w, ratioLocked ? w / (ratioRef.current || 1) : canvas.h)
   }
 
   function changeHeight(h: number): void {
-    commitSize(ratioLocked ? h * (ratioRef.current || 1) : canvas.w, h)
+    requestSize(ratioLocked ? h * (ratioRef.current || 1) : canvas.w, h)
   }
 
   const isSolid = canvas.background.type === 'solid'
@@ -139,6 +172,8 @@ function CanvasSection() {
             suffix="px"
             ariaLabel="캔버스 폭(px)"
             onChange={changeWidth}
+            onEditStart={beginSizeEdit}
+            onEditEnd={endSizeEdit}
           />
           <NumberField
             label="높이"
@@ -148,6 +183,8 @@ function CanvasSection() {
             suffix="px"
             ariaLabel="캔버스 높이(px)"
             onChange={changeHeight}
+            onEditStart={beginSizeEdit}
+            onEditEnd={endSizeEdit}
           />
         </div>
 
@@ -602,6 +639,7 @@ export function Inspector() {
             <LayerSection key={layer.id} layer={layer} />
             {/* 도형이면 모양부터. "이게 무엇인가" 다음에 "남들과 어떤 관계인가" 가 온다 */}
             {layer.shape ? <ShapeSection key={`shape:${layer.id}`} layer={layer} /> : null}
+          {layer.text ? <TextSection key={`text:${layer.id}`} layer={layer} /> : null}
             {/* 경계선이 지나가는 모양. 모양은 여기, 진행률은 타임라인이다 */}
             <RevealSection key={`reveal:${layer.id}`} layer={layer} />
             {/* 레이어 고유 속성: 혼합, 깊이감, 부모, 캔버스 채움, 오버스캔 진단 */}

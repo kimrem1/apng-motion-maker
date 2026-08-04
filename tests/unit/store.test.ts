@@ -521,3 +521,43 @@ describe('캔버스 크기와 손으로 넣은 위치', () => {
     expect(readStaticValue(s().doc.layers[0]!, 'translateX')).toBe(40)
   })
 })
+
+/**
+ * 프리셋 소유권 표식.
+ *
+ * 재적용(세기/속도 슬라이더)이 어느 레이어를 건드릴지는 추측이 아니라 기록으로 정한다.
+ * 트랙을 내지 않는 프리셋(흔들기/자글자글/지지직)은 props 가 비어 역추적이 불가능하다.
+ */
+describe('presetRef 기록', () => {
+  it('트랙이 없어도 대상 레이어를 남긴다', () => {
+    s().applyPresetTracks({
+      layerId: L,
+      presetId: 'shake.camera',
+      tracks: [],
+      modifiers: [],
+      macro: { speed: 1, strength: 0.5 },
+    })
+    expect(s().doc.presetRef?.layerId).toBe(L)
+    expect(s().doc.presetRef?.props).toEqual([])
+  })
+
+  it('기존 키 값만 바꿔도 손댄 것으로 표시한다', () => {
+    s().applyPresetTracks({
+      layerId: L,
+      presetId: 'zoom.pop',
+      tracks: [
+        { id: '', prop: 'scale', unit: 'ratio', keys: [
+          { f: 0, v: 0.86, interp: 'bezier' },
+          { f: 10, v: 1, interp: 'bezier' },
+        ] },
+      ],
+      modifiers: [],
+      macro: { speed: 1, strength: 0.5 },
+    })
+    expect(s().doc.presetRef?.dirty).toBe(false)
+
+    // 프리셋 트랙은 f:0 에 키가 있다. 기본 재생 헤드에서 고치면 '기존 키 갱신' 분기다.
+    s().setValueAtFrame(L, 'scale', 0, 1.2)
+    expect(s().doc.presetRef?.dirty).toBe(true)
+  })
+})

@@ -15,6 +15,7 @@ import type {
   TrackUnit,
 } from './types.ts'
 import { identityTransform } from './transform.ts'
+import { layerTimeGate } from './cuts.ts'
 import { evalTrack } from '@/easing/curve.ts'
 import { evalModifier } from '@/motions/generators.ts'
 
@@ -26,6 +27,8 @@ const DEFAULT_COMPOSITE: Record<TrackProp, CompositeOp> = {
   opacity: 'multiply',
   // 가리기는 투명도와 같은 규칙이다. 항등값 1 에 곱해지므로 트랙 하나면 그 값이 그대로다.
   reveal: 'multiply',
+  // 글자 등장도 같다.
+  charIn: 'multiply',
   translateX: 'add',
   translateY: 'add',
   rotate: 'add',
@@ -108,6 +111,9 @@ function writeChannel(
       return
     case 'reveal':
       t.reveal = applyOp(t.reveal, value, op)
+      return
+    case 'charIn':
+      t.charIn = applyOp(t.charIn, value, op)
       return
     case 'translateX':
       t.translateX = applyOp(t.translateX, value, op)
@@ -249,10 +255,19 @@ export function resolveComposition(
       transform.scaleY *= need.correction
     }
 
+    /*
+     * 레이어 구간(컷).
+     *
+     * 구간 밖이면 아예 그리지 않고, 구간 안쪽 페이드는 투명도에 곱한다.
+     * 구간이 없는 레이어는 gate 가 언제나 1 이라 옛 문서의 픽셀이 바뀌지 않는다.
+     */
+    const gate = layerTimeGate(layer, frame)
+    if (gate < 1) transform.opacity *= gate
+
     resolved.push({
       layerId: layer.id,
       assetId: layer.assetId,
-      visible: layer.visible,
+      visible: layer.visible && gate > 0,
       z: layer.z,
       fit: layer.fit,
       blend: layer.blend,
@@ -262,6 +277,9 @@ export function resolveComposition(
       // 확인하는 테스트가 있어서 undefined 를 실어 보내도 결과는 같지만,
       // 뜻이 없는 키를 남기지 않는 편이 읽기 쉽다.
       ...(layer.shape ? { shape: layer.shape } : {}),
+      ...(layer.text ? { text: layer.text } : {}),
+      // 글자 등장도 'none' 이면 싣지 않는다. 렌더러가 글자별 계산을 통째로 건너뛴다.
+      ...(layer.charAnim && layer.charAnim.mode !== 'none' ? { charAnim: layer.charAnim } : {}),
       // 가리기도 같은 규칙이다. 'none' 이면 아예 싣지 않아 렌더러가 유니폼조차 만지지 않는다.
       ...(layer.reveal && layer.reveal.mode !== 'none' ? { reveal: layer.reveal } : {}),
     })

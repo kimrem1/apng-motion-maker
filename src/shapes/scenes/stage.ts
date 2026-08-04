@@ -383,7 +383,10 @@ export const STAGE_SCENES: ShapeScene[] = [
           strokeWidth: stroke,
           sweepDeg: 120,
         }),
-        reveal: createRevealSpec('clock', { softness: 0.01, angle: deg - 60 }),
+        // 가리기 각도는 레이어 로컬 기준이다(shaders/reveal.ts 계약). 회전 deg 를 더하면
+        // 이중 계산이라 아래쪽 호가 진행률 0.5 전까지 한 픽셀도 안 그려진다.
+        // -60 은 sweepDeg 120 인 호의 시작 모서리다.
+        reveal: createRevealSpec('clock', { softness: 0.01, angle: -60 }),
         tracks: [
           fixed('rotate', 'deg', deg),
           revealTrack([at[0]!, at[1]!, at[3]!, at[4]!]),

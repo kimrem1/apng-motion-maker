@@ -40,6 +40,7 @@ import {
   reapplyAppliedPresetSoon,
   resolveTargetLayerId,
 } from '@/state/presetActions.ts'
+import { useLayerUiStore } from '@/state/layerUi.ts'
 import { MAX_COMPARE, usePresetUiStore } from '@/state/presetUi.ts'
 import { SPEED_STEP, formatDurationSec, pFromSpeed, speedFromP } from '@/state/speedScale.ts'
 import { useUiStore } from '@/state/ui.ts'
@@ -327,7 +328,8 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           bitmap: imported.bitmap,
           hasAlpha: imported.hasAlpha,
         })
-        useUiStore.getState().selectLayer(layerId)
+        // 선택의 정본은 layerUi 다 (state/layerUi.ts 머리말).
+        useLayerUiStore.getState().setSelectedLayerIds([layerId], layerId)
 
         const applied = usePresetUiStore.getState().appliedId
         if (applied) applyPresetToDocument(applied)

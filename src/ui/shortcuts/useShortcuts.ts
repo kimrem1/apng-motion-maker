@@ -133,6 +133,16 @@ function makeHandler(command: Command, binding: string) {
   const ownsKey = needsPlatformMod(binding)
   return (event: KeyboardEvent): void => {
     if (!enabled) return
+    /*
+     * 이미 처리된 키는 건드리지 않는다.
+     *
+     * tinykeys 는 window 에 걸리고 React 리스너는 #root 에 걸린다. 즉 패널이 자기
+     * 키를 처리한 뒤에도 같은 네이티브 이벤트가 여기까지 올라온다. 이 가드가 없으면
+     * 타임라인의 Delete 가 키프레임을 지운 다음 전역 삭제가 레이어까지 지우고,
+     * 레이어 행의 Delete 는 두 장을 지우며, 화살표는 재생 헤드를 2프레임씩 민다.
+     * preventDefault 를 부른 쪽이 그 키의 주인이다.
+     */
+    if (event.defaultPrevented) return
     if (hasForeignModal()) return
     if (getOverlay() !== null && command.overlaySafe !== true) return
     if (!contextAllows(binding, event)) return

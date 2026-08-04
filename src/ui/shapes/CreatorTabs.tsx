@@ -13,12 +13,16 @@ import { useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 import { PresetGallery } from '@/ui/presets/PresetGallery.tsx'
 import { useShapeUiStore, type CreatorTab } from '@/state/shapeUi.ts'
+import { CutPanel } from '@/ui/cuts/CutPanel.tsx'
+import { TextGallery } from '@/ui/text/TextGallery.tsx'
 import { ShapeGallery } from './ShapeGallery.tsx'
 import './shapes.css'
 
 const TABS: readonly { id: CreatorTab; label: string }[] = [
   { id: 'motion', label: '모션' },
   { id: 'shape', label: '도형' },
+  { id: 'text', label: '글자' },
+  { id: 'cut', label: '컷' },
 ]
 
 export function CreatorTabs() {
@@ -83,9 +87,17 @@ export function CreatorTabs() {
         id="mm-tabpanel-creator"
         role="tabpanel"
         className="mm-dock-panel-body"
-        aria-labelledby={tab === 'motion' ? 'mm-tab-motion' : 'mm-tab-shape'}
+        aria-labelledby={`mm-tab-${tab}`}
       >
-        {tab === 'motion' ? <PresetGallery /> : <ShapeGallery />}
+        {tab === 'motion' ? (
+          <PresetGallery />
+        ) : tab === 'shape' ? (
+          <ShapeGallery />
+        ) : tab === 'text' ? (
+          <TextGallery />
+        ) : (
+          <CutPanel />
+        )}
       </div>
     </div>
   )

@@ -102,6 +102,7 @@ const PROP_LABEL: Record<TrackProp, string> = {
   skewY: '세로 기울기',
   opacity: '투명도',
   reveal: '가리기',
+  charIn: '글자 등장',
   anchorX: '기준점 가로',
   anchorY: '기준점 세로',
 }

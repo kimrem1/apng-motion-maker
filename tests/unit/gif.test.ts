@@ -110,7 +110,8 @@ describe('encodeGif -> parseGifHeader 왕복', () => {
     expect(parseGifHeader(bytes).loopCount).toBe(0)
   })
 
-  it('loopCount 3 은 NETSCAPE 3 으로 왕복한다', async () => {
+  it('loopCount 3(3회 재생) 은 NETSCAPE 2 로 왕복한다', async () => {
+    // loopCount 는 '재생 횟수'다. NETSCAPE 값은 첫 재생을 뺀 추가 반복이라 하나 작다.
     const bytes = await encodeGif(framesAt(20, RED_GREEN_BLUE_WHITE), {
       width: W,
       height: H,
@@ -120,7 +121,7 @@ describe('encodeGif -> parseGifHeader 왕복', () => {
       dither: 0,
     })
 
-    expect(parseGifHeader(bytes).loopCount).toBe(3)
+    expect(parseGifHeader(bytes).loopCount).toBe(2)
   })
 
   it('loopCount 1 은 NETSCAPE 확장 자체를 쓰지 않는다', async () => {
@@ -138,12 +139,17 @@ describe('encodeGif -> parseGifHeader 왕복', () => {
 })
 
 describe('loopCountToRepeat', () => {
-  it('0 은 무한, 1 은 -1, n 은 n 이다', () => {
+  it('0 은 무한, 1 은 -1, n 회 재생은 추가 반복 n-1 이다', () => {
     expect(loopCountToRepeat(0)).toBe(0)
     expect(loopCountToRepeat(1)).toBe(-1)
-    expect(loopCountToRepeat(2)).toBe(2)
-    expect(loopCountToRepeat(7)).toBe(7)
+    expect(loopCountToRepeat(2)).toBe(1)
+    expect(loopCountToRepeat(7)).toBe(6)
     expect(loopCountToRepeat(-3)).toBe(0)
+  })
+
+  it('2회 재생이 확장 생략(-1)으로 뭉개지지 않는다', () => {
+    // 여기가 뭉개지면 "반복 2회" GIF 가 1회만 재생된다. 1 과 2 는 반드시 갈려야 한다.
+    expect(loopCountToRepeat(2)).not.toBe(loopCountToRepeat(1))
   })
 })
 

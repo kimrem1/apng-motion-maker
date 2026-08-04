@@ -193,6 +193,33 @@ export function fitWithin(
   }
 }
 
+/**
+ * 내보내기 크기를 **지금 캔버스 비율**에 다시 맞춘다. 긴 변 길이는 그대로 둔다.
+ *
+ * ---------------------------------------------------------------------------
+ * 왜 필요한가
+ * ---------------------------------------------------------------------------
+ * 렌더러는 정점을 `doc.canvas` 픽셀 좌표로 만들고(canvasToClip), 그 결과를
+ * `settings.width x settings.height` 뷰포트에 늘려 담는다. 두 비율이 어긋나면
+ * 어긋난 만큼 **그림이 정확히 늘어난다.**
+ *
+ * 내보내기 대화상자는 닫혀 있어도 마운트된 채라, `사용자 지정` 설정은 앱을 켠
+ * 순간의 캔버스 크기로 초기화된 뒤 그대로 남는다. 그 상태에서 이미지를 넣거나
+ * 자르기로 캔버스 비율이 바뀌면, 사양 라디오를 다른 것으로 갔다 오기 전까지
+ * 옛 비율이 그대로 쓰인다. 그래서 크기 계산을 상태가 아니라 이 함수에 맡긴다.
+ */
+export function fitSettingsToCanvas(
+  settings: ExportSettings,
+  canvasW: number,
+  canvasH: number,
+): ExportSettings {
+  const longest = Math.max(settings.width, settings.height)
+  if (!Number.isFinite(longest) || longest <= 0) return settings
+  const fitted = fitWithin(canvasW, canvasH, longest)
+  if (fitted.width === settings.width && fitted.height === settings.height) return settings
+  return { ...settings, ...fitted }
+}
+
 export function settingsForPurpose(
   purpose: ExportPurpose,
   canvasW: number,

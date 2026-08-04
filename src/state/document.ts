@@ -22,6 +22,8 @@ import {
   type AssetRef,
   type BackgroundType,
   type BlendMode,
+  type CharAnimSpec,
+  type CutSpec,
   type FitMode,
   type FrameFit,
   type Handle,
@@ -33,6 +35,7 @@ import {
   type MotionProject,
   type RevealSpec,
   type ShapeSpec,
+  type TextSpec,
   type Track,
   type TrackProp,
 } from '@/core/types.ts'
@@ -41,14 +44,18 @@ import {
   createEmptyProject,
   createImageLayer,
   createShapeLayer,
+  createTextLayer,
   createStaticTrack,
   nextId,
 } from '@/core/factory.ts'
 import { normalizeShapeSpec } from '@/core/shape.ts'
+import { normalizeTextSpec } from '@/core/text.ts'
+import { createCharAnimSpec, normalizeCharAnimSpec } from '@/core/charAnim.ts'
 import { createRevealSpec, normalizeRevealSpec } from '@/core/reveal.ts'
 import { evalTrack, insertKeyframe } from '@/easing/curve.ts'
 import { EASING_PRESET_BY_ID } from '@/easing/presets.ts'
 import {
+  mergePresetCharAnim,
   mergePresetEffects,
   mergePresetPerspective,
   mergePresetReveal,
@@ -149,6 +156,12 @@ interface DocumentState {
    */
   addShape(input: { name: string; shape: ShapeSpec }): { layerId: string }
   /**
+   * 글자 레이어 한 장을 만든다.
+   *
+   * addShape 와 같은 규칙이다. 캔버스를 건드리지 않고 이미 잡힌 캔버스에 얹는다.
+   */
+  addText(input: { name: string; text: TextSpec }): { layerId: string }
+  /**
    * 도형 모션 세트를 통째로 심는다.
    *
    * 레이어마다 addShape 를 부르면 안 된다. 물결 파동 하나가 실행취소 세 칸을 먹고,
@@ -157,6 +170,14 @@ interface DocumentState {
   addShapeScene(input: AddShapeSceneInput): { layerIds: string[] }
   /** 도형의 모양을 바꾼다. 값 규칙은 core/shape.ts 한 곳에만 있다. */
   setShapeSpec(layerId: string, patch: Partial<ShapeSpec>): void
+  /** 글자 내용과 모양을 바꾼다. 값 규칙은 core/text.ts 한 곳에만 있다. */
+  setTextSpec(layerId: string, patch: Partial<TextSpec>): void
+  /**
+   * 글자가 들어오는 모양을 바꾼다. 값 규칙은 core/charAnim.ts 한 곳에만 있다.
+   *
+   * 'none' 으로 되돌리면 필드를 지운다. 가리기와 같은 이유다(저장 JSON 왕복).
+   */
+  setLayerCharAnim(layerId: string, patch: Partial<CharAnimSpec>): void
   /**
    * 가리기 모양을 바꾼다. 값 규칙은 core/reveal.ts 한 곳에만 있다.
    *
@@ -242,6 +263,8 @@ interface DocumentState {
      * 갈아탈 때 앞 프리셋의 경계선이 남아 있으면 안 된다. 없으면 지운다.
      */
     reveal?: RevealSpec
+    /** 이 프리셋이 요구하는 글자 등장 모양. 가리기와 같은 규칙이다. */
+    charAnim?: CharAnimSpec
     /** 3D 회전에 쓰는 카메라 거리. 없으면 지운다(기본값으로 되돌아간다). */
     perspective?: number
     /** 속도 1 기준 재생 시간(초). 속도 노브의 기준선이다. */
@@ -298,6 +321,21 @@ interface DocumentState {
   setBackgroundColor(color: string): void
   setFps(fps: number): void
   setDurationFrames(frames: number): void
+  /**
+   * 컷 목록과 타임라인 길이를 한 번에 쓴다.
+   *
+   * 둘을 따로 쓰면 실행취소가 두 칸 쌓이고 그 사이에 길이만 바뀐 문서가 남는다.
+   * 컷이 한 개뿐이면 목록을 지운다. 한 컷짜리 문서는 컷이 없는 문서와 같다.
+   */
+  setCuts(cuts: CutSpec[], durationFrames: number, label: string, coalesceKey?: string): void
+  /**
+   * 레이어가 보이는 구간을 정한다. null 이면 구간을 지워 처음부터 끝까지 보이게 한다.
+   * 여러 장을 한 번에 바꾸는 이유는 컷 배정이 언제나 여러 장을 함께 옮기기 때문이다.
+   */
+  setLayerRange(
+    layerIds: readonly string[],
+    range: { inFrame: number; outFrame: number; inFade?: number; outFade?: number } | null,
+  ): void
   setLoopMode(mode: LoopMode): void
   setLoopCount(count: number): void
 
@@ -540,6 +578,16 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       return { layerId }
     },
 
+    addText({ name, text }) {
+      let layerId = ''
+      mutateDoc('글자 추가', (d) => {
+        const layer = createTextLayer(normalizeTextSpec(text), name, d.layers.length)
+        layerId = layer.id
+        d.layers.push(layer)
+      })
+      return { layerId }
+    },
+
     addShapeScene({ label, layers, durationFrames, loopMode, fps, replace, coalesceKey }) {
       const layerIds: string[] = []
       mutateDoc(
@@ -607,6 +655,38 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           layer.shape = normalizeShapeSpec({ ...layer.shape, ...patch })
         },
         `shape:${layerId}`,
+      )
+    },
+
+    setTextSpec(layerId, patch) {
+      mutateDoc(
+        '글자 바꾸기',
+        (d) => {
+          const layer = findLayer(d, layerId)
+          if (!layer || !layer.text) return
+          layer.text = normalizeTextSpec({ ...layer.text, ...patch })
+        },
+        `text:${layerId}`,
+      )
+    },
+
+    setLayerCharAnim(layerId, patch) {
+      mutateDoc(
+        '글자 등장 변경',
+        (d) => {
+          const layer = findLayer(d, layerId)
+          if (!layer) return
+          const next = normalizeCharAnimSpec({
+            ...createCharAnimSpec('none'),
+            ...layer.charAnim,
+            ...patch,
+          })
+          if (next.mode === 'none') delete layer.charAnim
+          else layer.charAnim = next
+          // 손으로 만졌으므로 EASY 의 세기/속도 슬라이더가 이 값을 덮지 않게 한다.
+          markPresetDirty(d)
+        },
+        `charAnim:${layerId}`,
       )
     },
 
@@ -890,7 +970,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
     },
 
-    applyPresetTracks({ layerId, presetId, tracks, modifiers, effects, durationFrames, loopMode, fps, allowExit, containScale, reveal, perspective, baseSec, baseFps, macro }) {
+    applyPresetTracks({ layerId, presetId, tracks, modifiers, effects, durationFrames, loopMode, fps, allowExit, containScale, reveal, charAnim, perspective, baseSec, baseFps, macro }) {
       mutateDoc('모션 프리셋 적용', (d) => {
         const layer = findLayer(d, layerId)
         if (!layer) return
@@ -917,6 +997,10 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         if (nextReveal) layer.reveal = normalizeRevealSpec(nextReveal)
         else delete layer.reveal
 
+        const nextCharAnim = mergePresetCharAnim(layer.charAnim, charAnim, owned)
+        if (nextCharAnim) layer.charAnim = normalizeCharAnimSpec(nextCharAnim)
+        else delete layer.charAnim
+
         const nextPerspective = mergePresetPerspective(layer.perspective, perspective, owned)
         if (nextPerspective !== undefined) {
           layer.perspective = clamp(nextPerspective, 0, PERSPECTIVE_MAX)
@@ -935,12 +1019,16 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
 
         d.presetRef = {
           id: presetId,
+          // 재적용 대상을 추측하지 않고 기록한다. 트랙을 내지 않는 프리셋
+          // (흔들기/자글자글/지지직)은 props 가 비어 소유 레이어를 역추적할 수 없다.
+          layerId,
           macro: { ...macro },
           dirty: false,
           props: tracks.map((t) => t.prop),
           effectIds: nextFx.map((e) => e.id),
           // 다음 프리셋이 "이건 내가 지워도 되는 것" 을 알아보는 표식이다.
           ...(reveal && reveal.mode !== 'none' ? { ownsReveal: true } : {}),
+          ...(charAnim && charAnim.mode !== 'none' ? { ownsCharAnim: true } : {}),
           ...(perspective !== undefined ? { ownsPerspective: true } : {}),
           // 요청한 기준선을 그대로 보관한다. 지금 durationFrames 는 프리셋이 홀드
           // 배수로 스냅한 결과라, 그걸 되먹이면 속도를 왕복할 때마다 길이가 늘어난다.
@@ -982,6 +1070,10 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         const at = track.keys.find((k) => k.f === frame)
         if (at) {
           at.v = value
+          // 새 키를 만들 때와 같다. 값만 바꾼 것도 PRO 편집이므로 EASY 슬라이더의
+          // 재적용이 이 값을 덮지 않게 막는다. 프리셋 트랙은 f:0 에 키가 있어서
+          // 기본 재생 헤드(0)에서 고치면 항상 이 분기로 들어온다.
+          markPresetDirty(d)
           return
         }
         track.keys.push({ f: frame, v: value, interp: 'bezier' })
@@ -1212,7 +1304,51 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
     setDurationFrames(frames) {
       mutateDoc('길이 변경', (d) => {
         d.timeline.durationFrames = clamp(Math.round(frames), 2, FRAMES_MAX)
+        // setFps 가 baseFps 를 갱신하는 것과 같은 이유다. 사용자가 직접 넣은 길이가
+        // 곧 새 기준선이다. 갱신하지 않으면 세기 슬라이더를 한 번 스치는 순간
+        // 재적용이 옛 baseSec 으로 길이를 되돌려 방금 넣은 값이 사라진다.
+        // baseSec 은 속도 1 기준이므로 지금 macro.speed 를 곱해 되짚는다.
+        if (d.presetRef && d.timeline.fps > 0) {
+          d.presetRef.baseSec =
+            (d.timeline.durationFrames / d.timeline.fps) * d.presetRef.macro.speed
+        }
       }, 'duration')
+    },
+
+    setCuts(cuts, durationFrames, label, coalesceKey) {
+      mutateDoc(
+        label,
+        (d) => {
+          if (cuts.length <= 1) delete d.cuts
+          else d.cuts = cuts.map((c) => ({ ...c }))
+          d.timeline.durationFrames = clamp(Math.round(durationFrames), 2, FRAMES_MAX)
+        },
+        coalesceKey,
+      )
+    },
+
+    setLayerRange(layerIds, range) {
+      const ids = new Set(layerIds)
+      mutateDoc(range ? '컷에 넣기' : '구간 해제', (d) => {
+        for (const layer of d.layers) {
+          if (!ids.has(layer.id)) continue
+          if (!range) {
+            delete layer.inFrame
+            delete layer.outFrame
+            delete layer.inFade
+            delete layer.outFade
+            continue
+          }
+          layer.inFrame = Math.max(0, Math.round(range.inFrame))
+          layer.outFrame = Math.max(layer.inFrame, Math.round(range.outFrame))
+          // 0 이면 키를 남기지 않는다. 아무 일도 하지 않는 값이 저장 파일에 남으면
+          // 왕복 JSON 이 달라진다 (도형 / 가리기와 같은 규칙).
+          if (range.inFade && range.inFade > 0) layer.inFade = Math.round(range.inFade)
+          else delete layer.inFade
+          if (range.outFade && range.outFade > 0) layer.outFade = Math.round(range.outFade)
+          else delete layer.outFade
+        }
+      })
     },
 
     setLoopMode(mode) {

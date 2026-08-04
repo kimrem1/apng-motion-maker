@@ -216,6 +216,15 @@ async function trimSnapshots(db: IDBPDatabase<AutosaveDB>): Promise<void> {
 
 let docDirty = false
 let assetsDirty = false
+/**
+ * 마지막으로 assets 스토어에 반영한 문서의 에셋 id 집합.
+ *
+ * assetsDirty 는 assetRegistry 리비전(=픽셀 교체)으로만 켜진다. 레이어 삭제와
+ * 실행취소는 리비전을 올리지 않으므로, 그것만 보면 "스냅샷이 참조하는 id" 와
+ * "IDB assets 의 키" 가 갈린 채로 굳는다. 삭제 -> 다른 이미지 편집(정리 루프가 바이트를
+ * 지움) -> 실행취소 순서면 화면에는 멀쩡한 이미지가 복구 시 사라진다.
+ */
+let savedAssetIds = new Set<string>()
 
 /**
  * 저장은 직렬화한다.
@@ -241,7 +250,15 @@ async function runSave(): Promise<boolean> {
   try {
     const db = await getDb()
     const doc = useDocumentStore.getState().doc
-    if (wantAssets) await writeAssets(db, doc)
+    // 픽셀이 바뀌었거나(리비전), 문서가 참조하는 에셋 집합이 바뀌었으면 다시 쓴다.
+    const docAssetIds = doc.assets.map((a) => a.id)
+    const membershipChanged =
+      docAssetIds.length !== savedAssetIds.size || docAssetIds.some((id) => !savedAssetIds.has(id))
+    if (wantAssets || membershipChanged) {
+      await writeAssets(db, doc)
+      // 던지면 갱신되지 않는다. catch 가 docDirty 를 되돌려 다음 flush 에서 재시도된다.
+      savedAssetIds = new Set(docAssetIds)
+    }
 
     const at = Date.now()
     await db.add('snapshots', { at, layerCount: doc.layers.length, doc: JSON.stringify(doc) })
@@ -344,6 +361,14 @@ async function latestSnapshot(db: IDBPDatabase<AutosaveDB>): Promise<SnapshotRec
 }
 
 export interface RecoveryInfo {
+  /**
+   * 배너가 안내한 바로 그 스냅샷의 키. 복구는 이 키로만 한다.
+   *
+   * 배너는 비모달이라 사용자가 [복구] 를 누르기 전에 캔버스나 반복을 건드릴 수 있고,
+   * 그러면 800ms 뒤 자동저장이 **빈 문서 스냅샷**을 새로 쌓는다. 그때 "마지막 스냅샷"
+   * 으로 복구하면 배너가 알려 준 5장짜리 작업 대신 빈 문서가 열리고 undo 스택까지 비워진다.
+   */
+  id: number
   /** 스냅샷 시각 (epoch ms) */
   at: number
   layerCount: number
@@ -358,18 +383,28 @@ export async function hasRecovery(): Promise<RecoveryInfo | null> {
     if (!snapshot) return null
     // 빈 문서는 복구할 것이 없다. 배너만 뜨면 사용자를 혼란스럽게 한다.
     if (snapshot.layerCount === 0) return null
-    return { at: snapshot.at, layerCount: snapshot.layerCount }
+    // autoIncrement 라 읽어온 레코드에는 항상 키가 있다.
+    if (snapshot.id === undefined) return null
+    return { id: snapshot.id, at: snapshot.at, layerCount: snapshot.layerCount }
   } catch {
     return null
   }
 }
 
-/** 마지막 스냅샷으로 되돌린다. 현재 문서는 교체된다. */
-export async function restoreRecovery(): Promise<boolean> {
+/**
+ * 지정한 스냅샷으로 되돌린다. 키를 주지 않으면 마지막 스냅샷이다. 현재 문서는 교체된다.
+ *
+ * 배너가 안내한 키를 그대로 받아야 한다. 배너를 띄운 뒤 자동저장이 빈 스냅샷을
+ * 몇 개 쌓아도 복구 대상이 흔들리지 않는다.
+ */
+export async function restoreRecovery(id?: number): Promise<boolean> {
   try {
     const db = await getDb()
-    const snapshot = await latestSnapshot(db)
+    const snapshot =
+      id !== undefined ? ((await db.get('snapshots', id)) ?? null) : await latestSnapshot(db)
     if (!snapshot) return false
+    // hasRecovery 의 가드와 짝이다. 빈 스냅샷으로 작업을 덮지 않는다.
+    if (snapshot.layerCount === 0) return false
 
     const { doc } = migrateProject(snapshot.doc)
     const assets = new Map<string, Uint8Array>()
@@ -407,6 +442,8 @@ export async function clearAutosave(): Promise<void> {
     await db.clear('snapshots')
     await db.clear('assets')
     encodedBitmaps.clear()
+    // 이게 없으면 스토어를 비운 뒤에도 멤버십이 같다고 판정해 픽셀이 다시 안 써진다.
+    savedAssetIds.clear()
     setCleanFlag(true)
   } catch {
     // 지우기 실패는 사용자가 할 수 있는 일이 없다. 알리지 않는다.

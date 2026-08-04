@@ -25,6 +25,7 @@ import {
   GIF_EXACT_FPS,
   SPEED_MAX,
   SPEED_MIN,
+  type CharAnimSpec,
   type EffectInstance,
   type Layer,
   type LoopMode,
@@ -35,10 +36,12 @@ import {
 } from '@/core/types.ts'
 import { solveLayerContain } from '@/core/overscan.ts'
 import { normalizeRevealSpec } from '@/core/reveal.ts'
+import { normalizeCharAnimSpec } from '@/core/charAnim.ts'
 import { layerIntrinsicSize } from '@/core/shape.ts'
 import type { EmitContext, MotionPreset, PresetEmission } from './types.ts'
 import { MOTION_PRESET_BY_ID, applyPreset, resolveParams } from './registry.ts'
 import {
+  mergePresetCharAnim,
   mergePresetEffects,
   mergePresetPerspective,
   mergePresetReveal,
@@ -93,6 +96,10 @@ export interface PresetApplyResult {
    * 담기가 필요 없는 모션이면 없다.
    */
   containScale?: number
+  /**
+   * 프리셋이 요구하는 글자 등장 모양. Layer.charAnim 으로 들어간다.
+   */
+  charAnim?: CharAnimSpec
   /**
    * 프리셋이 요구하는 가리기 모양. Layer.reveal 로 들어간다.
    *
@@ -250,6 +257,7 @@ interface ReadEmission {
   effects?: EffectInstance[]
   suggestedFps?: number
   reveal?: RevealSpec
+  charAnim?: CharAnimSpec
   perspective?: number
 }
 
@@ -262,6 +270,11 @@ function readEmission(emission: PresetEmission): ReadEmission {
   const effects = Array.isArray(e['effects']) ? (e['effects'] as EffectInstance[]) : undefined
   const fps = readNumber(e, ['suggestedFps'])
   // 값 규칙은 core/reveal.ts 한 곳에만 있다. 'none' 은 가리기가 없는 것과 같다.
+  const rawCharAnim = e['charAnim']
+  const charAnim =
+    rawCharAnim && typeof rawCharAnim === 'object'
+      ? normalizeCharAnimSpec(rawCharAnim as Partial<CharAnimSpec>)
+      : undefined
   const rawReveal = e['reveal']
   const reveal =
     typeof rawReveal === 'object' && rawReveal !== null
@@ -277,6 +290,7 @@ function readEmission(emission: PresetEmission): ReadEmission {
     // 0 이하 fps 는 타임라인을 멈춘다. 읽지 않은 것과 같이 다룬다.
     ...(fps !== undefined && fps > 0 ? { suggestedFps: fps } : {}),
     ...(reveal && reveal.mode !== 'none' ? { reveal } : {}),
+    ...(charAnim && charAnim.mode !== 'none' ? { charAnim } : {}),
     ...(perspective !== undefined && perspective >= 0 ? { perspective } : {}),
   }
 }
@@ -381,11 +395,17 @@ export function applyPresetToLayer(args: PresetApplyArgs): PresetApplyResult {
   /*
    * 기준선(초) -> 목표 시간(초) -> fps -> 프레임 수. 이 순서를 지켜야 한다.
    *
-   * 첫 적용이면 문서에 기준선이 없으므로 프리셋 권장 길이를 기준선으로 삼는다.
-   * 두 번째부터는 presetRef.baseSec 이 진실이라 몇 번을 눌러도 같은 결과가 나온다.
+   * 그 프리셋의 기준선이 문서에 없으면(첫 적용이거나 다른 프리셋으로 갈아탔으면)
+   * 프리셋 권장 길이를 기준선으로 삼는다. 같은 프리셋을 다시 누르면 presetRef.baseSec 이
+   * 진실이라 몇 번을 눌러도 같은 결과가 나온다.
+   *
+   * id 를 안 보면 처음 누른 카드 하나가 이후 모든 프리셋의 길이를 지배해
+   * defaultDurationMs 가 문서당 1회만 읽힌다. 4초짜리 훑기 다음에 고른 0.5초짜리
+   * 튀어오름이 4초 동안 늘어진다.
    */
   const stored = args.doc.presetRef?.baseSec
-  const hasStored = typeof stored === 'number' && Number.isFinite(stored) && stored > 0
+  const samePreset = args.doc.presetRef?.id === args.presetId
+  const hasStored = samePreset && typeof stored === 'number' && Number.isFinite(stored) && stored > 0
   const baseSec = hasStored ? baselineSec(args.doc) : presetDurationMs(preset) / 1000
   const targetSec = baseSec / speed
   // 천장은 지금 fps 가 아니라 사용자가 고른 fps 다. 지금 fps 를 천장으로 쓰면
@@ -432,6 +452,7 @@ export function applyPresetToLayer(args: PresetApplyArgs): PresetApplyResult {
   if (read.effects) result.effects = read.effects
   if (read.suggestedFps !== undefined) result.suggestedFps = read.suggestedFps
   if (read.reveal) result.reveal = read.reveal
+  if (read.charAnim) result.charAnim = read.charAnim
   if (read.perspective !== undefined) result.perspective = read.perspective
   if (!allowExit) {
     const reference = containReferenceScale({
@@ -611,6 +632,7 @@ export function withPresetApplied(
            * 소유권 규칙도 확정 적용과 **같은 헬퍼**를 써야 두 결과가 갈리지 않는다.
            */
           reveal: mergePresetReveal(layer.reveal, result.reveal, owned),
+          charAnim: mergePresetCharAnim(layer.charAnim, result.charAnim, owned),
           perspective: mergePresetPerspective(layer.perspective, result.perspective, owned),
         }
       : layer,

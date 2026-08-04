@@ -44,8 +44,11 @@ import {
   type MotionProject,
   type RevealSpec,
   type SafeZonePolicy,
+  type CharAnimSpec,
+  type CutSpec,
   type ShapeSpec,
   type SpringFit,
+  type TextSpec,
   type SpringSpec,
   type Track,
   type TrackProp,
@@ -54,6 +57,9 @@ import {
 import { TRACK_DEFAULTS, createEmptyProject } from '@/core/factory.ts'
 import { normalizeShapeSpec } from '@/core/shape.ts'
 import { normalizeRevealSpec } from '@/core/reveal.ts'
+import { normalizeTextSpec } from '@/core/text.ts'
+import { normalizeCharAnimSpec } from '@/core/charAnim.ts'
+import { normalizeCut } from '@/core/cuts.ts'
 import { EFFECT_BY_ID } from '@/effects/registry.ts'
 
 // ---------------------------------------------------------------------------
@@ -79,7 +85,7 @@ const BACKGROUND_TYPES: BackgroundType[] = ['alpha', 'solid', 'blurExtend', 'mir
 const SAFE_POLICIES: SafeZonePolicy[] = ['autoFit', 'backgroundFill', 'warn', 'allowEmpty']
 const FIT_MODES: FitMode[] = ['cover', 'contain', 'fill', 'none']
 const BLEND_MODES: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'lighten', 'darken']
-const LAYER_TYPES: LayerType[] = ['image', 'solid', 'group', 'shape']
+const LAYER_TYPES: LayerType[] = ['image', 'solid', 'group', 'shape', 'text']
 const SPRING_MODES: SpringSpec['mode'][] = ['physical', 'visual']
 const SPRING_FITS: SpringFit[] = ['springDrivesDuration', 'fitToDuration']
 
@@ -559,6 +565,38 @@ function normalizeLayer(
     ...(isRecord(raw.shape)
       ? { shape: { ...raw.shape, ...normalizeShapeSpec(raw.shape as Partial<ShapeSpec>) } }
       : {}),
+    /*
+     * 레이어 구간(컷). 있을 때만 넣는다.
+     *
+     * 구간이 없는 레이어는 처음부터 끝까지 보인다. 0 이나 undefined 를 넣어 두면
+     * 구간이 있는 것처럼 보여 페이드 계산이 도는데, 그건 옛 문서의 그림을 바꾼다.
+     */
+    ...(typeof raw.inFrame === 'number' && Number.isFinite(raw.inFrame)
+      ? { inFrame: Math.max(0, Math.round(raw.inFrame)) }
+      : {}),
+    ...(typeof raw.outFrame === 'number' && Number.isFinite(raw.outFrame)
+      ? { outFrame: Math.max(0, Math.round(raw.outFrame)) }
+      : {}),
+    ...(typeof raw.inFade === 'number' && raw.inFade > 0
+      ? { inFade: Math.round(raw.inFade) }
+      : {}),
+    ...(typeof raw.outFade === 'number' && raw.outFade > 0
+      ? { outFade: Math.round(raw.outFade) }
+      : {}),
+    // 글자도 도형과 같은 규칙이다. 값 규칙은 core/text.ts 한 곳에만 있다.
+    ...(isRecord(raw.text)
+      ? { text: { ...raw.text, ...normalizeTextSpec(raw.text as Partial<TextSpec>) } }
+      : {}),
+    // 글자 등장도 같다. 'none' 이면 아무 일도 하지 않으므로 키를 남기지 않는다.
+    ...(isRecord(raw.charAnim) &&
+    normalizeCharAnimSpec(raw.charAnim as Partial<CharAnimSpec>).mode !== 'none'
+      ? {
+          charAnim: {
+            ...raw.charAnim,
+            ...normalizeCharAnimSpec(raw.charAnim as Partial<CharAnimSpec>),
+          },
+        }
+      : {}),
     // 가리기도 도형과 같은 규칙이다. 있을 때만 넣고 값 규칙은 core/reveal.ts 한 곳에만 있다.
     ...(isRecord(raw.reveal)
       ? { reveal: { ...raw.reveal, ...normalizeRevealSpec(raw.reveal as Partial<RevealSpec>) } }
@@ -599,6 +637,27 @@ function normalizeLayer(
   ) {
     delete layer.containScale
     bag.add('담기 배율 값이 범위를 벗어나 문서에서 다시 계산합니다.')
+  }
+  for (const key of ['inFrame', 'outFrame', 'inFade', 'outFade'] as const) {
+    const v = layer[key]
+    if (key in layer && !(typeof v === 'number' && Number.isFinite(v))) delete layer[key]
+  }
+  if ('text' in layer && !isRecord(layer.text)) {
+    delete layer.text
+  }
+  /*
+   * 글자 등장은 'none' 도 지운다.
+   *
+   * 객체가 ...raw 로 시작하므로 위의 조건부 스프레드만으로는 원본의 'none' 이
+   * 그대로 살아남는다. 아무 일도 하지 않는 객체가 저장 파일에 남으면 왕복 JSON 이
+   * 달라져 "한 글자도 바꾸지 않는다" 는 계약이 깨진다.
+   */
+  if (
+    'charAnim' in layer &&
+    (!isRecord(layer.charAnim) ||
+      normalizeCharAnimSpec(layer.charAnim as Partial<CharAnimSpec>).mode === 'none')
+  ) {
+    delete layer.charAnim
   }
   if ('reveal' in layer && !isRecord(layer.reveal)) {
     delete layer.reveal
@@ -719,6 +778,10 @@ function normalizePresetRef(raw: unknown): MotionProject['presetRef'] | undefine
     },
     dirty: bool(raw.dirty, false),
   } as NonNullable<MotionProject['presetRef']>
+
+  // 재적용 대상 레이어. 문자열이 아니면 없는 것으로 본다(재적용이 막힐 뿐 안전하다).
+  if (typeof raw.layerId === 'string' && raw.layerId.length > 0) ref.layerId = raw.layerId
+  else delete ref.layerId
 
   /*
    * 속도 기준선. 없으면 옛 프로젝트이므로 넣지 않는다. 그러면 apply 쪽이 지금
@@ -844,6 +907,19 @@ function normalizeProject(raw: RawRecord, known: ReadonlySet<string>, bag: Warni
     safeZone,
     assets,
     layers,
+  }
+
+  /*
+   * 컷 목록. 한 개 이하면 키를 남기지 않는다.
+   *
+   * 컷 하나짜리 문서는 컷이 없는 문서와 완전히 같다. 빈 배열이나 한 칸짜리
+   * 배열이 저장 파일에 남으면 왕복 JSON 이 달라진다.
+   */
+  const rawCuts = asArray(raw.cuts).filter(isRecord)
+  if (rawCuts.length > 1) {
+    out.cuts = rawCuts.map((c, i) => normalizeCut(c as Partial<CutSpec>, i))
+  } else {
+    delete out.cuts
   }
 
   const presetRef = normalizePresetRef(raw.presetRef)

@@ -194,6 +194,7 @@ const ROW_ORDER: readonly TrackProp[] = [
   'skewY',
   'opacity',
   'reveal',
+  'charIn',
   'anchorX',
   'anchorY',
 ]
@@ -211,6 +212,7 @@ export const PROP_LABELS: Record<TrackProp, string> = {
   skewY: '세로 기울임',
   opacity: '불투명도',
   reveal: '가리기',
+  charIn: '글자 등장',
   anchorX: '기준점 가로',
   anchorY: '기준점 세로',
 }

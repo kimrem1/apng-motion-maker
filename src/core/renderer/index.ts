@@ -28,6 +28,9 @@ import { TargetPool, type PooledTarget } from './targetPool.ts'
 import { COPY_FS, FULLSCREEN_VS, LAYER_FS, LAYER_VS } from './shaders/layer.ts'
 import { BLEND_FS, BLEND_MODE_CODE } from './shaders/blend.ts'
 import { SHAPE_FS, SHAPE_KIND_CODE } from './shaders/shape.ts'
+import { TEXT_FS, TEXT_VS } from './shaders/text.ts'
+import { TextRasterCache, type TextRaster } from './textAtlas.ts'
+import { charProgress, charTransformAt } from '../charAnim.ts'
 import {
   disposeEffectResources,
   effectWarmupCombos,
@@ -88,7 +91,14 @@ export class Renderer {
   private readonly clipMatrix: Mat3 = new Float32Array(9)
   private readonly layerMatrix: Mat3 = new Float32Array(9)
   private readonly finalMatrix: Mat3 = new Float32Array(9)
+  /** 글자 상자 전체의 매트릭스. 글자 하나하나가 여기에 곱해진다. */
+  private readonly textBase: Mat3 = new Float32Array(9)
+  /** 글자 하나의 상자 로컬 매트릭스. */
+  private readonly textLocal: Mat3 = new Float32Array(9)
   private readonly emptyVao: WebGLVertexArrayObject | null
+
+  /** 글자 텍스처. 값이 같으면 레이어가 달라도 한 장을 나눠 쓴다. */
+  readonly texts: TextRasterCache
 
   /**
    * 오버스캔 해는 문서당 한 번만 구하면 된다. 240샘플씩 트랙을 평가하므로
@@ -103,6 +113,7 @@ export class Renderer {
     this.caps = caps
     this.programs = new ProgramCache(gl)
     this.targets = new TargetPool(gl, caps.colorBufferFloat)
+    this.texts = new TextRasterCache(gl)
 
     // attribute-less draw 라도 VAO 는 바인딩되어 있어야 한다.
     this.emptyVao = gl.createVertexArray()
@@ -112,6 +123,7 @@ export class Renderer {
       // 도형은 같은 정점 셰이더를 쓰고 프래그먼트만 다르다. 종류는 유니폼으로 가르므로
       // 프로그램이 한 벌뿐이고, 캐시(용량 64)를 이펙트와 나눠 쓰는 부담이 없다.
       { vs: LAYER_VS, fs: SHAPE_FS },
+      { vs: TEXT_VS, fs: TEXT_FS },
       { vs: FULLSCREEN_VS, fs: COPY_FS },
       { vs: FULLSCREEN_VS, fs: BLEND_FS },
       // 이펙트 셰이더는 종류가 많아 프레임 루프 안에서 컴파일하면 그대로 끊긴다.
@@ -154,7 +166,7 @@ export class Renderer {
     // 혼합 모드가 있으면 배경을 읽어야 한다. 둘 다 오프스크린을 요구한다.
     const layerNeedsPass = layers.map(
       (l) =>
-        (!!l.assetId || !!l.shape) &&
+        (!!l.assetId || !!l.shape || !!l.text) &&
         l.visible &&
         (l.blend !== 'normal' || hasActiveEffects(l.effects, frame)),
     )
@@ -171,6 +183,7 @@ export class Renderer {
       for (const layer of layers) this.drawLayer(doc, layer, assets)
       gl.bindVertexArray(null)
       this.targets.endFrame()
+      this.texts.endFrame()
       return
     }
 
@@ -178,12 +191,29 @@ export class Renderer {
     // 화면(기본 프레임버퍼)에는 텍스처가 없어서 프리뷰 경로도 오프스크린을 거친다.
     const w = target.width
     const h = target.height
-    let acc = this.targets.acquire(w, h, 'rgba8')
-    let spare = this.targets.acquire(w, h, 'rgba8')
-    const layerBuf = this.targets.acquire(w, h, 'rgba8')
-    const fxBuf = this.targets.acquire(w, h, 'rgba8')
+
+    /*
+     * 대여는 반드시 try 안에서 한다.
+     *
+     * acquire 는 풀에 여유가 없으면 새로 만들고, 텍스처 생성이나 프레임버퍼 완성에
+     * 실패하면 던진다(targetPool.create). 네 번의 대여가 try 밖에 있으면 두 번째가
+     * 던지는 순간 finally 에 못 가서 앞서 빌린 것이 inUse 로 굳는다. 그 항목은
+     * endFrame 도 회수하지 않으므로(inUse 는 건너뛴다) 컨텍스트를 버릴 때까지 남고,
+     * 그 크기의 버킷은 영영 재사용되지 못한다. passGraph 의 borrowed 관례와 같게 맞춘다.
+     */
+    const borrowed: PooledTarget[] = []
 
     try {
+      const borrow = (): PooledTarget => {
+        const t = this.targets.acquire(w, h, 'rgba8')
+        borrowed.push(t)
+        return t
+      }
+      let acc = borrow()
+      let spare = borrow()
+      const layerBuf = borrow()
+      const fxBuf = borrow()
+
       gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fbo)
       gl.viewport(0, 0, w, h)
       this.clearBackground(doc)
@@ -251,10 +281,9 @@ export class Renderer {
       // 최종 결과를 요청받은 타깃에 옮긴다.
       this.copyPass(acc, target)
     } finally {
-      this.targets.release(acc)
-      this.targets.release(spare)
-      this.targets.release(layerBuf)
-      this.targets.release(fxBuf)
+      // 스왑은 변수만 맞바꾸므로 빌린 집합은 그대로다.
+      for (const t of borrowed) this.targets.release(t)
+      this.texts.endFrame()
       // 프레임 경계를 알려야 오래 안 쓰인 크기의 FBO 가 회수된다.
       // 캔버스 크기를 바꾸면 새 버킷이 생기는데 회수가 없으면 GPU 에 계속 쌓인다.
       this.targets.endFrame()
@@ -357,9 +386,13 @@ export class Renderer {
     if (!layer.visible) return
     if (layer.transform.opacity <= 0) return
 
-    // 도형이 먼저다. 도형 레이어는 에셋을 가리키지 않는다.
+    // 도형과 글자가 먼저다. 둘 다 에셋을 가리키지 않는다.
     if (layer.shape) {
       this.drawShapeLayer(doc, layer)
+      return
+    }
+    if (layer.text) {
+      this.drawTextLayer(doc, layer)
       return
     }
     if (!layer.assetId) return
@@ -471,11 +504,165 @@ export class Renderer {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }
 
+  /**
+   * 글자 레이어.
+   *
+   * 글자 상자 전체가 이미지 한 장인 것처럼 매트릭스를 만들고(그래야 맞춤 / 기준점 /
+   * 캔버스 배율 규칙이 이미지와 같다), 그 안에서 글자 하나하나를 따로 그린다.
+   *
+   * 글자별 변형은 **상자 로컬 좌표**에서 일어난다. 레이어를 45도 기울이면 글자가
+   * 들어오는 방향도 함께 기운다. 가리기가 레이어를 따라 도는 것과 같은 규칙이다.
+   */
+  private drawTextLayer(doc: CompositionSnapshot, layer: ResolvedLayer): void {
+    const spec = layer.text
+    if (!spec) return
+
+    const gl = this.gl
+    let raster: TextRaster
+    try {
+      raster = this.texts.get(spec)
+    } catch {
+      // 글꼴을 못 굽는 상황에서 프리뷰 전체가 멈추면 안 된다. 이 레이어만 빠진다.
+      return
+    }
+
+    const { layout } = raster
+    const boxW = Math.max(1, layout.width)
+    const boxH = Math.max(1, layout.height)
+
+    buildLayerMatrix(
+      layer.transform,
+      layer.fit,
+      doc.canvas.w,
+      doc.canvas.h,
+      boxW,
+      boxH,
+      this.layerMatrix,
+    )
+    mat3Multiply(this.clipMatrix, this.layerMatrix, this.textBase)
+
+    const info = this.programs.get(TEXT_VS, TEXT_FS)
+    gl.useProgram(info.program)
+
+    const uOpacity = info.uniforms.get('u_opacity')
+    if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
+
+    setRevealUniforms(gl, info, layer)
+
+    const uImage = info.uniforms.get('u_image')
+    if (uImage) {
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, raster.texture)
+      gl.uniform1i(uImage, 0)
+    }
+
+    const uMatrix = info.uniforms.get('u_matrix')
+    const uAtlas = info.uniforms.get('u_atlas')
+    const uBox = info.uniforms.get('u_box')
+    const uCharAlpha = info.uniforms.get('u_charAlpha')
+
+    const anim = layer.charAnim
+    const count = Math.max(1, layout.animCount)
+    const t = layer.transform.charIn
+
+    // 칸 하나가 차지하는 UV. 격자가 균일하므로 한 번만 계산한다.
+    const du = raster.cellW / raster.atlasW
+    const dv = raster.cellH / raster.atlasH
+    // 칸은 여백을 품고 있다. 쿼드도 같은 크기로 놓아야 글자가 늘어나지 않는다.
+    const quadW = raster.cellW / raster.scale
+    const quadH = raster.cellH / raster.scale
+
+    let drawn = 0
+    for (const glyph of layout.glyphs) {
+      if (glyph.order < 0) continue
+      const slot = drawn
+      drawn += 1
+
+      const col = slot % raster.cols
+      const row = Math.floor(slot / raster.cols)
+
+      // 글자 칸의 한가운데. 배치가 정한 자리를 그대로 쓴다.
+      const cx = glyph.x + glyph.w / 2
+      const cy = glyph.y + glyph.h / 2
+
+      let tx = 0
+      let ty = 0
+      let rot = 0
+      let sc = 1
+      let scx = 1
+      let alpha = 1
+      if (anim) {
+        const p = charProgress(anim, glyph.order, count, t)
+        const ct = charTransformAt(anim, glyph.order, p)
+        tx = ct.tx * spec.fontSize
+        ty = ct.ty * spec.fontSize
+        rot = ct.rotate
+        sc = ct.scale
+        scx = ct.scaleX
+        alpha = ct.opacity
+      }
+      if (alpha <= 0) continue
+
+      /*
+       * 글자 하나의 매트릭스.
+       *
+       *   T(중심 + 이동) · R · S · T(-중심) · 칸 사각형
+       *
+       * 상자 로컬 픽셀로 계산한 뒤 마지막에 [0,1] 로 정규화한다. buildLayerMatrix 가
+       * 유닛 사각형을 받기 때문이다.
+       */
+      const rad = (rot * Math.PI) / 180
+      const cos = Math.cos(rad)
+      const sin = Math.sin(rad)
+      const sx = sc * scx
+      const sy = sc
+
+      // 열 우선 3x3. m[0] m[3] m[6] / m[1] m[4] m[7] / m[2] m[5] m[8]
+      const m = this.textLocal
+      // 회전 + 배율
+      const a00 = cos * sx
+      const a01 = -sin * sy
+      const a10 = sin * sx
+      const a11 = cos * sy
+      // 유닛 사각형 -> 칸 크기 -> 중심 기준으로 옮김
+      m[0] = (a00 * quadW) / boxW
+      m[1] = (a10 * quadW) / boxH
+      m[2] = 0
+      m[3] = (a01 * quadH) / boxW
+      m[4] = (a11 * quadH) / boxH
+      m[5] = 0
+      const ox = -quadW / 2
+      const oy = -quadH / 2
+      m[6] = (cx + tx + a00 * ox + a01 * oy) / boxW
+      m[7] = (cy + ty + a10 * ox + a11 * oy) / boxH
+      m[8] = 1
+
+      mat3Multiply(this.textBase, m, this.finalMatrix)
+
+      if (uMatrix) gl.uniformMatrix3fv(uMatrix, false, this.finalMatrix)
+      if (uAtlas) gl.uniform4f(uAtlas, col * du, row * dv, du, dv)
+      // 가리기는 글자가 움직이기 **전** 자리로 잰다. 경계선이 글자를 따라다니면 안 된다.
+      if (uBox) {
+        gl.uniform4f(
+          uBox,
+          (cx - quadW / 2) / boxW,
+          (cy - quadH / 2) / boxH,
+          quadW / boxW,
+          quadH / boxH,
+        )
+      }
+      if (uCharAlpha) gl.uniform1f(uCharAlpha, alpha)
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    }
+  }
+
   dispose(): void {
     // 이펙트 체인이 컨텍스트별로 들고 있는 VAO 와 노이즈 아틀라스를 먼저 정리한다.
     disposeEffectResources(this.gl)
     this.programs.dispose()
     this.targets.dispose()
+    this.texts.dispose()
     if (this.emptyVao) this.gl.deleteVertexArray(this.emptyVao)
   }
 }

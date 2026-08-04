@@ -175,6 +175,13 @@ export type TrackProp =
    * 항등값이 1 이라 트랙이 없으면 아무 일도 일어나지 않는다.
    */
   | 'reveal'
+  /**
+   * 글자 등장 진행률. 0 이면 글자가 아직 출발점에 있고 1 이면 전부 제자리다.
+   *
+   * 가리기와 같은 구조다. 어떤 모양으로 들어올지는 Layer.charAnim 이 정한다.
+   * 항등값이 1 이라 트랙이 없으면 아무 일도 일어나지 않는다.
+   */
+  | 'charIn'
   | 'anchorX'
   | 'anchorY'
 
@@ -459,7 +466,102 @@ export type FrameFit = 'contain' | 'crop' | 'cover'
 
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'lighten' | 'darken'
 
-export type LayerType = 'image' | 'solid' | 'group' | 'shape'
+export type LayerType = 'image' | 'solid' | 'group' | 'shape' | 'text'
+
+// ---------------------------------------------------------------------------
+// 글자
+// ---------------------------------------------------------------------------
+
+export type TextAlign = 'left' | 'center' | 'right'
+
+/**
+ * 글자 레이어의 내용과 생김새.
+ *
+ * 도형(ShapeSpec)과 같은 자리다. 레이어의 자연 크기는 이 값으로 **배치를 계산해서**
+ * 나온다(core/text.ts layoutText). 그래서 맞춤 / 기준점 / 캔버스 배율 규칙이 이미지와
+ * 한 글자도 다르지 않다.
+ */
+export interface TextSpec {
+  /** 여러 줄이면 줄바꿈으로 나눈다. */
+  content: string
+  /** CSS font-family 값. 올린 글꼴이면 그 이름이 앞에 온다. */
+  fontFamily: string
+  fontSize: number
+  /** 100~900. 글꼴이 그 굵기를 갖고 있지 않으면 브라우저가 가짜 굵기를 만든다. */
+  weight: number
+  italic: boolean
+  /** 채우기 색. `#rrggbb` 또는 `#rrggbbaa`. */
+  color: string
+  /** 자간(px). 음수면 붙는다. */
+  letterSpacing: number
+  /** 행간 배수. 1.25 면 글자 크기의 1.25 배가 한 줄 높이다. */
+  lineHeight: number
+  align: TextAlign
+  /** 테두리 두께(px). 0 이면 테두리가 없다. */
+  strokeWidth: number
+  strokeColor: string
+}
+
+/** 글자가 들어오는 모양. 진행률은 `charIn` 트랙이 민다. */
+export type CharInMode =
+  | 'none'
+  | 'left'
+  | 'right'
+  | 'up'
+  | 'down'
+  | 'sides'
+  | 'updown'
+  | 'scatter'
+  | 'zoom'
+  | 'shrink'
+  | 'drop'
+  | 'spin'
+  | 'flip'
+  | 'typewriter'
+  | 'fade'
+  | 'wave'
+
+/** u_charMode 로 넘기는 순서이자 UI 목록의 순서다. */
+export const CHAR_IN_MODE_LIST: readonly CharInMode[] = [
+  'none',
+  'left',
+  'right',
+  'up',
+  'down',
+  'sides',
+  'updown',
+  'scatter',
+  'zoom',
+  'shrink',
+  'drop',
+  'spin',
+  'flip',
+  'typewriter',
+  'fade',
+  'wave',
+]
+
+export type CharOrder = 'forward' | 'backward' | 'center' | 'edges' | 'random'
+
+/**
+ * 글자별 등장 규칙.
+ *
+ * RevealSpec 과 같은 구조다. 모양만 여기 있고 진행률은 트랙에 있다.
+ */
+export interface CharAnimSpec {
+  mode: CharInMode
+  /** 글자 사이 시간차. 0 이면 전부 동시에 들어온다. */
+  stagger: number
+  /** 출발 거리. 글자 크기의 배수다. */
+  distance: number
+  /** 출발 각도(도). */
+  rotate: number
+  /** 출발 배율. */
+  scale: number
+  order: CharOrder
+  /** 무작위 방향과 순서의 시드. 같은 값이면 언제나 같은 그림이다. */
+  seed: number
+}
 
 export interface Layer {
   id: string
@@ -531,6 +633,31 @@ export interface Layer {
    */
   shape?: ShapeSpec
   /**
+   * 이 레이어가 보이는 구간. 없으면 처음부터 끝까지다.
+   *
+   * 컷 편집의 토대다. 컷은 별도의 문서가 아니라 **한 타임라인 위의 구간**이고,
+   * 컷에 넣는다는 것은 그 레이어의 구간을 컷 범위로 맞추는 일이다. 이렇게 두면
+   * 렌더러도 내보내기도 컷의 존재를 몰라도 되고, 그래프 에디터와 프리셋이
+   * 지금까지와 똑같이 동작한다.
+   */
+  inFrame?: number
+  /** 마지막으로 보이는 프레임. 포함이다. */
+  outFrame?: number
+  /** 구간 시작에서 서서히 나타나는 프레임 수. 컷 전환의 겹침이 여기로 들어온다. */
+  inFade?: number
+  /** 구간 끝에서 서서히 사라지는 프레임 수. */
+  outFade?: number
+  /**
+   * 글자 레이어의 내용. type 이 'text' 일 때만 있다.
+   * shape 과 같은 이유로 있을 때만 키를 만든다 (JSON 왕복 결정론).
+   */
+  text?: TextSpec
+  /**
+   * 글자가 하나씩 들어오는 모양. `charIn` 트랙이 진행률을 민다.
+   * 글자 레이어가 아니면 아무 데도 쓰이지 않는다.
+   */
+  charAnim?: CharAnimSpec
+  /**
    * 경계선이 지나가는 모양. `reveal` 트랙이 진행률을 민다.
    *
    * 없으면 가리기가 없다는 뜻이다. 렌더러가 마스크 계산을 통째로 건너뛰므로
@@ -571,6 +698,17 @@ export interface Layer {
 export interface PresetRef {
   id: string
   macro: { speed: number; strength: number }
+  /**
+   * 이 프리셋이 실제로 얹힌 레이어.
+   *
+   * 세기 / 속도 슬라이더의 재적용 대상을 여기서 읽는다. "지금 고른 레이어" 로
+   * 추측하면 도형을 하나 넣어 선택이 옮겨간 뒤 슬라이더를 끌 때 엉뚱한 레이어에
+   * 모션이 심긴다. 트랙을 내지 않는 프리셋(흔들기 6 / 자글자글 5 / 지지직 8)은
+   * `props` 가 빈 배열이라 그쪽으로는 소유 레이어를 역추적할 수 없다.
+   *
+   * 없으면 옛 프로젝트다. 그때만 `props` 로 근사한다.
+   */
+  layerId?: string
   /** PRO 에서 손대면 true. EASY 의 강도 슬라이더가 비활성화된다. */
   dirty: boolean
   /**
@@ -599,6 +737,8 @@ export interface PresetRef {
    */
   ownsReveal?: boolean
   ownsPerspective?: boolean
+  /** 이 프리셋이 레이어의 글자 등장을 심었는가. ownsReveal 과 같은 자리다. */
+  ownsCharAnim?: boolean
   /**
    * 속도 1 일 때의 재생 시간(초). 속도 노브의 기준선이다.
    *
@@ -629,6 +769,25 @@ export interface PresetRef {
   baseFps?: number
 }
 
+/**
+ * 컷 하나.
+ *
+ * 컷은 타임라인을 나눈 구간이다. 총 길이는 컷 길이의 합에서 겹침을 뺀 값이고,
+ * 컷 순서가 곧 재생 순서다. 레이어는 자기 구간(inFrame/outFrame)으로 어느 컷에
+ * 속하는지를 표현한다. 문서에 컷이 없으면 지금까지와 똑같은 한 컷짜리 문서다.
+ */
+export interface CutSpec {
+  id: string
+  name: string
+  /** 이 컷의 길이(프레임). */
+  frames: number
+  /**
+   * 앞 컷과 겹치는 프레임 수. 0 이면 딱 잘리는 컷 전환이고, 크면 디졸브다.
+   * 첫 컷에서는 무시된다.
+   */
+  crossFrames: number
+}
+
 export interface MotionProject {
   schema: typeof SCHEMA_ID
   appVersion: string
@@ -638,6 +797,11 @@ export interface MotionProject {
   safeZone: SafeZoneConfig
   assets: AssetRef[]
   layers: Layer[]
+  /**
+   * 컷 목록. 없으면 한 컷짜리 문서다(지금까지의 모든 프로젝트).
+   * 있을 때만 키를 만든다. 빈 배열이 저장 파일에 남으면 왕복 JSON 이 달라진다.
+   */
+  cuts?: CutSpec[]
   presetRef?: PresetRef
 }
 
@@ -681,6 +845,8 @@ export interface ResolvedTransform {
   opacity: number
   /** 가리기 진행률. 1 이면 전부 보인다. */
   reveal: number
+  /** 글자 등장 진행률. 1 이면 전부 제자리다. */
+  charIn: number
 }
 
 export interface ResolvedLayer {
@@ -699,6 +865,10 @@ export interface ResolvedLayer {
    * 레이어 수의 제곱만큼 탐색이 늘기 때문이다. 평가 단계에서 한 번만 실어 보낸다.
    */
   shape?: ShapeSpec
+  /** 글자 레이어의 내용. 렌더러가 에셋 대신 이걸 그린다. */
+  text?: TextSpec
+  /** 글자 등장 모양. 진행률은 transform.charIn 이다. */
+  charAnim?: CharAnimSpec
   /**
    * 가리기 모양. 진행률은 transform.reveal 이다.
    * shape 과 같은 이유로 있을 때만 키를 만든다 (JSON 결정론).

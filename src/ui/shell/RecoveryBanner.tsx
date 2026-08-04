@@ -50,7 +50,9 @@ export function RecoveryBanner() {
   const onRestore = (): void => {
     setBusy(true)
     setError(null)
-    void restoreRecovery().then((ok) => {
+    // 배너가 안내한 그 스냅샷으로만 되돌린다. 그 사이 자동저장이 쌓은 빈 스냅샷을
+    // 집으면 "레이어 5장" 이라고 알려 놓고 빈 문서로 덮어쓰게 된다.
+    void restoreRecovery(info.id).then((ok) => {
       setBusy(false)
       if (ok) setInfo(null)
       else setError('작업을 복구하지 못했습니다. 저장된 데이터가 손상된 것 같습니다.')

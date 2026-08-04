@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DragEvent as ReactDragEvent } from 'react'
 
 import { useDocumentStore } from '@/state/document.ts'
-import { useUiStore } from '@/state/ui.ts'
+import { useLayerUiStore } from '@/state/layerUi.ts'
 
 import { importFromDataTransfer, importImageFile } from './index.ts'
 import { toErrorMessage } from './decode.ts'
@@ -105,7 +105,9 @@ export function useImageDrop(): UseImageDropResult {
           hasAlpha: imported.hasAlpha,
         })
         // 방금 넣은 레이어로 선택을 옮겨야 인스펙터가 바로 그 레이어를 가리킨다.
-        useUiStore.getState().selectLayer(layerId)
+        // 선택의 정본은 layerUi 다. ui.selectLayer 만 부르면(미러만 갱신) 두 번째
+        // 드롭부터 레이어 패널은 앞 장을, 인스펙터는 새 장을 가리켜 대상이 갈라진다.
+        useLayerUiStore.getState().setSelectedLayerIds([layerId], layerId)
       } catch (err) {
         const label = file.name || '이미지'
         errors.push(`${label}: ${toErrorMessage(err)}`)

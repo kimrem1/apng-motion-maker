@@ -270,6 +270,10 @@ interface DragMeta {
   fromDisplay: number
   /** 표시 순서대로의 각 행 세로 중점 (드래그 시작 시점 측정값) */
   mids: number[]
+  /** 목록의 스크롤 컨테이너. 드래그 중 스크롤되면 mids 가 낡는다. */
+  scrollHost: Element | null
+  /** 드래그 시작 시점의 scrollTop */
+  startScroll: number
   /** 삽입 경계. 0 = 맨 위, n = 맨 아래 */
   boundary: number
   active: boolean
@@ -350,11 +354,13 @@ export function LayerPanel() {
       e.preventDefault()
       e.stopPropagation()
 
-      // 시작 시점의 행 위치를 한 번만 잰다. 드래그 중에는 목록이 움직이지 않는다.
+      // 시작 시점의 행 위치를 한 번만 잰다. 뷰포트 좌표라 목록이 스크롤되면 낡는다.
+      // 포인터 캡처는 휠을 막지 않으므로 그 차이를 onGripPointerMove 에서 보정한다.
       const mids = orderedIds.map((id) => {
         const rect = rowRefs.current.get(id)?.getBoundingClientRect()
         return rect ? rect.top + rect.height / 2 : Number.POSITIVE_INFINITY
       })
+      const scrollHost = e.currentTarget.closest('.mm-scroll')
 
       dragRef.current = {
         pointerId: e.pointerId,
@@ -362,6 +368,8 @@ export function LayerPanel() {
         startY: e.clientY,
         fromDisplay,
         mids,
+        scrollHost,
+        startScroll: scrollHost?.scrollTop ?? 0,
         boundary: fromDisplay,
         active: false,
       }
@@ -378,10 +386,16 @@ export function LayerPanel() {
     if (!meta.active && Math.abs(e.clientY - meta.startY) <= DRAG_THRESHOLD_PX) return
     meta.active = true
 
+    // 드래그 중 목록이 스크롤되면 mids(뷰포트 좌표)가 그만큼 낡는다. 커서를 되돌려 맞춘다.
+    // 위 임계값 판정은 보정하지 않은 clientY 를 그대로 쓴다. 여기에 보정값을 쓰면
+    // 마우스를 움직이지 않고 휠만 굴려도 드래그가 시작된다.
+    const scrolled = (meta.scrollHost?.scrollTop ?? 0) - meta.startScroll
+    const y = e.clientY + scrolled
+
     // 중점을 지나친 행의 수가 곧 삽입 경계다.
     let boundary = 0
     for (const mid of meta.mids) {
-      if (e.clientY > mid) boundary += 1
+      if (y > mid) boundary += 1
     }
     if (boundary === meta.boundary && drag?.active) return
     meta.boundary = boundary

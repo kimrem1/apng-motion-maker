@@ -29,6 +29,7 @@ import { BOIL_PRESETS } from './presets/boil.ts'
 import { GLITCH_PRESETS } from './presets/glitch.ts'
 import { COMBO_PRESETS } from './presets/combo.ts'
 import { REVEAL_PRESETS } from './presets/reveal.ts'
+import { TEXT_PRESETS } from './presets/text.ts'
 import { clamp, clamp01 } from './presets/shared.ts'
 
 /**
@@ -48,6 +49,7 @@ export const CATEGORY_LABELS: Record<MotionCategory, string> = {
   boil: '자글자글',
   glitch: '지지직',
   combo: '조합',
+  text: '글자',
 }
 
 /**
@@ -65,6 +67,7 @@ export const CATEGORY_ORDER: MotionCategory[] = [
   'boil',
   'glitch',
   'kenburns',
+  'text',
   'combo',
   'disappear',
 ]
@@ -80,6 +83,7 @@ export const MOTION_PRESETS: MotionPreset[] = [
   ...GLITCH_PRESETS,
   ...COMBO_PRESETS,
   ...REVEAL_PRESETS,
+  ...TEXT_PRESETS,
 ]
 
 export const MOTION_PRESET_BY_ID: ReadonlyMap<string, MotionPreset> = new Map(

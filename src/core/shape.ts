@@ -17,6 +17,7 @@ import {
   type ShapeKind,
   type ShapeSpec,
 } from './types.ts'
+import { textBoxOf } from './text.ts'
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v)
 
@@ -141,10 +142,12 @@ export function normalizeShapeSpec(raw: Partial<ShapeSpec> & { kind?: unknown })
  * 담기를 켠 도형이 이유 없이 작아지거나 잘린다.
  */
 export function layerIntrinsicSize(
-  layer: Pick<Layer, 'assetId' | 'shape'>,
+  layer: Pick<Layer, 'assetId' | 'shape'> & { text?: Layer['text'] },
   assetSize: (assetId: string) => { width: number; height: number } | undefined,
 ): { width: number; height: number } | undefined {
   if (layer.shape) return { width: layer.shape.width, height: layer.shape.height }
+  // 글자 상자는 브라우저가 재야 정확하다. 재기 전에는 어림값이 돌아온다 (core/text.ts).
+  if (layer.text) return textBoxOf(layer.text)
   if (!layer.assetId) return undefined
   return assetSize(layer.assetId)
 }

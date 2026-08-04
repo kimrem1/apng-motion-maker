@@ -7,6 +7,7 @@ import {
   type Layer,
   type MotionProject,
   type ShapeSpec,
+  type TextSpec,
   type Track,
   type TrackProp,
   type TrackUnit,
@@ -146,6 +147,38 @@ export function createShapeLayer(shape: ShapeSpec, name: string, z: number): Lay
   }
 }
 
+/**
+ * 글자 레이어.
+ *
+ * 도형과 완전히 같은 규칙을 탄다. 자연 크기는 글자 배치가 정하고(core/text.ts),
+ * 맞춤 / 기준점 / 캔버스 배율은 이미지와 한 글자도 다르지 않다.
+ */
+export function createTextLayer(text: TextSpec, name: string, z: number): Layer {
+  return {
+    id: nextId('l'),
+    name,
+    type: 'text',
+    assetId: null,
+    parentId: null,
+    z,
+    visible: true,
+    locked: false,
+    fit: 'none',
+    anchor: [0.5, 0.5],
+    keepPlaceOnAnchorChange: true,
+    baseScale: 1,
+    blend: 'normal',
+    parallaxFactor: 1,
+    fillsCanvas: false,
+    keepInside: false,
+    motionExitsFrame: false,
+    text,
+    tracks: [],
+    modifiers: [],
+    effects: [],
+  }
+}
+
 export function createStaticTrack(prop: TrackProp, unit: TrackUnit, value: number): Track {
   return {
     id: nextId('t'),
@@ -162,6 +195,7 @@ export const TRACK_DEFAULTS: Record<TrackProp, { unit: TrackUnit; identity: numb
   scaleY: { unit: 'ratio', identity: 1 },
   opacity: { unit: 'ratio', identity: 1 },
   reveal: { unit: 'ratio', identity: 1 },
+  charIn: { unit: 'ratio', identity: 1 },
   rotate: { unit: 'deg', identity: 0 },
   rotateX: { unit: 'deg', identity: 0 },
   rotateY: { unit: 'deg', identity: 0 },

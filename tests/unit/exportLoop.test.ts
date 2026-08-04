@@ -46,8 +46,8 @@ describe('mapLoop', () => {
   })
 
   it('N회 반복', () => {
-    // GIF NETSCAPE 는 '추가 반복 횟수'다. 3회 재생 = 추가 2회 (Chrome 실측).
-    expect(mapLoop(loop({ mode: 'loop', count: 3 }))).toEqual({ apngNumPlays: 3, gifLoopCount: 2, webpLoopCount: 3 })
+    // 세 채널 모두 '재생 횟수'다. NETSCAPE 의 '추가 반복' 변환은 loopCountToRepeat 이 한다.
+    expect(mapLoop(loop({ mode: 'loop', count: 3 }))).toEqual({ apngNumPlays: 3, gifLoopCount: 3, webpLoopCount: 3 })
   })
 
   it('한 번만 재생은 GIF 에서 1 이다 (-1 이 아니다)', () => {
@@ -59,7 +59,7 @@ describe('mapLoop', () => {
     // 프레임 배열이 이미 2N-2 로 왕복 한 번이므로 count 가 곧 왕복 횟수다.
     expect(mapLoop(loop({ mode: 'pingPong', count: 3 }))).toEqual({
       apngNumPlays: 3,
-      gifLoopCount: 2,
+      gifLoopCount: 3,
       webpLoopCount: 3,
     })
     expect(mapLoop(loop({ mode: 'pingPong', count: 0 }))).toEqual({
@@ -72,7 +72,7 @@ describe('mapLoop', () => {
   it('loopWithHold 도 count 를 그대로 쓴다', () => {
     expect(mapLoop(loop({ mode: 'loopWithHold', count: 2 }))).toEqual({
       apngNumPlays: 2,
-      gifLoopCount: 1,
+      gifLoopCount: 2,
       webpLoopCount: 2,
     })
   })
@@ -84,7 +84,8 @@ describe('루프 왕복 검증 (mapLoop -> 인코더 -> 재파싱)', () => {
     { label: '3회', spec: loop({ mode: 'loop', count: 3 }), gifExpect: 2, apngExpect: 3 },
     // 1회는 NETSCAPE 확장을 아예 쓰지 않는다. 파서가 null 을 돌려주는 것이 정상이다.
     { label: '한 번만', spec: loop({ mode: 'once' }), gifExpect: null, apngExpect: 1 },
-    { label: '왕복 2회', spec: loop({ mode: 'pingPong', count: 2 }), gifExpect: null, apngExpect: 2 },
+    // 2회 재생 = NETSCAPE 1. 여기가 null 이면 GIF 만 1회로 깎인 것이다.
+    { label: '왕복 2회', spec: loop({ mode: 'pingPong', count: 2 }), gifExpect: 1, apngExpect: 2 },
   ]
 
   for (const m of modes) {
@@ -119,6 +120,18 @@ describe('루프 왕복 검증 (mapLoop -> 인코더 -> 재파싱)', () => {
     })
     // NETSCAPE 확장이 없다 = 1회 재생. 0(무한)이 아니어야 한다.
     expect(parseGifHeader(gif).loopCount).not.toBe(0)
+  })
+
+  it('반복 2회가 GIF 에서만 1회로 깎이지 않는다', async () => {
+    // 값 1 이 "1회 재생" 과 "2회 재생" 두 뜻을 갖던 시절의 회귀 방지.
+    const mapping = mapLoop(loop({ mode: 'loop', count: 2 }))
+    expect(mapping.apngNumPlays).toBe(2)
+    const gif = await encodeGif(
+      [{ rgba: frame(10), delayMs: 50 }, { rgba: frame(200), delayMs: 50 }],
+      { width: 4, height: 4, loopCount: mapping.gifLoopCount, maxColors: 8, transparent: false, dither: 0 },
+    )
+    // NETSCAPE 1 = 첫 재생 + 추가 1회 = 총 2회. null(확장 없음)이면 1회로 끝난다.
+    expect(parseGifHeader(gif).loopCount).toBe(1)
   })
 })
 
