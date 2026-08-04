@@ -14,7 +14,9 @@ import type {
   TrackProp,
   TrackUnit,
 } from './types.ts'
-import { identityTransform } from './transform.ts'
+import { baseFitScale, identityTransform } from './transform.ts'
+import { charAnimIsActive, objectCharTransform } from './charAnim.ts'
+import { layerIntrinsicSize } from './shape.ts'
 import { layerTimeGate } from './cuts.ts'
 import { evalTrack } from '@/easing/curve.ts'
 import { evalModifier } from '@/motions/generators.ts'
@@ -200,6 +202,71 @@ const MAX_PARENT_DEPTH = 16
  * 애프터이펙트식 전체 부모 변환(회전/배율 상속)은 v2 다.
  * UI 는 이 필드를 "깊이감" 으로 부르고 부모-자식이라는 말을 쓰지 않는다.
  */
+/**
+ * 오브제 등장의 이동 거리를 재는 자(px).
+ *
+ * 글자는 **글자 크기** 배수로 재고, 오브제는 **화면에서 차지하는 자기 상자** 배수로
+ * 잰다. 거리 1.4 면 "제 폭의 1.4 배 밖에서 들어온다" 는 뜻이라, 큰 그림도 작은
+ * 그림도 화면 밖에서 출발한다. 캔버스 크기로 재면 작은 도형이 저 멀리서 순간이동해
+ * 오는 것처럼 보인다.
+ *
+ * 애니메이션 배율(scaleX / scaleY)은 **일부러 뺀다.** 넣으면 이동량이 배율에 딸려
+ * 움직여서, 담기 솔버가 기대는 "꼭짓점 = 위치 + c·D" 라는 1차식이 깨진다
+ * (overscan.ts containScaleAt).
+ */
+function objectRefSize(
+  doc: CompositionSnapshot,
+  layer: Layer,
+  canvas: CanvasConfig,
+): { w: number; h: number } {
+  const intrinsic = layerIntrinsicSize(layer, (assetId) => {
+    const asset = doc.assets.find((a) => a.id === assetId)
+    return asset ? { width: asset.naturalW, height: asset.naturalH } : undefined
+  })
+  // 원본 크기가 없는 레이어(솔리드)는 캔버스를 채운다고 본다.
+  if (!intrinsic || intrinsic.width <= 0 || intrinsic.height <= 0) {
+    return { w: canvas.w, h: canvas.h }
+  }
+  const fit = baseFitScale(layer.fit, canvas.w, canvas.h, intrinsic.width, intrinsic.height)
+  const k = typeof layer.baseScale === 'number' && layer.baseScale > 0 ? layer.baseScale : 1
+  return { w: intrinsic.width * fit.sx * k, h: intrinsic.height * fit.sy * k }
+}
+
+/**
+ * 글자가 아닌 레이어의 등장을 레이어 변환에 접어 넣는다.
+ *
+ * 이것이 "글자 모션을 이미지와 도형에도" 의 전부다. 오브제를 **글자 한 개짜리 글
+ * 상자**로 보면 규칙이 한 벌로 끝난다. 렌더러는 한 줄도 바뀌지 않는다.
+ *
+ * 글자 레이어는 여기서 아무 일도 하지 않는다. 글자는 상자 **안에서** 글자마다 따로
+ * 움직여야 해서 렌더러가 직접 계산한다. 여기서도 걸면 두 번 먹어 상자째로 날아간다.
+ *
+ * **담기 / 채우기 솔버가 이 결과를 본다.** 솔버는 resolveLayerTransformWithParents
+ * 를 불러 배율을 푸는데, 접어 넣는 자리를 여기보다 뒤(resolveComposition)로 미루면
+ * 솔버가 등장 구간을 못 봐서, 담기를 켜 둔 그림이 등장할 때만 프레임 밖으로 튀어
+ * 나간다. 일부러 밖에서 들어오는 프리셋은 overscan: 'allowEmpty' 로 솔버를 끈다.
+ */
+function applyObjectCharAnim(
+  doc: CompositionSnapshot,
+  layer: Layer,
+  t: ResolvedTransform,
+): void {
+  if (layer.text) return
+  if (!charAnimIsActive(layer.charAnim)) return
+  // 다 들어온 뒤에는 계산도 에셋 조회도 하지 않는다. 대부분의 프레임이 여기다.
+  if (!Number.isFinite(t.charIn) || t.charIn >= 1) return
+
+  const ct = objectCharTransform(layer.charAnim, t.charIn)
+  const ref = objectRefSize(doc, layer, doc.canvas)
+
+  t.translateX += ct.tx * ref.w
+  t.translateY += ct.ty * ref.h
+  t.rotate += ct.rotate
+  t.scaleX *= ct.scale * ct.scaleX
+  t.scaleY *= ct.scale
+  t.opacity *= ct.opacity
+}
+
 export function resolveLayerTransformWithParents(
   doc: CompositionSnapshot,
   layer: Layer,
@@ -207,7 +274,10 @@ export function resolveLayerTransformWithParents(
 ): ResolvedTransform {
   const duration = doc.timeline.durationFrames
   const own = resolveLayerTransform(layer, frame, doc.canvas, duration)
-  if (!layer.parentId) return own
+  if (!layer.parentId) {
+    applyObjectCharAnim(doc, layer, own)
+    return own
+  }
 
   let parentId: string | null = layer.parentId
   const seen = new Set<string>([layer.id])
@@ -228,6 +298,7 @@ export function resolveLayerTransformWithParents(
     depth += 1
   }
 
+  applyObjectCharAnim(doc, layer, own)
   return own
 }
 
@@ -278,8 +349,16 @@ export function resolveComposition(
       // 뜻이 없는 키를 남기지 않는 편이 읽기 쉽다.
       ...(layer.shape ? { shape: layer.shape } : {}),
       ...(layer.text ? { text: layer.text } : {}),
-      // 글자 등장도 'none' 이면 싣지 않는다. 렌더러가 글자별 계산을 통째로 건너뛴다.
-      ...(layer.charAnim && layer.charAnim.mode !== 'none' ? { charAnim: layer.charAnim } : {}),
+      /*
+       * 글자 등장은 **글자 레이어에만** 싣는다.
+       *
+       * 오브제는 applyObjectCharAnim 이 이미 변환에 접어 넣었다. 여기서도 실어 보내면
+       * 렌더러가 두 번 걸 여지가 생긴다. 'none' 이면 어느 쪽이든 싣지 않아서 렌더러가
+       * 글자별 계산을 통째로 건너뛴다.
+       */
+      ...(layer.text && layer.charAnim && layer.charAnim.mode !== 'none'
+        ? { charAnim: layer.charAnim }
+        : {}),
       // 가리기도 같은 규칙이다. 'none' 이면 아예 싣지 않아 렌더러가 유니폼조차 만지지 않는다.
       ...(layer.reveal && layer.reveal.mode !== 'none' ? { reveal: layer.reveal } : {}),
     })

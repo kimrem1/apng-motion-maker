@@ -35,9 +35,40 @@ export const CHAR_IN_LABELS: Record<CharInMode, string> = {
   spin: '돌면서',
   flip: '뒤집히며',
   typewriter: '타자기',
-  fade: '차례로 흐리게',
+  fade: '차례로 밝아지기',
   wave: '물결치듯',
 }
+
+/**
+ * 오브제(이미지 / 도형) 하나에 걸었을 때의 이름.
+ *
+ * 같은 규칙인데 부르는 말이 달라야 한다. 오브제는 글자가 하나뿐이라 '차례로' 나
+ * '한 글자씩' 같은 말이 거짓말이 된다.
+ */
+const OBJECT_LABEL_OVERRIDES: Partial<Record<CharInMode, string>> = {
+  scatter: '무작위 방향에서',
+  zoom: '멀리서 다가오며',
+  shrink: '커다랗게 작아지며',
+  drop: '위에서 떨어지며',
+  typewriter: '딱 나타나기',
+  fade: '서서히 밝아지기',
+}
+
+export function charInLabel(mode: CharInMode, forText: boolean): string {
+  if (forText) return CHAR_IN_LABELS[mode]
+  return OBJECT_LABEL_OVERRIDES[mode] ?? CHAR_IN_LABELS[mode]
+}
+
+/**
+ * 오브제에서 고를 수 있는 모양.
+ *
+ * 'sides' / 'updown' / 'wave' 는 **글자 순번이 홀수냐 짝수냐로** 방향을 가른다.
+ * 오브제는 언제나 0 번이라 셋 다 한쪽 방향으로 고정되어, 이미 있는 항목과
+ * 똑같이 움직이면서 이름만 다른 유령 선택지가 된다. 그래서 목록에서 뺀다.
+ */
+export const CHAR_IN_OBJECT_MODES: readonly CharInMode[] = CHAR_IN_MODE_LIST.filter(
+  (mode) => mode !== 'sides' && mode !== 'updown' && mode !== 'wave',
+)
 
 export const CHAR_ORDER_LABELS: Record<CharOrder, string> = {
   forward: '앞에서부터',
@@ -293,7 +324,12 @@ function directionOf(spec: CharAnimSpec, index: number): { x: number; y: number 
     case 'up':
       return { x: 0, y: -1 }
     case 'down':
+      // 화면 좌표는 y 가 아래로 향한다. 아래에서 오려면 +1 이다.
+      // 여기가 한때 'drop' 과 한 줄로 묶여 있어 '아래에서' 가 '위에서' 와 똑같이
+      // 움직였다. 두 모양은 출발 방향이 정반대라 절대 합칠 수 없다.
+      return { x: 0, y: 1 }
     case 'drop':
+      // 떨어지는 것이므로 위에서 출발한다.
       return { x: 0, y: -1 }
     case 'sides':
       return { x: index % 2 === 0 ? -1 : 1, y: 0 }
@@ -411,4 +447,22 @@ export function charTransformAt(
     scaleX,
     opacity: clamp(opacity, 0, 1),
   }
+}
+
+/**
+ * 오브제(이미지 / 도형 / 솔리드) 하나에 건 등장.
+ *
+ * **글자가 한 개뿐인 글 상자와 완전히 같은 계산이다.** 규칙을 한 벌만 두는 것이
+ * 핵심이다. 두 벌이 되면 같은 이름의 모션이 글자에서는 왼쪽에서, 이미지에서는
+ * 오른쪽에서 들어오는 사고가 난다.
+ *
+ * 글자가 하나면 시간차 / 순서 / 흔들림은 자동으로 무력해진다(charProgress 가
+ * n === 1 을 곧바로 돌려준다). 그래서 오브제용 분기가 따로 필요 없다.
+ *
+ * @param t 진행률(`charIn` 트랙 값). 0 이 출발점, 1 이 제자리다.
+ */
+export function objectCharTransform(spec: CharAnimSpec, t: number): CharTransform {
+  const raw = charProgress(spec, 0, 1, t)
+  const eased = charEasedProgress(spec, 0, 1, t)
+  return charTransformAt(spec, 0, eased, raw)
 }

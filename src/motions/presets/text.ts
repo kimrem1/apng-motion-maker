@@ -1,9 +1,10 @@
 /**
- * J. 글자.
+ * J. 글자와 오브제 등장.
  *
- * 글자 레이어를 위한 프리셋이다. 이미지나 도형에 걸면 아무 일도 일어나지 않는다
- * (charIn 트랙은 글자 레이어만 읽는다). 그래서 갤러리가 글자 레이어를 골랐을 때만
- * 이 카테고리를 보여 준다.
+ * 글자 레이어에 걸면 **한 글자씩** 들어오고, 이미지나 도형에 걸면 **통째로** 같은
+ * 리듬으로 들어온다. 오브제를 "글자가 한 개짜리 글 상자" 로 계산하기 때문이다
+ * (core/evaluate.ts applyObjectCharAnim). 시간차와 순서는 글자가 하나뿐이면 저절로
+ * 무력해지므로 프리셋을 두 벌로 나눌 이유가 없다.
  *
  * ---------------------------------------------------------------------------
  * 구조
@@ -86,9 +87,24 @@ function textPreset(args: {
   order?: CharOrder
   /** 들어오면서 흐렸다가 또렷해지는가. 레이어 전체 투명도로 준다. */
   fade?: boolean
+  /** 글자 순번의 홀짝으로 방향이 갈리는 모양. 오브제 하나에서는 뜻이 없다. */
+  textOnly?: boolean
   size?: MotionPreset['size']
 }): MotionPreset {
   const hasDistance = args.distance > 0
+  /*
+   * 이 모션이 프레임 밖에서 출발하는가.
+   *
+   * 글자 레이어에서는 아무 상관이 없다. 글자별 움직임은 상자 **안**에서 일어나고
+   * 레이어 변환은 제자리이기 때문이다. 문제는 오브제다. 오브제는 통째로 자기 크기의
+   * 배수만큼 밖에서 출발하므로, 담기 솔버가 그것까지 담으려 들면 "화면 밖 출발점이
+   * 프레임에 들어올 만큼" 그림을 줄여 버린다. 등장이 끝난 뒤에도 그 배율이 남아
+   * 오브제가 이유 없이 작아진다. slide.inFade 가 allowEmpty 인 것과 같은 이유다.
+   *
+   * 거리 0 에 배율도 안 키우는 모양(타자기 / 밝아지기 / 톡톡 / 뒤집기)은 프레임 안에
+   * 머무르므로 솔버를 그대로 둔다.
+   */
+  const exitsFrame = hasDistance || (args.scale ?? 1) > 1
   return {
     id: args.id,
     label: args.label,
@@ -96,10 +112,8 @@ function textPreset(args: {
     category: 'text',
     tags: ['text'],
     loopSafe: 'once',
-    // 글자별 움직임은 상자 **안**에서 일어난다. 레이어 변환은 제자리라 담기 솔버가
-    // 개입할 일이 없다. allowEmpty 로 두면 '일부러 프레임을 벗어나는 프리셋' 으로
-    // 잘못 분류된다.
-    overscan: 'auto',
+    overscan: exitsFrame ? 'allowEmpty' : 'auto',
+    ...(args.textOnly ? { textOnly: true } : {}),
     easy: true,
     size: args.size ?? 'light',
     defaultDurationMs: args.durationMs,
@@ -276,6 +290,7 @@ const sides = textPreset({
   durationMs: 1000,
   distance: 1.8,
   stagger: 0.35,
+  textOnly: true,
 })
 
 const updown = textPreset({
@@ -288,12 +303,13 @@ const updown = textPreset({
   durationMs: 1000,
   distance: 1.2,
   stagger: 0.35,
+  textOnly: true,
 })
 
 const fromCenter = textPreset({
   id: 'text.fromCenter',
-  label: '가운데에서 퍼지기',
-  hint: '가운데 글자가 먼저 서고 바깥으로 번져 나간다.',
+  label: '가운데부터 번져 나가기',
+  hint: '가운데 글자가 먼저 서고 바깥 글자가 차례로 따라온다. 방향은 글자마다 다르다.',
   mode: 'scatter',
   ease: 'back',
   jitter: 0.2,
@@ -423,6 +439,7 @@ const wave = textPreset({
   durationMs: 1100,
   distance: 0.6,
   stagger: 0.55,
+  textOnly: true,
 })
 
 export const TEXT_PRESETS: MotionPreset[] = [

@@ -4,28 +4,16 @@
  * ShapeSection 과 같은 자리다. 값 규칙은 core/text.ts 와 core/charAnim.ts 한 곳에만
  * 있고 여기서는 입력만 받는다.
  *
- * 두 덩어리다.
- *   글자     : 내용 / 글꼴 / 크기 / 굵기 / 자간 / 행간 / 정렬 / 색 / 테두리
- *   글자 등장 : 어느 쪽에서 어떤 순서로 들어오는가 (진행률은 charIn 트랙이 민다)
+ * 글자 생김새만 다룬다. 어느 쪽에서 어떤 순서로 들어오는지는 CharAnimSection 이
+ * 맡는다. 그쪽은 글자 레이어와 오브제 레이어가 함께 쓰기 때문에 따로 있다.
  */
 
 import { useRef, useState, useSyncExternalStore } from 'react'
 
-import { CHAR_EASE_LABELS, CHAR_IN_LABELS, CHAR_ORDER_LABELS } from '@/core/charAnim.ts'
 import { toHex6 } from '@/core/shape.ts'
 import { TEXT_ALIGN_LABELS, TEXT_LIMITS } from '@/core/text.ts'
-import {
-  CHAR_EASE_LIST,
-  CHAR_IN_MODE_LIST,
-  type CharEase,
-  type CharInMode,
-  type CharOrder,
-  type Layer,
-  type TextAlign,
-} from '@/core/types.ts'
-import { isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
-import { useUiStore } from '@/state/ui.ts'
-import { AnimateToggle } from '@/ui/inspector/AnimateToggle.tsx'
+import { type Layer, type TextAlign } from '@/core/types.ts'
+import { useDocumentStore } from '@/state/document.ts'
 import { allFontChoices, getFontsRevision, loadFontFile, subscribeFonts } from '@/ui/text/fonts.ts'
 import { NumberField, SelectField, ToggleField } from '@/ui/widgets/Field.tsx'
 
@@ -39,26 +27,8 @@ const WEIGHT_OPTIONS = [300, 400, 500, 700, 800, 900].map((w) => ({
   label: w === 400 ? '보통' : w === 700 ? '굵게' : String(w),
 }))
 
-const CHAR_MODE_OPTIONS = CHAR_IN_MODE_LIST.map((value) => ({
-  value,
-  label: CHAR_IN_LABELS[value],
-}))
-
-const CHAR_EASE_OPTIONS = CHAR_EASE_LIST.map((value: CharEase) => ({
-  value,
-  label: CHAR_EASE_LABELS[value],
-}))
-
-const CHAR_ORDER_OPTIONS = (
-  ['forward', 'backward', 'center', 'edges', 'random'] as CharOrder[]
-).map((value) => ({ value, label: CHAR_ORDER_LABELS[value] }))
-
 export function TextSection({ layer }: { layer: Layer }) {
   const setTextSpec = useDocumentStore((s) => s.setTextSpec)
-  const setLayerCharAnim = useDocumentStore((s) => s.setLayerCharAnim)
-  const setStaticValue = useDocumentStore((s) => s.setStaticValue)
-  const setValueAtFrame = useDocumentStore((s) => s.setValueAtFrame)
-  const frame = useUiStore((s) => s.playheadFrame)
 
   // 올린 글꼴이 들어오면 목록을 다시 그린다.
   useSyncExternalStore(subscribeFonts, getFontsRevision)
@@ -69,25 +39,6 @@ export function TextSection({ layer }: { layer: Layer }) {
 
   const text = layer.text
   if (!text) return null
-
-  const anim = layer.charAnim
-  const mode: CharInMode = anim?.mode ?? 'none'
-  const animOn = mode !== 'none'
-
-  /*
-   * 진행률. 가리기와 같은 자리다.
-   *
-   * 방향을 고르면 스토어가 0 -> 1 트랙을 만들어 주므로 보통은 손댈 일이 없다.
-   * 여기 있는 이유는 "지금 이 프레임에서 얼마나 들어왔는가" 를 눈으로 확인하고,
-   * 그래프 에디터로 넘어가기 전에 손으로 찍을 수 있어야 하기 때문이다.
-   */
-  const progress = readStaticValue(layer, 'charIn', frame) ?? 1
-  const progressPercent = Math.round(progress * 100)
-
-  function writeProgress(value: number): void {
-    if (isAnimated(layer, 'charIn')) setValueAtFrame(layer.id, 'charIn', frame, value)
-    else setStaticValue(layer.id, 'charIn', value)
-  }
 
   /*
    * 글꼴 목록에 지금 값이 없을 수 있다. 올린 글꼴을 쓰던 프로젝트를 글꼴 없이 열면
@@ -267,111 +218,6 @@ export function TextSection({ layer }: { layer: Layer }) {
                 />
               </div>
             </div>
-          ) : null}
-        </div>
-      </section>
-
-      <section className="mm-section" aria-labelledby="mm-sec-charin">
-        <h2 className="mm-section-title" id="mm-sec-charin">
-          글자 등장
-        </h2>
-        <div className="mm-stack">
-          <SelectField
-            label="들어오는 모양"
-            value={mode}
-            options={CHAR_MODE_OPTIONS}
-            ariaLabel="글자가 들어오는 모양"
-            onChange={(v) => setLayerCharAnim(layer.id, { mode: v })}
-          />
-
-          {animOn ? (
-            <>
-              <SelectField
-                label="속도 곡선"
-                value={anim?.ease ?? 'back'}
-                options={CHAR_EASE_OPTIONS}
-                hint="글자 하나가 제자리까지 가는 속도입니다. 지나쳤다 돌아오면 쫀득해집니다."
-                ariaLabel="글자 하나의 속도 곡선"
-                onChange={(v) => setLayerCharAnim(layer.id, { ease: v })}
-              />
-              <NumberField
-                label="도착 흔들림"
-                value={anim?.jitter ?? 0.15}
-                min={0}
-                max={1}
-                step={0.05}
-                hint="0 이면 기계처럼 균일합니다. 조금 흔들어야 사람이 만든 것처럼 보입니다."
-                ariaLabel="글자마다 도착 시간을 흔드는 정도"
-                onChange={(v) => setLayerCharAnim(layer.id, { jitter: v })}
-              />
-              <SelectField
-                label="순서"
-                value={anim?.order ?? 'forward'}
-                options={CHAR_ORDER_OPTIONS}
-                ariaLabel="글자가 들어오는 순서"
-                onChange={(v) => setLayerCharAnim(layer.id, { order: v })}
-              />
-              <NumberField
-                label="글자 시간차"
-                value={anim?.stagger ?? 0.5}
-                min={0}
-                max={1}
-                step={0.05}
-                ariaLabel="글자 사이 시간차"
-                onChange={(v) => setLayerCharAnim(layer.id, { stagger: v })}
-              />
-              <NumberField
-                label="출발 거리"
-                value={anim?.distance ?? 1.2}
-                min={0}
-                max={8}
-                step={0.1}
-                ariaLabel="출발 거리(글자 크기 배수)"
-                onChange={(v) => setLayerCharAnim(layer.id, { distance: v })}
-              />
-              <NumberField
-                label="출발 각도"
-                value={anim?.rotate ?? 0}
-                min={-1440}
-                max={1440}
-                step={15}
-                suffix="도"
-                ariaLabel="출발 각도(도)"
-                onChange={(v) => setLayerCharAnim(layer.id, { rotate: v })}
-              />
-              <NumberField
-                label="출발 배율"
-                value={anim?.scale ?? 1}
-                min={0}
-                max={12}
-                step={0.1}
-                ariaLabel="출발 배율"
-                onChange={(v) => setLayerCharAnim(layer.id, { scale: v })}
-              />
-              <NumberField
-                label="무작위 시드"
-                value={anim?.seed ?? 1}
-                min={0}
-                max={9999}
-                step={1}
-                ariaLabel="무작위 방향과 순서의 시드"
-                onChange={(v) => setLayerCharAnim(layer.id, { seed: v })}
-              />
-              <div className="mm-anim-row">
-                <AnimateToggle layerId={layer.id} prop="charIn" frame={frame} label="글자 등장" />
-                <NumberField
-                  label="진행률"
-                  value={progressPercent}
-                  min={0}
-                  max={100}
-                  step={1}
-                  suffix="%"
-                  hint="0 이면 출발점, 100 이면 전부 제자리입니다. 방향을 고르면 자동으로 0에서 100까지 흐릅니다."
-                  ariaLabel="글자 등장 진행률"
-                  onChange={(v) => writeProgress(Math.min(1, Math.max(0, v / 100)))}
-                />
-              </div>
-            </>
           ) : null}
         </div>
       </section>

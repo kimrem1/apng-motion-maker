@@ -228,6 +228,9 @@ describe('카탈로그 전체 회귀', () => {
     // 입체 뒤집기 5종은 나가는 것이 아니라 **비는 것**이 의도다. 90도에 가까워지면
     // 화면에 닿는 폭이 0 에 수렴하는데, 채우기 솔버가 그 빈 곳을 메우려 들면
     // 원본을 스무 배까지 확대한다 (presets/reveal.ts 머리주석).
+    // 글자 12종은 오브제에 걸었을 때 자기 크기의 배수만큼 밖에서 출발한다. 담기가
+    // 그 출발점까지 담으려 들면 등장이 끝난 뒤에도 그림이 작아진 채로 남는다
+    // (presets/text.ts exitsFrame). 글자 레이어에서는 상자가 제자리라 영향이 없다.
     expect(exiting.sort()).toEqual([
       'combo.slideFadeGlitch',
       'flip3d.cardIn',
@@ -241,6 +244,18 @@ describe('카탈로그 전체 회귀', () => {
       'slide.crossUp',
       'slide.inFade',
       'slide.outFade',
+      'text.drop',
+      'text.fromCenter',
+      'text.scatter',
+      'text.scatterSpin',
+      'text.sides',
+      'text.slideDown',
+      'text.slideLeft',
+      'text.slideRight',
+      'text.slideUp',
+      'text.updown',
+      'text.wave',
+      'text.zoomOut',
     ])
   })
 

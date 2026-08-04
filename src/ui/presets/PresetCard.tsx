@@ -58,6 +58,8 @@ export interface PresetMeta {
   flashWarning: boolean
   /** 검색 대상 문자열 */
   keywords: string
+  /** 글자 레이어에만 뜻이 있다. 다른 레이어에서는 목록에서 감춘다 */
+  textOnly: boolean
 }
 
 /**
@@ -78,6 +80,7 @@ export function readPresetMeta(preset: MotionPreset): PresetMeta {
     needsLargeSource: preset.largeSource === true,
     flashWarning: preset.flashWarning === true,
     keywords: [preset.label, preset.hint, preset.category, ...preset.tags].join(' ').toLowerCase(),
+    textOnly: preset.textOnly === true,
   }
 }
 

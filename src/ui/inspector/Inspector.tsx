@@ -28,6 +28,7 @@ import { EffectStack } from '@/ui/effects/EffectStack.tsx'
 import { LayerProperties } from '@/ui/layers/LayerProperties.tsx'
 import { PrepPanel } from '@/ui/prep/PrepPanel.tsx'
 import { TextSection } from './TextSection.tsx'
+import { CharAnimSection } from './CharAnimSection.tsx'
 import { ShapeSection } from '@/ui/inspector/ShapeSection.tsx'
 import { useUiStore } from '@/state/ui.ts'
 import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
@@ -639,7 +640,12 @@ export function Inspector() {
             <LayerSection key={layer.id} layer={layer} />
             {/* 도형이면 모양부터. "이게 무엇인가" 다음에 "남들과 어떤 관계인가" 가 온다 */}
             {layer.shape ? <ShapeSection key={`shape:${layer.id}`} layer={layer} /> : null}
-          {layer.text ? <TextSection key={`text:${layer.id}`} layer={layer} /> : null}
+            {layer.text ? <TextSection key={`text:${layer.id}`} layer={layer} /> : null}
+            {/*
+              등장. 글자면 한 글자씩, 그 외에는 오브제 통째로 들어온다.
+              규칙이 한 벌이라 화면도 한 벌이다 (core/charAnim.ts).
+            */}
+            <CharAnimSection key={`charin:${layer.id}`} layer={layer} />
             {/* 경계선이 지나가는 모양. 모양은 여기, 진행률은 타임라인이다 */}
             <RevealSection key={`reveal:${layer.id}`} layer={layer} />
             {/* 레이어 고유 속성: 혼합, 깊이감, 부모, 캔버스 채움, 오버스캔 진단 */}

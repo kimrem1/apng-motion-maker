@@ -7,7 +7,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { getTrack, isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
+import { charInSpanOf, getTrack, isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
 import { assetRegistry } from '@/state/assets.ts'
 import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
 import type { AssetRef, MotionProject } from '@/core/types.ts'
@@ -559,5 +559,67 @@ describe('presetRef 기록', () => {
     // 프리셋 트랙은 f:0 에 키가 있다. 기본 재생 헤드에서 고치면 '기존 키 갱신' 분기다.
     s().setValueAtFrame(L, 'scale', 0, 1.2)
     expect(s().doc.presetRef?.dirty).toBe(true)
+  })
+})
+
+/**
+ * 등장 속도.
+ *
+ * 진행률 트랙의 시작과 길이가 곧 속도다. 길이를 줄이면 같은 모션이 빨라진다.
+ * 속도 곡선은 이 트랙이 아니라 글자마다 charAnim.ease 가 걸므로, 여기 트랙은
+ * 언제나 등속 0 -> 1 이어야 한다.
+ */
+describe('등장 속도', () => {
+  it('모양을 고르면 타임라인 전체를 쓴다', () => {
+    s().setLayerCharAnim(L, { mode: 'left' })
+    const span = charInSpanOf(s().doc.layers[0]!, s().doc.timeline.durationFrames)
+    expect(span.start).toBe(0)
+    expect(span.frames).toBe(s().doc.timeline.durationFrames - 1)
+  })
+
+  it('길이를 줄이면 같은 프레임에서 더 많이 들어와 있다', () => {
+    s().setLayerCharAnim(L, { mode: 'left' })
+    const mid = Math.floor(s().doc.timeline.durationFrames / 2)
+    const slow = readStaticValue(s().doc.layers[0]!, 'charIn', mid)
+
+    s().setCharInSpan(L, 0, 4)
+    const fast = readStaticValue(s().doc.layers[0]!, 'charIn', mid)
+    expect(fast).toBeGreaterThan(slow)
+    expect(fast).toBe(1)
+  })
+
+  it('시작을 미루면 그 전에는 출발점 그대로다', () => {
+    s().setLayerCharAnim(L, { mode: 'left' })
+    s().setCharInSpan(L, 10, 5)
+    const layer = s().doc.layers[0]!
+    expect(readStaticValue(layer, 'charIn', 9)).toBe(0)
+    expect(readStaticValue(layer, 'charIn', 15)).toBe(1)
+    expect(charInSpanOf(layer, s().doc.timeline.durationFrames)).toEqual({ start: 10, frames: 5 })
+  })
+
+  it('마지막 프레임을 넘어가지 않는다', () => {
+    // 넘어가면 등장이 끝나지 않은 채로 파일이 끝난다.
+    s().setLayerCharAnim(L, { mode: 'left' })
+    s().setCharInSpan(L, 0, 99999)
+    const last = s().doc.timeline.durationFrames - 1
+    expect(readStaticValue(s().doc.layers[0]!, 'charIn', last)).toBe(1)
+  })
+
+  it('트랙은 등속으로 남는다', () => {
+    s().setLayerCharAnim(L, { mode: 'left' })
+    s().setCharInSpan(L, 0, 10)
+    const track = getTrack(s().doc.layers[0]!, 'charIn')!
+    expect(track.keys.map((k) => k.interp)).toEqual(['linear', 'linear'])
+    // 절반 지점의 값이 정확히 절반이어야 등속이다.
+    expect(readStaticValue(s().doc.layers[0]!, 'charIn', 5)).toBeCloseTo(0.5, 9)
+  })
+
+  it('등장 시간 변경도 실행취소 한 칸이다', () => {
+    s().setLayerCharAnim(L, { mode: 'left' })
+    const before = s().past.length
+    s().setCharInSpan(L, 2, 6)
+    expect(s().past.length).toBe(before + 1)
+    s().undo()
+    expect(charInSpanOf(s().doc.layers[0]!, s().doc.timeline.durationFrames).start).toBe(0)
   })
 })

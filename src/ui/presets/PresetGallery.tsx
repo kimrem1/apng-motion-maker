@@ -120,16 +120,29 @@ export function PresetGallery() {
 
   const categories = useMemo(() => Object.entries(CATEGORY_LABELS), [])
 
+  /*
+   * 고른 레이어가 글자인가.
+   *
+   * 글자 등장은 거의 전부 이미지와 도형에도 그대로 걸린다. 예외는 글자 순번의
+   * 홀짝으로 방향이 갈리는 몇 종뿐이고, 그것만 감춘다 (motions/types.ts textOnly).
+   */
+  const targetIsText = useMemo(() => {
+    const id = selectedLayerId
+    if (!id) return false
+    return doc.layers.find((l) => l.id === id)?.text !== undefined
+  }, [doc.layers, selectedLayerId])
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
     return metas.filter((m) => {
       // EASY 는 기본 16종만 보여 준다. 51개를 한 번에 늘어놓으면 선택 마비가 온다.
       if (mode === 'easy' && !showAll && !easyIds.has(m.id)) return false
+      if (m.textOnly && !targetIsText) return false
       if (category !== 'all' && m.category !== category) return false
       if (q.length > 0 && !m.keywords.includes(q)) return false
       return true
     })
-  }, [metas, query, category, mode, showAll, easyIds])
+  }, [metas, query, category, mode, showAll, easyIds, targetIsText])
 
   // "변형 더 보기" 숫자는 EASY 필터가 감춘 개수다. 검색으로 걸러진 것까지 세면
   // 검색어를 지우면 숫자가 확 바뀌어 버튼이 거짓말을 한다.

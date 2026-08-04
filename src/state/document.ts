@@ -179,6 +179,14 @@ interface DocumentState {
    */
   setLayerCharAnim(layerId: string, patch: Partial<CharAnimSpec>): void
   /**
+   * 등장이 시작하는 프레임과 걸리는 프레임 수. 곧 등장 속도다.
+   *
+   * 진행률 트랙을 **등속 0 -> 1 로 다시 쓴다.** 그래프 에디터로 찍어 둔 키가 있으면
+   * 지워진다. 속도 조절은 "이만큼에 걸쳐 들어와라" 라는 지시라 그 편이 맞다.
+   * 속도 곡선은 이 트랙이 아니라 글자마다 charAnim.ease 가 건다.
+   */
+  setCharInSpan(layerId: string, startFrame: number, frames: number): void
+  /**
    * 가리기 모양을 바꾼다. 값 규칙은 core/reveal.ts 한 곳에만 있다.
    *
    * 'none' 으로 되돌리면 필드를 지운다. 남겨 두면 저장 파일에 아무 일도 하지 않는
@@ -467,21 +475,41 @@ function markPresetDirty(doc: MotionProject): void {
  * 등속이어야 하고, 속도 곡선은 글자마다 charAnim.ease 가 건다. 둘 다 걸면 곡선이
  * 두 번 먹어 앞 글자만 빨라지고 뒤 글자는 기어 오는 이상한 리듬이 된다.
  */
+function writeCharInSpan(layer: Layer, start: number, end: number): void {
+  let track = findTrack(layer, 'charIn')
+  if (!track) {
+    track = createStaticTrack('charIn', 'ratio', 0)
+    layer.tracks.push(track)
+  }
+  track.animated = true
+  track.keys = [
+    { f: start, v: 0, interp: 'linear' },
+    { f: end, v: 1, interp: 'linear' },
+  ]
+}
+
 function ensureCharInTrack(d: MotionProject, layer: Layer): void {
   if (findTrack(layer, 'charIn')) return
+  writeCharInSpan(layer, 0, Math.max(1, d.timeline.durationFrames - 1))
+}
 
-  const end = Math.max(1, d.timeline.durationFrames - 1)
-  const track = createStaticTrack('charIn', 'ratio', 0)
-  track.animated = true
+/**
+ * 등장이 언제 시작해 몇 프레임 동안 이어지는가. 인스펙터의 속도 조절이 읽는다.
+ *
+ * 트랙의 첫 키와 마지막 키가 그대로 답이다. 트랙이 없으면 ensureCharInTrack 이
+ * 만들 값을 미리 답한다. 그래야 모양을 고르는 순간 숫자가 튀지 않는다.
+ */
+export function charInSpanOf(
+  layer: Layer,
+  durationFrames: number,
+): { start: number; frames: number } {
+  const full = Math.max(1, durationFrames - 1)
+  const track = findTrack(layer, 'charIn')
+  if (!track || track.keys.length === 0) return { start: 0, frames: full }
 
   const first = track.keys[0]!
-  first.f = 0
-  first.v = 0
-
-  first.interp = 'linear'
-  track.keys.push({ f: end, v: 1, interp: 'linear' })
-
-  layer.tracks.push(track)
+  const last = track.keys[track.keys.length - 1]!
+  return { start: Math.max(0, first.f), frames: Math.max(1, last.f - first.f) }
 }
 
 export const useDocumentStore = create<DocumentState>()((set, get) => {
@@ -724,6 +752,23 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           markPresetDirty(d)
         },
         `charAnim:${layerId}`,
+      )
+    },
+
+    setCharInSpan(layerId, startFrame, frames) {
+      mutateDoc(
+        '등장 시간 바꾸기',
+        (d) => {
+          const layer = findLayer(d, layerId)
+          if (!layer) return
+          // 마지막 출력 프레임을 넘어가면 등장이 끝나지 않은 채로 파일이 끝난다.
+          const lastFrame = Math.max(1, d.timeline.durationFrames - 1)
+          const start = clamp(Math.round(startFrame), 0, lastFrame - 1)
+          const span = clamp(Math.round(frames), 1, lastFrame - start)
+          writeCharInSpan(layer, start, start + span)
+          markPresetDirty(d)
+        },
+        `charInSpan:${layerId}`,
       )
     },
 
