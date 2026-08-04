@@ -25,7 +25,7 @@
  */
 
 import { createCharAnimSpec } from '@/core/charAnim.ts'
-import type { CharInMode, CharOrder } from '@/core/types.ts'
+import type { CharEase, CharInMode, CharOrder } from '@/core/types.ts'
 import type { MotionPreset, PresetEmission } from '@/motions/types.ts'
 import {
   bool,
@@ -68,8 +68,15 @@ function textPreset(args: {
   label: string
   hint: string
   mode: CharInMode
-  /** 진행률 곡선. 여기서 느낌이 갈린다. */
-  ease: string
+  /**
+   * **글자 하나**의 속도 곡선. 여기서 느낌이 갈린다.
+   *
+   * 진행률 트랙이 아니라 charAnim 에 실린다. 트랙은 등속(컨베이어)이어야 하고,
+   * 곡선을 트랙에도 걸면 두 번 먹어 앞 글자만 빨라지고 뒤 글자는 기어 온다.
+   */
+  ease: CharEase
+  /** 글자마다 도착 시간을 얼마나 흔들 것인가. */
+  jitter?: number
   durationMs: number
   /** 세기 1 일 때의 출발 거리(글자 크기 배수). 0 이면 거리 노브를 숨긴다. */
   distance: number
@@ -129,8 +136,15 @@ function textPreset(args: {
       const stagger = clamp(num(ctx.params, 'stagger', args.stagger), 0, 1)
 
       const tracks = [
-        // 진행률은 0 에서 1 로 한 번만 간다. 곡선이 느낌을 정한다.
-        track('charIn', 'ratio', buildKeys([{ f: 0, v: 0 }, { f: end, v: 1 }], args.ease)),
+        /*
+         * 진행률 트랙은 **등속이다.**
+         *
+         * 이 트랙이 하는 일은 "글자들을 차례로 출발시키는 것" 하나뿐이다. 속도 곡선은
+         * 글자마다 charAnim.ease 가 건다. 여기에 곡선을 걸면 각 글자가 그 곡선을
+         * 선형으로 잘라 쓰게 되어, 첫 글자만 빠르고 나머지는 등속으로 기어 온다.
+         * 실제로 그래서 밋밋했다.
+         */
+        track('charIn', 'ratio', buildKeys([{ f: 0, v: 0 }, { f: end, v: 1 }], 'linear')),
       ]
 
       /*
@@ -154,6 +168,8 @@ function textPreset(args: {
           rotate,
           scale,
           order: orderOf(ctx.params, args.order ?? 'forward'),
+          ease: args.ease,
+          jitter: args.jitter ?? 0.15,
           // 시드는 레이어마다 달라야 같은 화면의 두 줄이 똑같이 흩어지지 않는다.
           seed: ctx.seed & 0xffff,
         }),
@@ -173,7 +189,8 @@ const slideLeft = textPreset({
   label: '왼쪽에서 밀려들어오기',
   hint: '글자가 왼쪽에서 차례로 미끄러져 들어와 제자리에 선다.',
   mode: 'left',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.12,
   durationMs: 900,
   distance: 1.4,
   stagger: 0.45,
@@ -184,7 +201,8 @@ const slideRight = textPreset({
   label: '오른쪽에서 밀려들어오기',
   hint: '오른쪽에서 들어온다. 뒤에서부터 순서를 바꾸면 흘러가는 느낌이 난다.',
   mode: 'right',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.12,
   durationMs: 900,
   distance: 1.4,
   stagger: 0.45,
@@ -196,7 +214,8 @@ const slideUp = textPreset({
   label: '아래에서 올라오기',
   hint: '자막이 아래에서 밀려 올라오는 가장 흔한 방식이다.',
   mode: 'down',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.12,
   durationMs: 850,
   distance: 1,
   stagger: 0.4,
@@ -207,7 +226,8 @@ const slideDown = textPreset({
   label: '위에서 내려오기',
   hint: '위에서 떨어져 내려온다.',
   mode: 'up',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.12,
   durationMs: 850,
   distance: 1,
   stagger: 0.4,
@@ -222,7 +242,8 @@ const scatter = textPreset({
   label: '사방에서 모이기',
   hint: '글자마다 다른 방향에서 날아와 한 줄로 모인다. 시드가 방향을 정한다.',
   mode: 'scatter',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.3,
   durationMs: 1100,
   distance: 2.2,
   stagger: 0.35,
@@ -235,7 +256,8 @@ const scatterSpin = textPreset({
   label: '돌면서 사방에서 모이기',
   hint: '사방에서 날아오며 각자 한 바퀴 돈다. 흩날리는 종이 같은 느낌이다.',
   mode: 'scatter',
-  ease: 'easeOutQuart',
+  ease: 'out',
+  jitter: 0.3,
   durationMs: 1300,
   distance: 2.4,
   stagger: 0.4,
@@ -249,7 +271,8 @@ const sides = textPreset({
   label: '좌우에서 번갈아',
   hint: '홀수 글자는 왼쪽, 짝수 글자는 오른쪽에서 들어와 맞물린다.',
   mode: 'sides',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.12,
   durationMs: 1000,
   distance: 1.8,
   stagger: 0.35,
@@ -260,7 +283,8 @@ const updown = textPreset({
   label: '위아래에서 번갈아',
   hint: '한 글자씩 위와 아래에서 엇갈려 들어온다.',
   mode: 'updown',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.12,
   durationMs: 1000,
   distance: 1.2,
   stagger: 0.35,
@@ -271,7 +295,8 @@ const fromCenter = textPreset({
   label: '가운데에서 퍼지기',
   hint: '가운데 글자가 먼저 서고 바깥으로 번져 나간다.',
   mode: 'scatter',
-  ease: 'easeOutQuint',
+  ease: 'back',
+  jitter: 0.2,
   durationMs: 1000,
   distance: 1.6,
   stagger: 0.4,
@@ -289,6 +314,7 @@ const typewriter = textPreset({
   mode: 'typewriter',
   // 등속이어야 타이핑 리듬이 일정하다. 가속을 넣으면 뒤로 갈수록 빨라진다.
   ease: 'linear',
+  jitter: 0,
   durationMs: 1200,
   distance: 0,
   stagger: 1,
@@ -300,7 +326,8 @@ const fadeIn = textPreset({
   label: '차례로 밝아지기',
   hint: '자리는 그대로 두고 한 글자씩 밝아진다. 가장 조용한 등장이다.',
   mode: 'fade',
-  ease: 'easeOutQuad',
+  ease: 'soft',
+  jitter: 0.25,
   durationMs: 1000,
   distance: 0,
   stagger: 0.6,
@@ -312,7 +339,8 @@ const drop = textPreset({
   label: '떨어져 튕기기',
   hint: '위에서 떨어져 바닥에 부딪히듯 한 번 튕긴다.',
   mode: 'drop',
-  ease: 'bounceOut',
+  ease: 'bounce',
+  jitter: 0.18,
   durationMs: 1200,
   distance: 1.6,
   stagger: 0.4,
@@ -324,7 +352,8 @@ const pop = textPreset({
   label: '톡톡 튀어나오기',
   hint: '작게 시작해 살짝 넘쳤다가 제자리 크기를 잡는다.',
   mode: 'zoom',
-  ease: 'popBack',
+  ease: 'back',
+  jitter: 0.18,
   durationMs: 900,
   distance: 0,
   stagger: 0.45,
@@ -336,7 +365,8 @@ const zoomIn = textPreset({
   label: '멀리서 다가오기',
   hint: '작은 점에서 커지며 다가온다. 가운데에서부터 퍼지면 더 세다.',
   mode: 'zoom',
-  ease: 'easeOutQuint',
+  ease: 'snap',
+  jitter: 0.2,
   durationMs: 1000,
   distance: 0,
   stagger: 0.4,
@@ -349,7 +379,8 @@ const zoomOut = textPreset({
   label: '크게 왔다 제자리로',
   hint: '화면을 덮을 만큼 크게 시작해 제자리 크기로 줄어든다.',
   mode: 'shrink',
-  ease: 'easeOutQuint',
+  ease: 'snap',
+  jitter: 0.15,
   durationMs: 950,
   distance: 0,
   stagger: 0.35,
@@ -362,7 +393,8 @@ const spin = textPreset({
   label: '제자리에서 돌기',
   hint: '자리는 그대로 두고 글자마다 한 바퀴 돈다.',
   mode: 'spin',
-  ease: 'easeOutQuart',
+  ease: 'back',
+  jitter: 0.2,
   durationMs: 1100,
   distance: 0,
   stagger: 0.4,
@@ -374,7 +406,8 @@ const flip = textPreset({
   label: '카드처럼 뒤집히기',
   hint: '가로로 눌린 상태에서 펴진다. 글자 카드가 한 장씩 도는 느낌이다.',
   mode: 'flip',
-  ease: 'easeOutQuart',
+  ease: 'out',
+  jitter: 0.2,
   durationMs: 1000,
   distance: 0,
   stagger: 0.5,
@@ -385,7 +418,8 @@ const wave = textPreset({
   label: '물결치듯',
   hint: '위아래로 엇갈려 출렁이며 자리를 잡는다.',
   mode: 'wave',
-  ease: 'easeOutBack',
+  ease: 'elastic',
+  jitter: 0.25,
   durationMs: 1100,
   distance: 0.6,
   stagger: 0.55,

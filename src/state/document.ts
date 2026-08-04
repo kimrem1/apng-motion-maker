@@ -463,8 +463,9 @@ function markPresetDirty(doc: MotionProject): void {
  * **이미 있으면 손대지 않는다.** 그래프 에디터로 다듬어 둔 곡선을 방향만 바꿨다고
  * 지우면, 사용자가 만든 것을 말없이 되돌리는 셈이 된다.
  *
- * 곡선은 감속(easeOutQuint)이다. 등속으로 들어오면 글자가 미끄러지는 것처럼 보이고,
- * 감속이 걸려야 날아와 멈추는 느낌이 난다.
+ * **곡선은 여기 걸지 않는다.** 이 트랙은 "글자들이 차례로 출발하는" 컨베이어라
+ * 등속이어야 하고, 속도 곡선은 글자마다 charAnim.ease 가 건다. 둘 다 걸면 곡선이
+ * 두 번 먹어 앞 글자만 빨라지고 뒤 글자는 기어 오는 이상한 리듬이 된다.
  */
 function ensureCharInTrack(d: MotionProject, layer: Layer): void {
   if (findTrack(layer, 'charIn')) return
@@ -477,16 +478,8 @@ function ensureCharInTrack(d: MotionProject, layer: Layer): void {
   first.f = 0
   first.v = 0
 
-  const last: Keyframe = { f: end, v: 1, interp: 'bezier' }
-  const preset = EASING_PRESET_BY_ID.get('easeOutQuint')
-  if (preset?.handles) {
-    first.interp = preset.interp
-    // 평가 정본이 프리셋에 있다 (setKeyframeEasing 과 같은 규칙).
-    first.easingPreset = preset.id
-    first.out = { ...preset.handles.out }
-    last.in = { ...preset.handles.in }
-  }
-  track.keys.push(last)
+  first.interp = 'linear'
+  track.keys.push({ f: end, v: 1, interp: 'linear' })
 
   layer.tracks.push(track)
 }

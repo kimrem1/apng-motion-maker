@@ -11,11 +11,13 @@
 
 import { useRef, useState, useSyncExternalStore } from 'react'
 
-import { CHAR_IN_LABELS, CHAR_ORDER_LABELS } from '@/core/charAnim.ts'
+import { CHAR_EASE_LABELS, CHAR_IN_LABELS, CHAR_ORDER_LABELS } from '@/core/charAnim.ts'
 import { toHex6 } from '@/core/shape.ts'
 import { TEXT_ALIGN_LABELS, TEXT_LIMITS } from '@/core/text.ts'
 import {
+  CHAR_EASE_LIST,
   CHAR_IN_MODE_LIST,
+  type CharEase,
   type CharInMode,
   type CharOrder,
   type Layer,
@@ -40,6 +42,11 @@ const WEIGHT_OPTIONS = [300, 400, 500, 700, 800, 900].map((w) => ({
 const CHAR_MODE_OPTIONS = CHAR_IN_MODE_LIST.map((value) => ({
   value,
   label: CHAR_IN_LABELS[value],
+}))
+
+const CHAR_EASE_OPTIONS = CHAR_EASE_LIST.map((value: CharEase) => ({
+  value,
+  label: CHAR_EASE_LABELS[value],
 }))
 
 const CHAR_ORDER_OPTIONS = (
@@ -279,6 +286,24 @@ export function TextSection({ layer }: { layer: Layer }) {
 
           {animOn ? (
             <>
+              <SelectField
+                label="속도 곡선"
+                value={anim?.ease ?? 'back'}
+                options={CHAR_EASE_OPTIONS}
+                hint="글자 하나가 제자리까지 가는 속도입니다. 지나쳤다 돌아오면 쫀득해집니다."
+                ariaLabel="글자 하나의 속도 곡선"
+                onChange={(v) => setLayerCharAnim(layer.id, { ease: v })}
+              />
+              <NumberField
+                label="도착 흔들림"
+                value={anim?.jitter ?? 0.15}
+                min={0}
+                max={1}
+                step={0.05}
+                hint="0 이면 기계처럼 균일합니다. 조금 흔들어야 사람이 만든 것처럼 보입니다."
+                ariaLabel="글자마다 도착 시간을 흔드는 정도"
+                onChange={(v) => setLayerCharAnim(layer.id, { jitter: v })}
+              />
               <SelectField
                 label="순서"
                 value={anim?.order ?? 'forward'}

@@ -30,7 +30,7 @@ import { BLEND_FS, BLEND_MODE_CODE } from './shaders/blend.ts'
 import { SHAPE_FS, SHAPE_KIND_CODE } from './shaders/shape.ts'
 import { TEXT_FS, TEXT_VS } from './shaders/text.ts'
 import { TextRasterCache, type TextRaster } from './textAtlas.ts'
-import { charProgress, charTransformAt } from '../charAnim.ts'
+import { charEasedProgress, charProgress, charTransformAt } from '../charAnim.ts'
 import {
   disposeEffectResources,
   effectWarmupCombos,
@@ -592,8 +592,10 @@ export class Renderer {
       let scx = 1
       let alpha = 1
       if (anim) {
-        const p = charProgress(anim, glyph.order, count, t)
-        const ct = charTransformAt(anim, glyph.order, p)
+        // 곡선은 글자마다 걸린다. 원시 진행률은 투명도가 따로 쓴다(깜빡임 방지).
+        const eased = charEasedProgress(anim, glyph.order, count, t)
+        const raw = charProgress(anim, glyph.order, count, t)
+        const ct = charTransformAt(anim, glyph.order, eased, raw)
         tx = ct.tx * spec.fontSize
         ty = ct.ty * spec.fontSize
         rot = ct.rotate
