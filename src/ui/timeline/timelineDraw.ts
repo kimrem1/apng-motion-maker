@@ -4,8 +4,8 @@
  * React 를 모르는 순수 모듈이다. 상호작용 로직과 분리해 두면 그리기만 따로
  * 테스트할 수 있고, 타임라인과 그래프가 같은 좌표 규칙을 공유하게 된다.
  *
- * 색은 전부 CSS 변수에서 읽는다. 캔버스에 색을 하드코딩하면 라이트/다크
- * 전환 때 캔버스만 남아 떠 보인다.
+ * 색은 전부 CSS 변수에서 읽는다. 캔버스에 색을 박아 두면 토큰을 고쳤을 때
+ * 화면에서 여기만 예전 색으로 남는다.
  *
  * 타임라인과 접근성 트리는 반드시 여기 있는 같은 모델에서 파생시킨다.
  * 두 곳에서 따로 계산하면 곧 어긋난다.
@@ -107,22 +107,22 @@ const THEME_VARS = {
 
 export type TimelineTheme = Record<keyof typeof THEME_VARS, string>
 
-/** CSS 변수를 못 읽는 환경(테스트 등)에서 쓰는 값. 다크 토큰과 같다. */
+/** CSS 변수를 못 읽는 환경(테스트 등)에서 쓰는 값. tokens.css 와 같은 값이어야 한다. */
 const THEME_FALLBACK: TimelineTheme = {
-  bg: '#0e0f13',
-  surface: '#16181e',
-  surfaceRaised: '#1c1f27',
-  surfaceHover: '#232733',
-  border: '#2a2f3a',
-  borderStrong: '#3a4150',
-  text: '#e9ebf2',
-  textMuted: '#a8b0c2',
-  textFaint: '#8b93a5',
-  accent: '#3d7dff',
-  accentSoft: 'rgba(61, 125, 255, 0.16)',
-  danger: '#ff6b6b',
-  warn: '#ffb648',
-  focus: '#8ab4ff',
+  bg: '#000000',
+  surface: '#0a0a0a',
+  surfaceRaised: '#141414',
+  surfaceHover: '#1e1e1e',
+  border: '#2e2e2e',
+  borderStrong: '#6e6e6e',
+  text: '#f2f2f2',
+  textMuted: '#b4b4b4',
+  textFaint: '#949494',
+  accent: '#e8e8e8',
+  accentSoft: 'rgba(255, 255, 255, 0.14)',
+  danger: '#ffffff',
+  warn: '#d9d9d9',
+  focus: '#ffffff',
   fontUi: 'system-ui, sans-serif',
   fontMono: 'ui-monospace, monospace',
 }
@@ -308,7 +308,7 @@ export function describeKeyframe(row: TrackRow, index: number): string {
 
 /**
  * 마커 모양이 보간 타입을 나타낸다.
- * 색만으로 구분하면 색각 이상 사용자가 타입을 읽을 수 없다.
+ * 밝기만으로 구분하면 저대비 화면에서 타입을 읽을 수 없다.
  */
 export type KeyShape = 'diamond' | 'circle' | 'square' | 'star' | 'triangle'
 
@@ -631,7 +631,13 @@ export function drawTimeline(ctx: CanvasRenderingContext2D, o: TimelineDrawOptio
       const shape = shapeForInterp(key.interp)
       const r0 = isSelected ? 6.5 : 5.5
 
-      // 선택은 색 + 두꺼운 외곽선 + 바깥 링까지 세 가지로 표시한다.
+      /*
+       * 선택은 크기 + 어두운 테 + 바깥 링 세 가지로 표시한다.
+       *
+       * 선택된 키의 테를 바탕색으로 칠하는 것이 요령이다. 채움과 바깥 링이 둘 다
+       * 밝은 무채색이라, 그 사이에 어두운 선이 없으면 둘이 한 덩어리로 뭉쳐
+       * 그냥 큰 점 하나로 보인다.
+       */
       if (isSelected) {
         keyShapePath(ctx, x, cy, shape, r0 + 3.5)
         ctx.strokeStyle = theme.focus
@@ -642,13 +648,13 @@ export function drawTimeline(ctx: CanvasRenderingContext2D, o: TimelineDrawOptio
       keyShapePath(ctx, x, cy, shape, r0)
       ctx.fillStyle = isSelected ? theme.accent : isHovered ? theme.surfaceHover : theme.surfaceRaised
       ctx.fill()
-      ctx.strokeStyle = isSelected ? theme.text : theme.borderStrong
+      ctx.strokeStyle = isSelected ? theme.bg : theme.borderStrong
       ctx.lineWidth = isSelected ? 2.25 : 1.5
       ctx.stroke()
     }
   }
 
-  // 재생 헤드. 선택(액센트)과 색이 겹치지 않게 경고색을 쓴다.
+  // 재생 헤드. 화면 높이를 가로지르는 선이라 점으로 찍히는 키와 모양부터 다르다.
   const px = Math.round(frameToX(o.playhead, axis)) + 0.5
   if (px >= -1 && px <= width + 1) {
     ctx.strokeStyle = theme.warn
@@ -780,7 +786,8 @@ export function drawHandlePoint(
   ctx.arc(x, y, active ? 6 : 5, 0, Math.PI * 2)
   ctx.fillStyle = active ? theme.accent : theme.surfaceRaised
   ctx.fill()
-  ctx.strokeStyle = active ? theme.text : theme.accent
+  // 잡은 손잡이의 테는 바탕색이다. 키프레임과 같은 이유다.
+  ctx.strokeStyle = active ? theme.bg : theme.accent
   ctx.lineWidth = 2
   ctx.stroke()
 }

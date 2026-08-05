@@ -42,7 +42,7 @@
   align-items: flex-start;
   justify-content: center;
   padding: clamp(var(--sp-5), 12vh, 140px) var(--sp-5) var(--sp-5);
-  background: rgba(6, 8, 14, 0.62);
+  background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(2px);
 }
 
@@ -112,7 +112,7 @@
   transition: background var(--dur-instant) var(--ease-standard);
 }
 
-/* 선택 = 색 + 두꺼운 외곽선 + 왼쪽 막대. 색만으로 구분하지 않는다. */
+/* 선택 = 밝기 + 두꺼운 외곽선 + 왼쪽 막대. 셋을 함께 쓴다. */
 .mm-cmdk-item.is-active {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -201,7 +201,7 @@
   align-items: center;
   justify-content: center;
   padding: var(--sp-5);
-  background: rgba(6, 8, 14, 0.62);
+  background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(2px);
 }
 

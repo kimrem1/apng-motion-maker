@@ -24,8 +24,8 @@ export default defineConfig({
         name: 'APNG Motion Maker',
         short_name: 'Motion Maker',
         description: '이미지를 움직이는 이미지(APNG / WebP / GIF)로 만드는 도구',
-        theme_color: '#0e0f13',
-        background_color: '#0e0f13',
+        theme_color: '#000000',
+        background_color: '#000000',
         display: 'standalone',
         lang: 'ko',
         // 하위 경로에 올라가면 설치했을 때 시작 주소도 그 경로여야 한다.

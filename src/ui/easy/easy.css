@@ -1,7 +1,7 @@
 /*
  * EASY 모드 스타일.
  *
- * EASY 는 "덜 보여주는 PRO" 가 아니라 **다른 화면**이다. 타임라인도 인스펙터도 없고,
+ * EASY 는 "덜 보여주는 PRO" 가 아니라 다른 화면이다. 타임라인도 인스펙터도 없고,
  * 화면의 세로 절반 이상을 결과물이 차지한다. 그래서 셸 그리드를 상속하지 않고
  * 이 파일 안에서 3열을 직접 만든다.
  *
@@ -184,8 +184,12 @@
   accent-color: var(--accent);
 }
 
+/* 생김새는 링크지만 누를 자리는 버튼 기준을 지킨다. 밑줄 위치는 그대로 둔다. */
 .mm-easy-link {
+  display: inline-flex;
+  align-items: center;
   align-self: flex-start;
+  min-height: var(--tap-min);
   padding: 0;
   border: 0;
   background: none;

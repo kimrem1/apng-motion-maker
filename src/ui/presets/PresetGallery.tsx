@@ -1,7 +1,7 @@
 /**
  * 프리셋 갤러리.
  *
- * 이 화면의 규칙은 하나다. **탐색은 절대 파괴적이면 안 된다.**
+ * 이 화면의 규칙은 하나다. 탐색은 절대 파괴적이면 안 된다.
  *   호버 / 포커스 -> 캔버스가 임시로 그 프리셋을 재생한다 (문서는 그대로다)
  *   떼면          -> 원래 상태로 돌아온다
  *   클릭 / Enter  -> 그때만 문서에 확정된다
@@ -39,6 +39,7 @@ import { MAX_COMPARE, usePresetUiStore, type PresetCategoryFilter } from '@/stat
 import { SPEED_STEP, pFromSpeed, speedFromP } from '@/state/speedScale.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { CATEGORY_LABELS, EASY_PRESETS, MOTION_PRESETS } from '@/motions/registry.ts'
+import { SKIP_TARGET_IDS } from '@/ui/a11y/SkipLinks.tsx'
 import { PresetCard, readPresetMeta, type PresetMeta } from './PresetCard.tsx'
 
 import './presets.css'
@@ -135,7 +136,7 @@ export function PresetGallery() {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
     return metas.filter((m) => {
-      // EASY 는 기본 16종만 보여 준다. 51개를 한 번에 늘어놓으면 선택 마비가 온다.
+      // EASY 는 추천 목록만 보여 준다. 카탈로그를 통째로 늘어놓으면 선택 마비가 온다.
       if (mode === 'easy' && !showAll && !easyIds.has(m.id)) return false
       if (m.textOnly && !targetIsText) return false
       if (category !== 'all' && m.category !== category) return false
@@ -500,6 +501,7 @@ export function PresetGallery() {
 
       <ul
         ref={gridRef}
+        id={SKIP_TARGET_IDS.presets}
         className="mm-preset-grid"
         role="listbox"
         aria-label="모션 프리셋"

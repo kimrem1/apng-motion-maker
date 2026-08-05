@@ -2,7 +2,7 @@
  * 글자 레이어의 값 규칙과 배치.
  *
  * shape.ts / reveal.ts 와 같은 자리다. 렌더러 / 스토어 / 마이그레이션 / 프리셋 / UI 가
- * **모두 여기를 거친다.** 규칙이 두 벌이 되면 저장했다 열었을 때 글자가 다른 자리에 선다.
+ * 모두 여기를 거친다. 규칙이 두 벌이 되면 저장했다 열었을 때 글자가 다른 자리에 선다.
  *
  * DOM 도 WebGL 도 참조하지 않는다. 글자 폭 측정만 밖에서 받는다(measure 콜백).
  * 측정은 브라우저가 하고 배치 규칙은 여기서 한다. 그래야 배치를 테스트할 수 있다.
@@ -36,6 +36,8 @@ export const TEXT_ALIGN_LABELS: Record<TextAlign, string> = {
  * .ttf/.otf 파일을 직접 올리면 그 글꼴로 그린다 (ui/text/fonts.ts).
  *
  * 목록은 "설치돼 있을 법한 것" 이고, 없으면 브라우저가 뒤의 대체 글꼴로 떨어진다.
+ * 프리텐다드와 노토 산스도 같은 규칙을 받는다. 설치돼 있으면 그것으로 그리고,
+ * 없으면 맑은 고딕으로 떨어진다.
  */
 export interface FontChoice {
   id: string
@@ -48,7 +50,18 @@ export const FONT_CHOICES: readonly FontChoice[] = [
   {
     id: 'sans',
     label: '고딕 (기본)',
-    family: '"Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif',
+    family:
+      'Pretendard, "Pretendard Variable", "Noto Sans KR", "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif',
+  },
+  {
+    id: 'pretendard',
+    label: '프리텐다드',
+    family: 'Pretendard, "Pretendard Variable", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif',
+  },
+  {
+    id: 'notosans',
+    label: '노토 산스',
+    family: '"Noto Sans KR", "Noto Sans", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif',
   },
   {
     id: 'serif',
@@ -162,7 +175,7 @@ export interface TextGlyph {
   /**
    * 애니메이션 순번.
    *
-   * 공백과 줄바꿈은 **세지 않는다.** 공백에 순번을 주면 "글자 다섯 개가 차례로
+   * 공백과 줄바꿈은 세지 않는다. 공백에 순번을 주면 "글자 다섯 개가 차례로
    * 들어온다" 는 리듬이 눈에 보이지 않는 칸에서 한 박자씩 끊긴다.
    * 공백 글리프는 -1 이고 렌더러가 그리지 않는다.
    */
@@ -246,7 +259,7 @@ export function layoutText(spec: TextSpec, measure: (char: string) => number): T
  *
  * 오버스캔 솔버와 레이어 속성 표시는 "이 레이어의 자연 크기" 를 알아야 하는데,
  * 글자는 브라우저가 재기 전에는 알 수 없다. 그렇다고 core 가 캔버스를 부를 수는 없다.
- * 그래서 **렌더러가 재고 나면 여기에 적어 두고**, 그 전에는 어림값을 쓴다.
+ * 그래서 렌더러가 재고 나면 여기에 적어 두고, 그 전에는 어림값을 쓴다.
  * 키는 레이어 id 가 아니라 값이다. 같은 글자 같은 글꼴이면 크기도 같다.
  */
 const measuredBoxes = new Map<string, { width: number; height: number }>()
@@ -307,7 +320,7 @@ export function textBoxOf(spec: TextSpec): { width: number; height: number } {
 
 /**
  * 캔버스 font 속성 문자열.
- * 렌더러와 폭 측정이 **같은 문자열**을 써야 배치와 그림이 어긋나지 않는다.
+ * 렌더러와 폭 측정이 같은 문자열을 써야 배치와 그림이 어긋나지 않는다.
  */
 export function cssFontOf(spec: TextSpec): string {
   const style = spec.italic ? 'italic ' : ''

@@ -1,18 +1,13 @@
 /**
  * 프리셋을 문서에 심는 액션과 미리보기 오버라이드.
  *
- * document.ts 는 이 담당의 파일이 아니므로 새 액션을 넣지 않았다. 대신 기존 액션을
- * 조합한다. 트랙을 통째로 갈아끼울 때 replaceDocument 를 쓰면 안 된다. 그 액션은
- * past/future 를 비우기 때문에 프리셋 하나 눌렀다고 그때까지의 실행취소가 통째로
- * 날아간다. 그래서 setValueAtFrame 으로 새 키를 먼저 심고 남은 옛 키를
- * removeKeyframe 으로 지우는 순서를 쓴다. 순서를 뒤집으면 키가 0개인 순간이 생겨
- * removeKeyframe 이 (마지막 한 개는 지우지 않는 규칙 때문에) 조용히 실패한다.
- *
- * 이 방식의 한계는 아래 PresetApplyReport 주석에 적어 두었다. 통합 담당이 document.ts 에
- * applyPresetTracks 액션이 들어와 그 제약들은 사라졌다.
+ * 적용은 document.ts 의 applyPresetTracks 한 번으로 끝낸다. 키를 하나씩 심으면
+ * 프리셋 한 번에 실행취소가 열 칸 넘게 쌓이고, 모디파이어와 트랙의 단위 / 합성
+ * 규칙을 지정할 방법도 없다. replaceDocument 는 past/future 를 비우므로 쓰지 않는다.
+ * 프리셋 하나 눌렀다고 그때까지의 실행취소가 통째로 날아가면 안 된다.
  */
 
-import type { MotionProject, TrackProp } from '@/core/types.ts'
+import type { MotionProject } from '@/core/types.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { usePresetUiStore } from '@/state/presetUi.ts'
 import { useUiStore } from '@/state/ui.ts'
@@ -26,36 +21,15 @@ import {
 } from '@/motions/apply.ts'
 
 // ---------------------------------------------------------------------------
-// 알려진 한계 (통합 담당용)
+// 적용 결과
 // ---------------------------------------------------------------------------
 
-/**
- * 기존 액션 조합으로 옮기지 못하는 것들. UI 는 이 값을 배너로 알린다.
- *
- *   modifiers   흔들림/자글자글. document.ts 에 모디파이어를 쓰는 액션이 없다.
- *   composite   트랙의 합성 규칙(add/multiply)을 지정할 방법이 없다.
- *   unit        setValueAtFrame 은 TRACK_DEFAULTS 의 단위로 트랙을 만든다.
- *               px 계열은 여기서 환산해 넣지만 계열이 다르면 환산이 불가능하다.
- *   spring      스프링 파라미터를 그대로 넣을 수 없어 이징 프리셋으로 근사한다.
- *   presetRef   doc.presetRef 를 쓰는 액션이 없다. EASY 모드의 dirty 배지가 못 뜬다.
- *   history     키 하나당 실행취소 한 칸이 쌓인다. Ctrl+Z 를 여러 번 눌러야 한다.
- */
 export interface PresetApplyReport {
   ok: boolean
   presetId: string
   layerId: string | null
-  /** 실패했거나 일부만 적용됐을 때 사용자에게 보여줄 한국어 문장. */
+  /** 실패했을 때 사용자에게 보여줄 한국어 문장. 성공하면 null 이다. */
   message: string | null
-  skipped: {
-    modifiers: number
-    springKeys: number
-    composite: TrackProp[]
-    unit: TrackProp[]
-  }
-}
-
-function emptySkipped(): PresetApplyReport['skipped'] {
-  return { modifiers: 0, springKeys: 0, composite: [], unit: [] }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +190,6 @@ function safeApply(
  * 호버는 previewPreset 을 쓴다. 탐색이 문서를 바꾸면 안 된다.
  */
 export function applyPresetToDocument(presetId: string): PresetApplyReport {
-  const skipped = emptySkipped()
   const layerId = resolveTargetLayerId()
   if (!layerId) {
     return {
@@ -224,7 +197,6 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
       presetId,
       layerId: null,
       message: '먼저 이미지나 도형을 넣어 주세요.',
-      skipped,
     }
   }
 
@@ -252,7 +224,7 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
     isFirstApply,
   )
   if (!attempt.ok) {
-    return { ok: false, presetId, layerId, message: attempt.message, skipped }
+    return { ok: false, presetId, layerId, message: attempt.message }
   }
   const result = attempt.value
 
@@ -306,19 +278,11 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
     macro: { speed: presetUi.speed, strength: presetUi.strength },
   })
 
-  skipped.modifiers = result.modifiers.length
-
   presetUi.markApplied(presetId)
   presetUi.pushRecent(presetId)
   clearPreview()
 
-  return {
-    ok: true,
-    presetId,
-    layerId,
-    message: describeSkipped(skipped),
-    skipped,
-  }
+  return { ok: true, presetId, layerId, message: null }
 }
 
 
@@ -330,7 +294,7 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
  * 슬라이더 드래그 중 재적용 최소 간격 (트레일링 스로틀).
  *
  * 매 onChange 마다 적용하면 프리셋 emit + 담기 솔버(240 샘플)가 입력 주기로 돌아
- * 드래그가 버벅인다. **디바운스가 아니라 스로틀이어야 한다.** 디바운스는 연속으로
+ * 드래그가 버벅인다. 디바운스가 아니라 스로틀이어야 한다. 디바운스는 연속으로
  * 끄는 동안 타이머가 계속 리셋되어 손을 멈추기 전까지 한 번도 발화하지 않는다.
  * 스로틀은 마지막 적용 시각 기준으로 이 간격마다 발화해 드래그를 실시간으로 따라간다.
  *
@@ -345,7 +309,7 @@ let liveTimer: ReturnType<typeof setTimeout> | null = null
 /** 마지막 라이브 적용 시각. 스로틀 발화 간격의 기준점이다. */
 let liveLastAppliedAt = 0
 /**
- * 마지막 적용 이후 노브가 **실제로 움직였는가.**
+ * 마지막 적용 이후 노브가 실제로 움직였는가.
  *
  * commitMacroNow 의 발화 조건이다. pointerup / keyup / blur 는 값 변경 없이도
  * 발생한다 (Tab 으로 슬라이더에 들어올 때의 keyup, 제자리 클릭, 포커스 이동).
@@ -366,7 +330,7 @@ function reapplyTargetId(): string | null {
   if (doc.presetRef?.dirty === true) return null
 
   /*
-   * **재적용은 프리셋이 실제로 얹힌 레이어에만 한다.**
+   * 재적용은 프리셋이 실제로 얹힌 레이어에만 한다.
    *
    * resolveTargetLayerId 는 "지금 고른 레이어" 를 돌려준다. 그래서 도형을 하나 넣어
    * 선택이 옮겨간 뒤 세기 슬라이더를 끌면, 이미지에 걸린 모션이 도형 위에 다시 심겨
@@ -448,13 +412,3 @@ export function commitMacroNow(): PresetApplyReport | null {
   return applyLive(id)
 }
 
-/** 일부만 적용됐을 때만 문장을 만든다. 문제가 없으면 null 이라 배너가 안 뜬다. */
-function describeSkipped(skipped: PresetApplyReport['skipped']): string | null {
-  const parts: string[] = []
-  if (skipped.modifiers > 0) parts.push('흔들림 같은 절차형 움직임')
-  if (skipped.unit.length > 0) parts.push('일부 이동 값')
-  if (skipped.composite.length > 0) parts.push('일부 합성 규칙')
-  if (skipped.springKeys > 0) parts.push('스프링 세부 설정')
-  if (parts.length === 0) return null
-  return `${parts.join(', ')}은(는) 아직 적용되지 않았습니다.`
-}

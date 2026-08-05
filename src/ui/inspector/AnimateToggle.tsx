@@ -33,8 +33,8 @@ const TOGGLE_CSS = `
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: var(--tap-min);
+  height: var(--tap-min);
   padding: 0;
   border: 1px solid transparent;
   border-radius: var(--r-sm);

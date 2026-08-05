@@ -6,6 +6,7 @@
 
 import { useDocumentStore } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
+import { SKIP_TARGET_IDS } from '@/ui/a11y/SkipLinks.tsx'
 import { getCommandHost } from '@/ui/shortcuts/registry.ts'
 
 
@@ -157,6 +158,7 @@ export function Toolbar({ onExport }: ToolbarProps) {
         <span className="mm-divider" aria-hidden="true" />
         <button
           type="button"
+          id={SKIP_TARGET_IDS.export}
           className="mm-btn mm-btn-primary"
           onClick={onExport}
           title="내보내기 (Ctrl+E)"

@@ -1,7 +1,7 @@
 /*
  * 프리셋 갤러리 스타일.
  *
- * 선택 표시는 색만으로 하지 않는다. 두꺼운 외곽선 + 왼쪽 표시자까지 함께 바꾼다.
+ * 선택 표시는 밝기만으로 하지 않는다. 두꺼운 외곽선 + 왼쪽 표시자까지 함께 바꾼다.
  * 오버슈트 트랜지션은 확인 피드백(적용된 카드)에만 쓴다.
  */
 
@@ -27,7 +27,10 @@
 }
 
 .mm-chip {
-  padding: 2px var(--sp-3);
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-3);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--surface-raised);

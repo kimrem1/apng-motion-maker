@@ -7,16 +7,31 @@
  * 셸 그리드
  * ------------------------------------------------------------------------ */
 
+/*
+ * 자리를 못 받은 자식은 암시적 행으로 밀려나 첫 번째 열에만 놓인다.
+ * 그래서 이 그리드의 직계 자식은 전부 grid-area 를 가져야 한다.
+ * 흐름에서 빼는 것들(스킵 링크, 낭독 영역, 알림 배너)만 예외다.
+ */
 .mm-app {
   display: grid;
   grid-template-columns: var(--panel-left-w) minmax(0, 1fr) var(--panel-right-w);
-  grid-template-rows: var(--toolbar-h) minmax(0, 1fr);
+  grid-template-rows: var(--toolbar-h) minmax(0, 1fr) auto;
   grid-template-areas:
     'toolbar toolbar toolbar'
-    'source  stage   inspector';
+    'source  stage   inspector'
+    'status  status  status';
   height: 100dvh;
   min-height: 0;
   background: var(--bg);
+}
+
+/* EASY 는 좌우 패널이 없는 한 장짜리 화면이다. 열을 하나로 되돌린다. */
+.mm-app[data-mode='easy'] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'toolbar'
+    'stage'
+    'status';
 }
 
 .mm-app-toolbar {
@@ -42,18 +57,39 @@
   border-left: 1px solid var(--border);
 }
 
+/* EasyMode 의 뿌리. 스테이지 자리를 통째로 쓴다. */
+.mm-app > .mm-easy {
+  grid-area: stage;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* 상태 표시줄은 세 열을 가로지른다. 스타일 본체는 StatusBar.tsx 에 있다. */
+.mm-app > .mm-status {
+  grid-area: status;
+}
+
 /* 1024px 미만은 패널을 접어 세로로 쌓는다. */
 @media (max-width: 1023px) {
   .mm-app {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--toolbar-h) minmax(240px, 1fr) auto auto;
+    grid-template-rows: var(--toolbar-h) minmax(240px, 1fr) auto auto auto;
     grid-template-areas:
       'toolbar'
       'stage'
       'source'
-      'inspector';
+      'inspector'
+      'status';
     height: auto;
     min-height: 100dvh;
+  }
+
+  .mm-app[data-mode='easy'] {
+    grid-template-rows: var(--toolbar-h) minmax(240px, 1fr) auto;
+    grid-template-areas:
+      'toolbar'
+      'stage'
+      'status';
   }
 
   .mm-app-source,
@@ -222,7 +258,7 @@
   color: var(--text);
 }
 
-/* 선택 상태는 색만으로 표시하지 않는다. 배경 + 테두리 둘 다 바꾼다. */
+/* 선택 상태는 밝기만으로 표시하지 않는다. 배경과 테두리를 둘 다 바꾼다. */
 .mm-segment-item[aria-checked='true'] {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -272,7 +308,7 @@
   height: 220px;
   min-height: 0;
   border-top: 1px solid var(--border);
-  background: var(--surface-1, var(--bg));
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -334,6 +370,25 @@
   white-space: pre-line;
 }
 
+/*
+ * 앱 전역 알림.
+ *
+ * 그리드 자리를 주면 배너가 뜨고 사라질 때마다 편집 화면 전체가 위아래로 튄다.
+ * 캔버스 높이가 바뀌면 미리보기 배율까지 다시 잡힌다.
+ * 그래서 흐름에서 빼고 상태 표시줄 위에 띄운다.
+ */
+.mm-app-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--status-h) + var(--sp-4));
+  z-index: 60;
+  max-width: min(640px, calc(100vw - var(--sp-6) * 2));
+  margin: 0;
+  transform: translateX(-50%);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-2);
+}
+
 /* --------------------------------------------------------------------------
  * 드롭 오버레이
  * ------------------------------------------------------------------------ */
@@ -345,7 +400,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(6, 8, 14, 0.66);
+  background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(2px);
   pointer-events: none;
 }
@@ -388,7 +443,7 @@
   background: var(--surface-hover);
 }
 
-/* 선택 = 테두리 + 배경 + 좌측 마커. 색 하나에만 의존하지 않는다. */
+/* 선택 = 테두리 + 배경 + 좌측 마커. 셋 중 하나만 보여도 읽힌다. */
 .mm-layer-item.is-selected {
   border-color: var(--accent);
   background: var(--surface-active);
@@ -478,10 +533,13 @@
   gap: var(--sp-4);
 }
 
+/* 라디오 버튼 자체는 13px 이다. 누를 자리는 라벨 전체가 맡는다. */
 .mm-radio {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
+  min-height: var(--tap-min);
+  cursor: pointer;
   font-size: var(--fs-sm);
 }
 
@@ -593,12 +651,24 @@
  * 도크 높이 조절 손잡이
  * ------------------------------------------------------------------------ */
 
+/*
+ * 도크 높이 손잡이.
+ *
+ * 24px 로 키우지 않는다. 패널 사이에 그만한 띠가 들어가면 그 자체가 하나의
+ * 구역으로 보인다. 대신 WCAG 2.2 의 2.5.8 이 허용하는 간격 규정을 쓴다.
+ * 손잡이를 중심으로 지름 24px 원을 그렸을 때 그 원이 다른 누를 것과 겹치지
+ * 않으면 된다. 위아래 6px 여백이 그 원을 비워 두는 값이다.
+ *
+ * 손잡이를 넓은 판으로 덮는 방법은 쓰지 않았다. 바로 아래가 도크 탭이라
+ * 덮으면 탭의 윗부분을 손잡이가 가로챈다.
+ */
 .mm-dock-resizer {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: center;
-  height: 9px;
+  height: 12px;
+  margin: 6px 0;
   border-top: 1px solid var(--border);
   background: var(--surface);
   cursor: row-resize;

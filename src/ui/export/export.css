@@ -17,7 +17,7 @@
   align-items: center;
   justify-content: center;
   padding: var(--sp-5);
-  background: rgba(6, 8, 14, 0.62);
+  background: rgba(0, 0, 0, 0.72);
   backdrop-filter: blur(2px);
 }
 
@@ -405,10 +405,12 @@
   gap: var(--sp-3);
 }
 
+/* 체크박스를 감싼 라벨이 곧 누를 자리다. 최소 높이는 그래서 여기 있다. */
 .mm-target-toggle {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  min-height: var(--tap-min);
   color: var(--text);
   font-size: var(--fs-md);
   font-weight: 600;
