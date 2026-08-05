@@ -24,6 +24,12 @@ const CONFETTI_X = [0.12, 0.3, 0.46, 0.62, 0.78, 0.9, 0.2, 0.68]
 /** 색종이마다 다른 출발 시각. 한 줄로 떨어지면 종이가 아니라 커튼이 된다. */
 const CONFETTI_DELAY = [0, 0.42, 0.17, 0.66, 0.28, 0.83, 0.55, 0.09]
 
+/** 꽃잎이 시작하는 가로 위치. 색종이와 다른 표를 쓴다. 겹치면 두 세트가 한 줄로 겹쳐 떨어진다. */
+const PETAL_X = [0.08, 0.26, 0.4, 0.55, 0.71, 0.86, 0.34, 0.63, 0.16, 0.94]
+const PETAL_DELAY = [0.31, 0, 0.72, 0.19, 0.55, 0.86, 0.43, 0.09, 0.64, 0.24]
+/** 꽃잎마다 다른 크기 배수. 전부 같은 크기면 도장을 찍은 것처럼 보인다. */
+const PETAL_SIZE = [1, 0.7, 1.25, 0.85, 1.1, 0.62, 0.95, 1.35]
+
 export const AMBIENT_SCENES: ShapeScene[] = [
   {
     id: 'ambient.float',
@@ -142,6 +148,93 @@ export const AMBIENT_SCENES: ShapeScene[] = [
               ],
               'linear',
             ),
+          ],
+        })
+      }
+      return { layers, durationFrames: span, loopMode: 'loop', fps }
+    },
+  },
+
+  {
+    id: 'ambient.petals',
+    label: '흩날리는 꽃잎',
+    hint: '작은 꽃잎이 좌우로 미끄러지며 비스듬히 흩날립니다.',
+    group: 'ambient',
+    defaultDurationMs: 4000,
+    emit(ctx) {
+      const { span, fps } = timingOf(ctx, this.defaultDurationMs)
+      const g = gain(ctx.strength)
+      const base = Math.min(ctx.canvasW, ctx.canvasH)
+      const count = 10
+
+      const layers: SceneLayer[] = []
+      for (let i = 0; i < count; i += 1) {
+        const startX = pick(PETAL_X, i, 0.5)
+        const delay = pick(PETAL_DELAY, i, 0)
+        const size = Math.max(3, Math.round(base * 0.035 * pick(PETAL_SIZE, i, 1)))
+        /*
+         * 색종이와 결정적으로 다른 점.
+         *
+         * 색종이는 제자리로 **돌아오는** 좌우 흔들림이라 곧게 떨어진다. 꽃잎은
+         * 떨어지는 내내 한쪽으로 **밀려간다.** 바람이 있는 그림이다. 밀리는 방향을
+         * 홀짝으로 가르면 두 줄기 바람이 엇갈려 훨씬 어지럽게 보인다.
+         */
+        const driftTo = atRatio(startX) + (i % 2 === 0 ? 1 : -1) * 18 * g
+
+        layers.push({
+          name: `꽃잎 ${i + 1}`,
+          shape: createShapeSpec('sparkle', {
+            color: withAlpha(ctx.color, 0.7),
+            width: size,
+            // 세로로 살짝 길다. 정원이면 눈송이이고 길어야 꽃잎으로 읽힌다.
+            height: Math.round(size * 1.3),
+            points: 4,
+            innerRatio: 0.55,
+          }),
+          tracks: [
+            /*
+             * 가로도 stream 이다. 색종이처럼 키프레임으로 왕복시키면 안 된다.
+             *
+             * 밀려가는 것이 이 세트의 정의라 끝 값이 시작 값과 다르고, 그러면 반복
+             * 순간에 꽃잎이 화면 한복판에서 옆으로 순간이동한다. stream 은 되돌아가는
+             * 순간을 한 프레임에 몰아넣는데, 세로와 **같은 위상**을 주면 그 프레임에
+             * 꽃잎이 이미 화면 아래 밖이라 튐이 보이지 않는다.
+             */
+            stream({
+              prop: 'translateX',
+              unit: 'percentOfCanvas',
+              span,
+              phase: delay,
+              from: atRatio(startX),
+              to: driftTo,
+            }),
+            stream({
+              prop: 'translateY',
+              unit: 'percentOfCanvas',
+              span,
+              phase: delay,
+              from: -70,
+              to: 90,
+            }),
+            /*
+             * 뒤집히면서 돈다. 꽃잎이 얇아 옆으로 서는 순간이 있기 때문이다.
+             * 한 바퀴가 **span 에서** 정확히 끝나야 반복에서 각도가 튀지 않는다.
+             * span - 1 에 두면 마지막 한 프레임이 각도를 붙잡고 있어 흐름이 멈칫한다.
+             */
+            track(
+              'rotate',
+              'deg',
+              [{ f: 0, v: 0, ease: 'linear' }, { f: span, v: (i % 3 === 0 ? -1 : 1) * 360 }],
+              'linear',
+            ),
+            cycle({
+              prop: 'scaleX',
+              unit: 'ratio',
+              span,
+              phase: delay,
+              at: (x) => 0.35 + 0.65 * Math.abs(Math.cos(x * Math.PI * 2)),
+              steps: 12,
+            }),
           ],
         })
       }

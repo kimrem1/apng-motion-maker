@@ -1,8 +1,8 @@
 /**
  * 도형 모션 세트 레지스트리.
  *
- * 카탈로그는 일곱 묶음 38종이다.
- *   연출 13 / 퍼지기 4 / 소리 그래프 4 / 화면 전환 4 / 돌기 4 / 강조 6 / 배경 장식 3
+ * 카탈로그는 일곱 묶음 43종이다.
+ *   연출 15 / 퍼지기 4 / 소리 그래프 5 / 화면 전환 5 / 돌기 4 / 강조 6 / 배경 장식 4
  *
  * 이 파일이 UI 와 만나는 유일한 면이다. UI 는 label / hint / group 만 읽고
  * 내부 id 는 어떤 형태로도 화면에 내보내지 않는다.
@@ -26,10 +26,12 @@ import { ACCENT_SCENES } from './scenes/accent.ts'
 import { AMBIENT_SCENES } from './scenes/ambient.ts'
 import { STAGE_SCENES } from './scenes/stage.ts'
 import { PANEL_SCENES } from './scenes/panel.ts'
+import { PAPER_SCENES } from './scenes/paper.ts'
 
 export const SHAPE_SCENES: ShapeScene[] = [
   ...STAGE_SCENES,
   ...PANEL_SCENES,
+  ...PAPER_SCENES,
   ...PULSE_SCENES,
   ...BARS_SCENES,
   ...SPIN_SCENES,
