@@ -751,8 +751,284 @@ const aperture: EffectDef = {
 // ---------------------------------------------------------------------------
 
 /** C 스테이지 원자 이펙트. fusable !== false 인 것끼리 한 프로그램으로 융합된다. */
+// ---------------------------------------------------------------------------
+// 15. 부드러운 흐림
+// ---------------------------------------------------------------------------
+
+/**
+ * 원판 흐림. 방향성 블러와 달리 사방으로 고르게 번진다.
+ *
+ * ---------------------------------------------------------------------------
+ * 왜 황금각 나선인가
+ * ---------------------------------------------------------------------------
+ * 표본을 격자로 뽑으면 반경이 커질 때 격자 무늬가 그대로 보인다. 무작위로 뽑으면
+ * 프레임마다 얼룩이 달라져 지글거린다. 황금각(137.5도) 나선은 **고정된 배치인데도
+ * 방향이 반복되지 않아서**, 적은 표본으로도 무늬가 안 보이고 프레임 간에 완전히
+ * 정지해 있다. 반경에 sqrt 를 씌우는 것은 원판 위에 고르게 퍼뜨리기 위해서다.
+ *
+ * 진짜 가우시안은 가로/세로 두 패스로 나눠야 하고 그러려면 패스 그래프가 조각
+ * 하나에 두 번 그릴 수 있어야 한다. 지금 구조로는 단일 패스라, 표본 수를 늘려
+ * 품질을 사는 쪽을 택했다. 흐림 반경이 크면 표본을 올려야 한다.
+ */
+const BLUR_CHUNK = /* glsl */ `
+uniform float u_fx_blur_radius;   // px
+uniform int   u_fx_blur_taps;
+uniform float u_fx_blur_mix;
+
+vec4 fx_blur_tap(vec2 uv) {
+  // 밖을 읽으면 투명이다. 가장자리에서 그림이 늘어붙는 것보다 옅어지는 편이 낫다.
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
+  return texture(u_image, uv);
+}
+
+vec4 grade_fx_blur(vec4 c, vec2 uv) {
+  int taps = clamp(u_fx_blur_taps, 1, 48);
+  if (taps < 2 || u_fx_blur_radius <= 0.0) return c;
+
+  // premultiplied 색은 선형이라 그냥 평균 내면 된다. straight 로 되돌려 평균 내면
+  // 반투명 가장자리에서 색이 어긋난다.
+  vec4 acc = c;
+  float count = 1.0;
+  const float GOLDEN = 2.39996323;
+
+  for (int i = 1; i < 48; i++) {
+    if (i >= taps) break;
+    float fi = float(i);
+    float r = sqrt(fi / float(taps - 1)) * u_fx_blur_radius;
+    float a = fi * GOLDEN;
+    acc += fx_blur_tap(uv + vec2(cos(a), sin(a)) * r / u_resolution);
+    count += 1.0;
+  }
+  acc /= count;
+  return mix(c, acc, clamp(u_fx_blur_mix, 0.0, 1.0));
+}
+`
+
+const blur: EffectDef = {
+  id: 'fx.blur',
+  label: '부드러운 흐림',
+  hint: '사방으로 고르게 번지게 한다. 반경을 크게 하면 표본 수도 올려야 깔끔하다.',
+  stage: 'C',
+  cost: 'low',
+  preservesAlpha: true,
+  // 이웃 픽셀을 읽는다. 융합하면 조각 순서가 어긋난다 (파일 머리주석).
+  fusable: false,
+  fn: 'grade_fx_blur',
+  chunk: BLUR_CHUNK,
+  params: [
+    { key: 'radius', label: '반경', type: 'number', min: 0, max: 80, step: 0.5, unit: 'px', default: 8 },
+    { key: 'taps', label: '표본 수', type: 'number', min: 8, max: 48, step: 1, default: 24 },
+    { key: 'mix', label: '적용량', type: 'number', min: 0, max: 1, step: 0.01, default: 1 },
+  ],
+  uniforms: [
+    { name: 'u_fx_blur_radius', type: 'float', value: (c) => pv(c, 'radius', 8) },
+    {
+      name: 'u_fx_blur_taps',
+      type: 'int',
+      value: (c) => Math.min(48, Math.max(2, Math.round(pv(c, 'taps', 24)))),
+    },
+    { name: 'u_fx_blur_mix', type: 'float', value: (c) => pv(c, 'mix', 1) },
+  ],
+}
+
+// ---------------------------------------------------------------------------
+// 16. 렌즈 색수차
+// ---------------------------------------------------------------------------
+
+/**
+ * 렌즈가 파장마다 다르게 굴절하는 것을 흉내낸다.
+ *
+ * 'RGB 분리'(glitch.rgbShift)와 다르다. 저쪽은 화면 전체를 **같은 방향으로** 민
+ * 고장난 신호이고, 이쪽은 **중심에서 멀수록 세지는** 광학 현상이다. 가운데는
+ * 또렷하고 네 귀퉁이만 색이 갈라지는 그림이 사진처럼 보이는 이유가 그것이다.
+ *
+ * 채널마다 다른 배율로 확대/축소해 읽는다. 빨강은 조금 크게, 파랑은 조금 작게.
+ */
+const CHROMA_ABERRATION_CHUNK = /* glsl */ `
+uniform float u_fx_lensChroma_amount;
+uniform float u_fx_lensChroma_falloff;
+uniform float u_fx_lensChroma_mix;
+
+vec4 fx_lensChroma_tap(vec2 uv) {
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
+  return texture(u_image, uv);
+}
+
+vec4 grade_fx_lensChroma(vec4 c, vec2 uv) {
+  if (u_fx_lensChroma_amount <= 0.0) return c;
+
+  vec2 d = uv - 0.5;
+  // 중심에서의 거리로 세기를 키운다. falloff 1 이면 선형, 2 면 귀퉁이에만 몰린다.
+  float k = pow(clamp(length(d) * 2.0, 0.0, 1.0), max(0.2, u_fx_lensChroma_falloff));
+  float s = u_fx_lensChroma_amount * 0.01 * k;
+
+  vec4 r = fx_lensChroma_tap(0.5 + d * (1.0 + s));
+  vec4 b = fx_lensChroma_tap(0.5 + d * (1.0 - s));
+
+  /*
+   * 알파는 **원래 것을 그대로 쓴다.**
+   *
+   * 채널마다 다른 자리를 읽으면 알파도 세 갈래가 되어 실루엣이 무지개색으로
+   * 번진다. 투명 배경 스티커에서는 그 테두리가 곧바로 눈에 띈다.
+   */
+  vec4 shifted = vec4(r.r, c.g, b.b, c.a);
+  return mix(c, shifted, clamp(u_fx_lensChroma_mix, 0.0, 1.0));
+}
+`
+
+const lensChroma: EffectDef = {
+  id: 'fx.lensChroma',
+  label: '렌즈 색수차',
+  hint: '가운데는 또렷하고 가장자리로 갈수록 색이 갈라진다. 사진 렌즈의 성질이다.',
+  stage: 'C',
+  cost: 'free',
+  preservesAlpha: true,
+  fusable: false,
+  fn: 'grade_fx_lensChroma',
+  chunk: CHROMA_ABERRATION_CHUNK,
+  params: [
+    { key: 'amount', label: '세기', type: 'number', min: 0, max: 5, step: 0.05, default: 1 },
+    { key: 'falloff', label: '가장자리 쏠림', type: 'number', min: 0.2, max: 4, step: 0.1, default: 1.6 },
+    { key: 'mix', label: '적용량', type: 'number', min: 0, max: 1, step: 0.01, default: 1 },
+  ],
+  uniforms: [
+    { name: 'u_fx_lensChroma_amount', type: 'float', value: (c) => pv(c, 'amount', 1) },
+    { name: 'u_fx_lensChroma_falloff', type: 'float', value: (c) => pv(c, 'falloff', 1.6) },
+    { name: 'u_fx_lensChroma_mix', type: 'float', value: (c) => pv(c, 'mix', 1) },
+  ],
+}
+
+// ---------------------------------------------------------------------------
+// 17. 그라데이션
+// ---------------------------------------------------------------------------
+
+/**
+ * 두 색 사이의 그라데이션을 얹는다.
+ *
+ * ---------------------------------------------------------------------------
+ * 왜 도형 색이 아니라 이펙트인가
+ * ---------------------------------------------------------------------------
+ * 도형과 글자의 색 필드를 그라데이션으로 바꾸면 도형에서만 쓸 수 있고, 사진에
+ * 노을빛을 입히는 흔한 쓰임은 여전히 못 한다. 이펙트로 두면 **이미지 / 도형 / 글자
+ * 어디에나 같은 노브**가 걸리고, 스톱워치를 켜 각도와 위치를 애니메이션할 수도 있다.
+ *
+ * '색만 바꾸기' 모드가 도형 그라데이션 채우기다. 알파(실루엣)는 그대로 두고 색만
+ * 갈아치우므로, 별 모양 도형에 걸면 별이 그라데이션으로 칠해진다.
+ *
+ * 알파를 건드리지 않는 것이 이 조각의 계약이다. 투명 배경 스티커에서 그라데이션이
+ * 배경까지 칠하면 파일이 통째로 불투명해진다.
+ */
+const GRADIENT_CHUNK = /* glsl */ `
+uniform vec3  u_fx_gradient_from;
+uniform vec3  u_fx_gradient_to;
+uniform float u_fx_gradient_angle;   // rad
+uniform float u_fx_gradient_start;
+uniform float u_fx_gradient_end;
+uniform int   u_fx_gradient_shape;   // 0 선형 1 원형
+uniform int   u_fx_gradient_blend;   // 0 색만 2 곱하기 3 스크린 4 겹치기
+uniform float u_fx_gradient_opacity;
+
+vec4 grade_fx_gradient(vec4 c, vec2 uv) {
+  if (c.a <= 0.0) return c;
+
+  float t;
+  if (u_fx_gradient_shape == 1) {
+    // 0.70710678 = 중심에서 모서리까지. 1 에서 네 귀퉁이가 정확히 끝 색이 된다.
+    t = length(uv - 0.5) / 0.70710678;
+  } else {
+    vec2 dir = vec2(cos(u_fx_gradient_angle), sin(u_fx_gradient_angle));
+    // 정사각형이 아닌 캔버스에서도 각도가 눈에 보이는 대로 돌게 uv 를 그대로 쓴다.
+    t = dot(uv - 0.5, dir) + 0.5;
+  }
+
+  float lo = u_fx_gradient_start;
+  float hi = u_fx_gradient_end;
+  // 두 위치가 같으면 나눗셈이 터진다. 그때는 칼로 자른 경계가 맞다.
+  t = (hi - lo) > 1e-4 ? clamp((t - lo) / (hi - lo), 0.0, 1.0) : step(lo, t);
+
+  vec3 g = mix(u_fx_gradient_from, u_fx_gradient_to, t);
+  vec4 s = unpremul(c);
+
+  vec3 mixed;
+  if (u_fx_gradient_blend == 2) mixed = s.rgb * g;
+  else if (u_fx_gradient_blend == 3) mixed = 1.0 - (1.0 - s.rgb) * (1.0 - g);
+  else if (u_fx_gradient_blend == 4) {
+    // 겹치기(overlay). 어두운 곳은 곱하기, 밝은 곳은 스크린이다.
+    vec3 lo2 = 2.0 * s.rgb * g;
+    vec3 hi2 = 1.0 - 2.0 * (1.0 - s.rgb) * (1.0 - g);
+    mixed = mix(lo2, hi2, step(vec3(0.5), s.rgb));
+  } else mixed = g;
+
+  s.rgb = mix(s.rgb, clamp(mixed, 0.0, 1.0), clamp(u_fx_gradient_opacity, 0.0, 1.0));
+  // 알파는 손대지 않는다. 실루엣이 곧 이 레이어의 모양이다.
+  return premul(vec4(s.rgb, c.a));
+}
+`
+
+const gradient: EffectDef = {
+  id: 'fx.gradient',
+  label: '그라데이션',
+  hint: '두 색 사이로 물들인다. 색만 바꾸기로 두면 도형과 글자가 그라데이션으로 칠해진다.',
+  stage: 'C',
+  cost: 'free',
+  preservesAlpha: true,
+  fn: 'grade_fx_gradient',
+  chunk: GRADIENT_CHUNK,
+  params: [
+    { key: 'from', label: '시작 색', type: 'color', default: 0xff6b6b },
+    { key: 'to', label: '끝 색', type: 'color', default: 0x4d7cff },
+    {
+      key: 'shape',
+      label: '모양',
+      type: 'select',
+      options: [
+        { value: 0, label: '한 방향' },
+        { value: 1, label: '가운데에서' },
+      ],
+      default: 0,
+    },
+    { key: 'angle', label: '각도', type: 'number', min: 0, max: 360, step: 1, unit: '°', default: 90 },
+    { key: 'start', label: '시작 위치', type: 'number', min: -0.5, max: 1.5, step: 0.01, default: 0 },
+    { key: 'end', label: '끝 위치', type: 'number', min: -0.5, max: 1.5, step: 0.01, default: 1 },
+    {
+      key: 'blend',
+      label: '섞는 방식',
+      type: 'select',
+      options: [
+        { value: 0, label: '색만 바꾸기' },
+        { value: 2, label: '곱하기' },
+        { value: 3, label: '스크린' },
+        { value: 4, label: '겹치기' },
+      ],
+      default: 0,
+    },
+    { key: 'opacity', label: '진하기', type: 'number', min: 0, max: 1, step: 0.01, default: 1 },
+  ],
+  uniforms: [
+    { name: 'u_fx_gradient_from', type: 'vec3', value: (c) => rgbOf(pv(c, 'from', 0xff6b6b)) },
+    { name: 'u_fx_gradient_to', type: 'vec3', value: (c) => rgbOf(pv(c, 'to', 0x4d7cff)) },
+    { name: 'u_fx_gradient_angle', type: 'float', value: (c) => pv(c, 'angle', 90) * DEG2RAD },
+    { name: 'u_fx_gradient_start', type: 'float', value: (c) => pv(c, 'start', 0) },
+    { name: 'u_fx_gradient_end', type: 'float', value: (c) => pv(c, 'end', 1) },
+    {
+      name: 'u_fx_gradient_shape',
+      type: 'int',
+      value: (c) => (Math.round(pv(c, 'shape', 0)) === 1 ? 1 : 0),
+    },
+    {
+      name: 'u_fx_gradient_blend',
+      type: 'int',
+      value: (c) => Math.round(pv(c, 'blend', 0)),
+    },
+    { name: 'u_fx_gradient_opacity', type: 'float', value: (c) => pv(c, 'opacity', 1) },
+  ],
+}
+
 export const FINISH_EFFECTS: EffectDef[] = [
   grade,
+  gradient,
+  blur,
+  lensChroma,
   dirBlur,
   halftone,
   posterize,

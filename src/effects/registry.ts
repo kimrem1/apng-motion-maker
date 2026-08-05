@@ -70,6 +70,10 @@ const CATEGORY_BY_ID: Record<string, EffectCategory> = {
   // 질감
   'fx.pixelate': 'texture',
   'fx.dirBlur': 'texture',
+  'fx.blur': 'texture',
+  // 렌즈 색수차는 고장난 신호가 아니라 광학 현상이다. 사람들은 색 쪽에서 찾는다.
+  'fx.lensChroma': 'color',
+  'fx.gradient': 'color',
   'fx.halftone': 'texture',
   'fx.aperture': 'texture',
   'fx.scanline': 'texture',
