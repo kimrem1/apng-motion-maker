@@ -24,7 +24,8 @@
 import type { LoopMode } from '@/core/types.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useLayerUiStore } from '@/state/layerUi.ts'
-import { applyPresetToDocument } from '@/state/presetActions.ts'
+import { applyPresetToDocument, clearAppliedPreset } from '@/state/presetActions.ts'
+import { usePresetUiStore } from '@/state/presetUi.ts'
 import { useTimelineUiStore, type GraphTarget } from '@/state/timelineUi.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { EASY_PRESETS, MOTION_PRESETS } from '@/motions/registry.ts'
@@ -308,6 +309,7 @@ const docStore = () => useDocumentStore.getState()
 const uiStore = () => useUiStore.getState()
 const timelineStore = () => useTimelineUiStore.getState()
 const layerStore = () => useLayerUiStore.getState()
+const presetUiStore = () => usePresetUiStore.getState()
 
 const NO_LAYER = '먼저 이미지나 도형을 넣어 주세요'
 const NOT_WIRED = '아직 연결되지 않았습니다'
@@ -397,12 +399,23 @@ function deleteSelection(): void {
 
   const ids = [...layerStore().selectedLayerIds]
   if (ids.length === 0) return
-  const store = docStore()
-  for (const id of ids) store.removeLayer(id)
+  // 여러 장을 한 번에 지운다. 한 장씩 부르면 다섯 장 지운 것이 Ctrl+Z 다섯 번이 된다.
+  docStore().removeLayers(ids)
   layerStore().clearLayerSelection()
 }
 
 function applyPreset(presetId: string): void {
+  /*
+   * 같은 슬롯을 다시 누르면 끈다. 갤러리 카드와 같은 규칙이다.
+   * PRO 에서 손본 문서는 끄지 않는다 (걷어내는 계산이 그 편집을 함께 지울 수 있다).
+   */
+  if (presetUiStore().appliedId === presetId && docStore().doc.presetRef?.dirty !== true) {
+    const off = clearAppliedPreset()
+    if (off.ok) {
+      notify(off.message ?? '모션을 뺐습니다.', 'info')
+      return
+    }
+  }
   const report = applyPresetToDocument(presetId)
   if (!report.ok) notify(report.message ?? '모션을 적용하지 못했습니다.', 'error')
 }

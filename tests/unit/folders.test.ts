@@ -25,6 +25,7 @@ import { buildGroupMatrix, buildLayerMatrix, mat3Multiply } from '@/core/transfo
 import type { AssetRef, Layer, MotionProject } from '@/core/types.ts'
 import { migrateProject } from '@/project/migrate.ts'
 import { useDocumentStore } from '@/state/document.ts'
+import { buildLayerRows, dropTarget } from '@/ui/layers/layerTree.ts'
 
 const SIZE = 500
 const s = () => useDocumentStore.getState()
@@ -331,6 +332,129 @@ describe('폴더 스토어', () => {
     // 맨 아래(배열 0번)로 끌어내면 어떤 폴더보다도 뒤에 온다.
     s().moveLayerTo(ids[0]!, 0)
     expect(s().doc.layers.find((l) => l.id === ids[0])!.folderId).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 목록 트리
+// ---------------------------------------------------------------------------
+
+/**
+ * 여기서 지키는 것은 두 가지다.
+ *
+ *   1. 폴더 머리행이 식구들 **위**에 온다. 문서 배열은 폴더가 식구보다 앞(더 뒤쪽 z)
+ *      이라 그냥 뒤집으면 머리행이 아래로 내려간다. 포토샵을 쓴 사람은 예외 없이
+ *      반대를 기대하고, 실제로 그래서 "폴더가 고장 났다" 로 읽혔다.
+ *   2. 접으면 식구가 목록에서 사라지고, 그 상태에서 끌어다 놓아도 자리가 맞는다.
+ *      도형 세트 하나가 스무 장까지 만드는데 접을 수 없으면 폴더가 쓸모없다.
+ */
+describe('레이어 목록 트리', () => {
+  beforeEach(() => {
+    s().replaceDocument(baseDoc(3))
+  })
+
+  /** 지금 문서의 행을 이름 대신 id 로 뽑는다. */
+  const rowsOf = (collapsed: string[] = []): ReturnType<typeof buildLayerRows> =>
+    buildLayerRows(s().doc.layers, new Set(collapsed))
+
+  it('폴더 머리행이 식구들 위에 온다', () => {
+    const ids = s().doc.layers.slice(0, 2).map((l) => l.id)
+    const { folderId } = s().addFolder({ name: '묶음', layerIds: ids })
+
+    const rows = rowsOf()
+    const at = rows.findIndex((r) => r.layer.id === folderId)
+    expect(at).toBeGreaterThanOrEqual(0)
+    // 바로 다음 두 줄이 식구다. 위가 앞이므로 z 가 큰 쪽이 먼저 온다.
+    expect(rows[at + 1]!.layer.id).toBe(ids[1])
+    expect(rows[at + 2]!.layer.id).toBe(ids[0])
+    expect(rows[at]!.depth).toBe(0)
+    expect(rows[at + 1]!.depth).toBe(1)
+    expect(rows[at]!.childCount).toBe(2)
+  })
+
+  it('접으면 식구가 목록에서 사라진다', () => {
+    const ids = s().doc.layers.slice(0, 2).map((l) => l.id)
+    const { folderId } = s().addFolder({ name: '묶음', layerIds: ids })
+
+    const rows = rowsOf([folderId])
+    expect(rows.map((r) => r.layer.id)).not.toContain(ids[0])
+    expect(rows.map((r) => r.layer.id)).not.toContain(ids[1])
+    // 머리행은 남고, 몇 장을 품고 있는지 셀 수 있어야 한다.
+    const folderRow = rows.find((r) => r.layer.id === folderId)!
+    expect(folderRow.collapsed).toBe(true)
+    expect(folderRow.childCount).toBe(2)
+  })
+
+  it('펼친 폴더 머리행 바로 아래에 놓으면 그 폴더로 들어간다', () => {
+    const first = s().doc.layers[0]!.id
+    const { folderId } = s().addFolder({ name: '묶음', layerIds: [first] })
+    const outsider = s().doc.layers.find((l) => l.id !== first && l.type !== 'group')!.id
+
+    const rows = rowsOf()
+    const at = rows.findIndex((r) => r.layer.id === folderId)
+    const target = dropTarget(s().doc.layers, rows, outsider, at + 1)!
+    expect(target.folderId).toBe(folderId)
+
+    s().moveLayerTo(outsider, target.index, target.folderId)
+    expect(s().doc.layers.find((l) => l.id === outsider)!.folderId).toBe(folderId)
+  })
+
+  it('접힌 폴더 위에 놓으면 폴더 안으로 빨려 들어가지 않는다', () => {
+    /*
+     * 이것이 접기가 없던 시절의 사고다. 놓은 자리의 아래 이웃만 보고 소속을 추측하면,
+     * 접혀서 보이지도 않는 식구를 이웃으로 잡아 엉뚱한 폴더로 들어간다.
+     */
+    const inside = s().doc.layers.slice(0, 2).map((l) => l.id)
+    const { folderId } = s().addFolder({ name: '묶음', layerIds: inside })
+    const outsider = s().doc.layers.find((l) => !inside.includes(l.id) && l.type !== 'group')!.id
+
+    const rows = rowsOf([folderId])
+    const at = rows.findIndex((r) => r.layer.id === folderId)
+    // 접힌 폴더 바로 아래 경계 = 폴더 통째로의 뒤. 최상위여야 한다.
+    const target = dropTarget(s().doc.layers, rows, outsider, at + 1)!
+    expect(target.folderId).toBeNull()
+
+    s().moveLayerTo(outsider, target.index, target.folderId)
+    expect(s().doc.layers.find((l) => l.id === outsider)!.folderId).toBeUndefined()
+  })
+
+  it('폴더를 자기 자손 안으로는 못 놓는다', () => {
+    const inner = s().addFolder({ name: '안쪽' }).folderId
+    const outer = s().addFolder({ name: '바깥', layerIds: [inner] }).folderId
+
+    const rows = rowsOf()
+    const at = rows.findIndex((r) => r.layer.id === inner)
+    // 안쪽 폴더 머리행 바로 아래 = 안쪽 폴더 안. 바깥은 거기 못 들어간다.
+    expect(dropTarget(s().doc.layers, rows, outer, at + 1)).toBeNull()
+  })
+
+  it('맨 위에 놓으면 최상위로 나온다', () => {
+    const ids = s().doc.layers.slice(0, 2).map((l) => l.id)
+    s().addFolder({ name: '묶음', layerIds: ids })
+
+    const rows = rowsOf()
+    const target = dropTarget(s().doc.layers, rows, ids[0]!, 0)!
+    expect(target.folderId).toBeNull()
+
+    s().moveLayerTo(ids[0]!, target.index, target.folderId)
+    const doc = s().doc
+    expect(doc.layers.find((l) => l.id === ids[0])!.folderId).toBeUndefined()
+    // 맨 위 = z 가 가장 크다.
+    expect(doc.layers[doc.layers.length - 1]!.id).toBe(ids[0])
+  })
+
+  it('접혀 있어도 모든 레이어가 정확히 한 번씩 나온다', () => {
+    // 목록 계산이 레이어를 삼키거나 두 번 내면 그 자체가 데이터 손실로 보인다.
+    const ids = s().doc.layers.slice(0, 2).map((l) => l.id)
+    const { folderId } = s().addFolder({ name: '묶음', layerIds: ids })
+    const all = s().doc.layers.map((l) => l.id)
+
+    const open = rowsOf().map((r) => r.layer.id)
+    expect([...open].sort()).toEqual([...all].sort())
+
+    const shut = rowsOf([folderId]).map((r) => r.layer.id)
+    expect(new Set(shut).size).toBe(shut.length)
+    for (const id of shut) expect(all).toContain(id)
   })
 })
 

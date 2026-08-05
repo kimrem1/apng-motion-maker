@@ -29,6 +29,7 @@ import { useDocumentStore } from '@/state/document.ts'
 import {
   applyPresetToDocument,
   buildPresetDoc,
+  clearAppliedPreset,
   clearPreview,
   commitMacroNow,
   previewPreset,
@@ -239,8 +240,28 @@ export function PresetGallery() {
 
   const handleApply = useCallback(
     (presetId: string) => {
-      const report = applyPresetToDocument(presetId)
       playingBeforeRef.current = null
+
+      /*
+       * 켠 카드를 다시 누르면 끈다.
+       *
+       * 모션을 얹어 보고 물리는 것이 가장 잦은 조작인데, 그 길이 Ctrl+Z 뿐이면
+       * 그 사이에 한 다른 작업까지 함께 되감긴다. 카드가 곧 스위치여야 한다.
+       *
+       * PRO 에서 손본 문서(dirty)는 끄지 않는다. 프리셋이 심은 것을 걷어내는
+       * 계산이 그 편집을 함께 지울 수 있다. 되돌리는 길은 배너의 [프리셋으로 리셋]이다.
+       */
+      const store = useDocumentStore.getState()
+      if (
+        usePresetUiStore.getState().appliedId === presetId &&
+        store.doc.presetRef?.dirty !== true
+      ) {
+        const off = clearAppliedPreset()
+        setNotice(off.ok ? off.message : null)
+        if (off.ok) return
+      }
+
+      const report = applyPresetToDocument(presetId)
       if (!report.ok) {
         setNotice(report.message ?? '모션을 적용하지 못했습니다.')
         return

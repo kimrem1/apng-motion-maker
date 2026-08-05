@@ -85,6 +85,8 @@ function replaceableLayers(doc: MotionProject, sceneId: string): string[] {
 export interface ShapeApplyReport {
   ok: boolean
   message?: string
+  /** 켠 것이 아니라 끈 것이다. 화면이 재생을 시작하면 안 된다. */
+  removed?: boolean
 }
 
 /**
@@ -129,6 +131,24 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
   const ui = useShapeUiStore.getState()
 
   const previous = replaceableLayers(doc, sceneId)
+
+  /*
+   * 켠 카드를 다시 누르면 끈다.
+   *
+   * 세트를 하나 얹어 보고 마음에 안 들면 되돌리는 것이 가장 잦은 조작인데, 그 길이
+   * Ctrl+Z 뿐이면 그 사이에 한 다른 작업까지 함께 되감긴다. 카드가 곧 스위치여야 한다.
+   *
+   * 손댄 세트는 끄지 않는다(previous 가 빈 배열이다). 색을 바꿨거나 몇 장을 지운
+   * 것도 사용자의 편집이고, 그것까지 지우면 편집을 말없이 버리는 것이 된다. 그때는
+   * 아래로 흘러가 새 세트를 한 벌 더 만든다. 슬라이더 드래그(live)는 끄는 조작이 아니다.
+   */
+  if (!live && previous.length > 0 && ui.applied?.sceneId === sceneId) {
+    docStore.removeLayers(previous)
+    useShapeUiStore.getState().setApplied(null)
+    useLayerUiStore.getState().setSelectedLayerIds([])
+    // '세트' 를 붙여 두면 조사가 언제나 '를' 이다. 이름 끝 받침을 따질 필요가 없다.
+    return { ok: true, removed: true, message: `${scene.label} 세트를 뺐습니다.` }
+  }
   // 손댄 세트를 슬라이더 한 번에 되돌려 놓지 않는다. 카드도 '적용됨' 표시를 내린다.
   if (live && previous.length === 0) {
     useShapeUiStore.getState().setApplied(null)
@@ -187,6 +207,16 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
     layerIds,
     signature: signatureOf(nextDoc, layerIds),
   })
+
+  /*
+   * 폴더는 접은 채로 내놓는다.
+   *
+   * 묶는 것만으로는 목록이 정리되지 않는다. 세트 하나가 도형을 스무 장까지 만들고,
+   * 펼쳐져 있으면 폴더 한 줄에 스무 줄이 더 붙어 오히려 한 줄 늘어난 셈이다.
+   * 접어 두면 목록에 한 줄이고, 삼각형을 눌러 언제든 안을 볼 수 있다.
+   */
+  const madeFolder = nextDoc.layers.find((l) => l.id === layerIds[0] && l.type === 'group')
+  if (madeFolder) useLayerUiStore.getState().setFolderCollapsed(madeFolder.id, true)
   // 슬라이더를 끄는 중에는 선택을 옮기지 않는다. 인스펙터가 매번 다른 레이어로
   // 튀면 값을 읽는 중에 화면이 흔들린다.
   if (!live && layerIds.length > 0) {
@@ -197,7 +227,7 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
      * 장이 전부 선택돼 있으면 인스펙터가 다중 선택 상태가 되고, 모션 갤러리도
      * 어디에 걸릴지 알기 어렵다. 폴더 하나면 답이 분명하다.
      */
-    const folderId = nextDoc.layers.find((l) => l.id === layerIds[0] && l.type === 'group')?.id
+    const folderId = madeFolder?.id
     if (folderId) useLayerUiStore.getState().setSelectedLayerIds([folderId], folderId)
     else useLayerUiStore.getState().setSelectedLayerIds(layerIds, layerIds[layerIds.length - 1] ?? null)
   }

@@ -81,10 +81,11 @@ export function ShapeGallery() {
 
   function handleScene(sceneId: string): void {
     const report = applyShapeScene(sceneId)
-    setNotice(report.ok ? null : (report.message ?? '넣지 못했습니다.'))
+    // 뺀 경우에도 할 말이 있다. 아무 안내 없이 레이어만 사라지면 사고로 읽힌다.
+    setNotice(report.ok && !report.removed ? null : (report.message ?? '넣지 못했습니다.'))
     // 넣자마자 움직이는 것을 보여 준다. 여러 세트는 0프레임에서 투명해서
     // 멈춘 채로 두면 "아무 일도 안 일어났다" 로 보인다.
-    if (report.ok) setPlaying(true)
+    if (report.ok && !report.removed) setPlaying(true)
   }
 
   return (
@@ -225,6 +226,7 @@ export function ShapeGallery() {
                 type="button"
                 className={isApplied ? 'mm-shape-card is-applied' : 'mm-shape-card'}
                 aria-pressed={isApplied}
+                title={isApplied ? '한 번 더 누르면 뺍니다' : scene.hint}
                 onClick={() => handleScene(scene.id)}
               >
                 <SceneGlyph group={scene.group} />

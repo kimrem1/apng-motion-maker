@@ -32,6 +32,7 @@ import { stops } from '@/shapes/shared.ts'
 import { SHAPE_GROUP_LABELS, SHAPE_GROUP_ORDER } from '@/shapes/types.ts'
 import { applyPresetToLayer } from '@/motions/apply.ts'
 import { useDocumentStore } from '@/state/document.ts'
+import { useLayerUiStore } from '@/state/layerUi.ts'
 import { applyShapeScene } from '@/state/shapeActions.ts'
 import { useShapeUiStore } from '@/state/shapeUi.ts'
 
@@ -531,16 +532,35 @@ describe('도형 세트 세션 기억', () => {
     useShapeUiStore.setState({ applied: null, ceilFps: null, strength: 0.5, speed: 1 })
   })
 
-  it('같은 세트를 다시 누르면 갈아끼우고, 손댄 뒤에는 갈아끼우지 않는다', () => {
+  it('켠 카드를 다시 누르면 뺀다. 실행취소 한 칸이다', () => {
     applyShapeScene('pulse.ripple')
     const first = useShapeUiStore.getState().applied
     // 폴더 한 장 + 링 세 장. 세트는 폴더로 묶여 나온다.
     expect(first?.layerIds).toHaveLength(4)
     expect(s().doc.layers).toHaveLength(4)
 
-    applyShapeScene('pulse.ripple')
-    expect(s().doc.layers).toHaveLength(4)
+    const off = applyShapeScene('pulse.ripple')
+    expect(off.ok).toBe(true)
+    expect(off.removed).toBe(true)
+    expect(s().doc.layers).toHaveLength(0)
+    expect(useShapeUiStore.getState().applied).toBeNull()
 
+    // 뺀 것도 한 칸이다. 스무 장짜리 세트가 Ctrl+Z 스무 번이면 취소가 아니다.
+    s().undo()
+    expect(s().doc.layers).toHaveLength(4)
+  })
+
+  it('만들어 둔 폴더는 접힌 채로 나온다', () => {
+    // 묶는 것만으로는 정리가 안 된다. 펼쳐져 있으면 폴더 한 줄이 그냥 덧붙는다.
+    useLayerUiStore.setState({ collapsedFolderIds: [] })
+    applyShapeScene('pulse.ripple')
+    const folderId = useShapeUiStore.getState().applied!.layerIds[0]!
+    expect(s().doc.layers.find((l) => l.id === folderId)?.type).toBe('group')
+    expect(useLayerUiStore.getState().collapsedFolderIds).toContain(folderId)
+  })
+
+  it('손댄 세트는 라이브 재적용이 건드리지 않는다', () => {
+    applyShapeScene('pulse.ripple')
     // 손을 댄다. 이제 다시 만들면 그 편집이 사라지므로 라이브 재적용을 막아야 한다.
     // 폴더에는 모양이 없으므로 도형 레이어를 고른다.
     const target = s().doc.layers.find((l) => l.type === 'shape')!.id

@@ -344,10 +344,49 @@ function directionOf(spec: CharAnimSpec, index: number): { x: number; y: number 
       return { x: Math.cos(a), y: Math.sin(a) }
     }
     case 'wave':
-      return { x: 0, y: index % 2 === 0 ? -1 : 1 }
+      /*
+       * 물결. '위아래 번갈아' 와 절대 같은 줄에 둘 수 없다.
+       *
+       * 여기가 한때 `index % 2` 로 updown 과 한 글자도 다르지 않았다. 이름은 물결인데
+       * 그림은 지그재그였고, 두 항목이 이름만 다른 유령 선택지가 되어 있었다.
+       *
+       * 순번에 사인을 걸어 진폭까지 부드럽게 바뀌게 한다. 주기 6 이면 글자 여섯 개에
+       * 굽이 하나가 들어와 줄 전체가 출렁이는 것으로 읽힌다. 반 칸(0.5) 밀어 두는
+       * 것이 중요하다. 안 밀면 sin 이 정확히 0 이 되는 자리가 생겨서 그 글자만
+       * 혼자 안 움직인다.
+       */
+      return { x: 0, y: -Math.sin(((index + 0.5) * Math.PI) / 3) }
     default:
       return { x: 0, y: 0 }
   }
+}
+
+/**
+ * 배율을 따로 안 정했을 때(1) 쓰는 출발 배율.
+ *
+ * 1 을 그대로 쓰면 `1 + (1 - 1) * e` 가 언제나 1 이라 배율 계산이 통째로 항등이 된다.
+ * 그러면 '멀리서 다가오며' 와 '커다랗게 작아지며' 가 둘 다 아무것도 안 움직이는
+ * 페이드가 되어 서로 구별되지 않는다. spin 이 각도 0 을 360 으로 보는 것과 같은 규칙이다.
+ */
+const ZOOM_START_SCALE = 0.2
+const SHRINK_START_SCALE = 3.5
+
+/** 착지 충격의 세기. 세로로 이만큼 눌리고 가로로 그만큼 퍼진다. */
+const DROP_SQUASH = 0.22
+
+/**
+ * 떨어져 바닥에 닿는 순간의 찌그러짐. 0 -> 1 -> 0 으로 한 번 지나간다.
+ *
+ * '위에서' 와 '위에서 떨어지며' 는 출발 방향이 같다. 방향만으로는 두 항목이 화면에서
+ * 한 픽셀도 다르지 않다. 닿는 순간 한 번 눌렸다 펴지는 것이 '떨어졌다' 를 만든다.
+ *
+ * 원시 진행률로 잰다. 곡선을 먹인 값으로 재면 튕기는 곡선(bounce)이 1 을 여러 번
+ * 넘나들며 찌그러짐이 깜빡인다.
+ */
+function dropSquash(raw: number): number {
+  const land = (raw - 0.65) / 0.35
+  if (land <= 0 || land >= 1) return 0
+  return Math.sin(land * Math.PI)
 }
 
 /**
@@ -402,19 +441,25 @@ export function charTransformAt(
   let scaleX = 1
   let rotate = spec.rotate * e
   let opacity = fadeIn
+  /** 착지 찌그러짐. 떨어지는 모양만 쓴다. 배율 계산이 다 끝난 뒤에 곱한다. */
+  let squash = 0
 
   switch (spec.mode) {
-    case 'zoom':
-      // 멀리서 다가온다. spec.scale 이 1 보다 작으면 작게 시작한다.
-      scale = 1 + (Math.max(0.01, spec.scale) - 1) * e
+    case 'zoom': {
+      // 멀리서 다가온다. 배율을 안 정했으면 작은 점에서 시작한다.
+      const from = spec.scale === 1 ? ZOOM_START_SCALE : Math.max(0.01, spec.scale)
+      scale = 1 + (from - 1) * e
       break
-    case 'shrink':
+    }
+    case 'shrink': {
       // 커다랗게 시작해 제자리 크기로 줄어든다.
-      scale = 1 + (Math.max(1, spec.scale) - 1) * e
+      const from = spec.scale === 1 ? SHRINK_START_SCALE : Math.max(1, spec.scale)
+      scale = 1 + (from - 1) * e
       break
+    }
     case 'drop':
-      // 떨어지는 느낌은 거리로 준다. 튕김은 트랙의 이징이 맡는다.
-      scale = 1
+      // 떨어지는 느낌은 거리로 주고, 바닥에 닿는 한 번의 찌그러짐으로 '위에서' 와 가른다.
+      squash = dropSquash(rawT)
       break
     case 'spin':
       // 회전 각도를 따로 안 정했으면 한 바퀴 돈다.
@@ -452,6 +497,16 @@ export function charTransformAt(
   // zoom / shrink 는 spec.scale 을 배율로 쓴다. 나머지는 사용자가 정한 값을 곱한다.
   if (spec.mode !== 'zoom' && spec.mode !== 'shrink' && spec.scale !== 1) {
     scale = 1 + (spec.scale - 1) * e
+  }
+
+  /*
+   * 찌그러짐은 맨 마지막에 곱한다. 위 배율 계산을 덮어쓰면 사용자가 정한 출발 배율이
+   * 사라진다. 세로로 눌린 만큼 가로로 퍼져야 부피가 유지되는 것으로 보인다.
+   */
+  if (squash > 0) {
+    const q = DROP_SQUASH * squash
+    scale *= 1 - q
+    scaleX *= (1 + q) / (1 - q)
   }
 
   return {

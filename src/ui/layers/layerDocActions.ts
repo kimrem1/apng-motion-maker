@@ -110,7 +110,14 @@ export function setLayerParallax(layerId: string, factor: number): void {
   useDocumentStore.getState().setLayerParallax(layerId, factor)
 }
 
-/** toIndex 는 문서 배열 인덱스(z 오름차순)다. 화면 순서가 아니다. */
-export function moveLayerTo(layerId: string, toIndex: number): void {
-  useDocumentStore.getState().moveLayerTo(layerId, toIndex)
+/**
+ * toIndex 는 문서 배열 인덱스(z 오름차순)다. 화면 순서가 아니다.
+ * folderId 를 주면 소속을 그대로 쓴다. 생략하면 놓인 자리의 이웃을 보고 추측한다.
+ */
+export function moveLayerTo(
+  layerId: string,
+  toIndex: number,
+  folderId?: string | null,
+): void {
+  useDocumentStore.getState().moveLayerTo(layerId, toIndex, folderId)
 }

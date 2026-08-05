@@ -228,4 +228,52 @@ describe('미리보기와 확정 적용이 같은 레이어를 만든다 (motion
     expect(props(previewed)).toContain('skewX')
     expect(props(previewed)).toEqual(props(committed))
   })
+
+  /*
+   * 켠 카드를 다시 눌러 끄는 길.
+   *
+   * 프리셋을 갈아탈 때와 **정확히 같은 규칙**을 써야 한다. 규칙을 따로 적으면 갈아탈
+   * 때는 살아남던 사용자 편집이 끌 때만 사라진다.
+   */
+  it('해제하면 프리셋이 심은 것만 걷힌다', () => {
+    const mine = s().addEffect(L, 'fx.grain', { strength: 0.4 })!
+    s().setStaticValue(L, 'skewX', 5)
+    commitToStore('boil.hand')
+    expect(s().doc.presetRef).toBeDefined()
+    expect(s().doc.layers[0]!.effects.length).toBeGreaterThan(1)
+
+    s().clearPreset()
+
+    const layer = s().doc.layers[0]!
+    expect(s().doc.presetRef).toBeUndefined()
+    // 사용자 것만 남는다.
+    expect(layer.effects.map((e) => e.id)).toEqual([mine])
+    expect(layer.tracks.map((t) => t.prop)).toContain('skewX')
+  })
+
+  it('해제하면 프리셋이 만든 트랙이 사라진다', () => {
+    commitToStore('zoom.pop')
+    const owned = s().doc.presetRef!.props ?? []
+    expect(owned.length).toBeGreaterThan(0)
+
+    s().clearPreset()
+    const props = s().doc.layers[0]!.tracks.map((t) => t.prop)
+    for (const prop of owned) expect(props).not.toContain(prop)
+  })
+
+  it('해제도 실행취소 한 칸이다', () => {
+    commitToStore('zoom.pop')
+    const before = s().past.length
+    s().clearPreset()
+    expect(s().past.length).toBe(before + 1)
+
+    s().undo()
+    expect(s().doc.presetRef?.id).toBe('zoom.pop')
+  })
+
+  it('걸린 프리셋이 없으면 해제가 아무 일도 하지 않는다', () => {
+    const before = s().past.length
+    s().clearPreset()
+    expect(s().past.length).toBe(before)
+  })
 })

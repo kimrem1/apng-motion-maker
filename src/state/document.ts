@@ -207,6 +207,13 @@ interface DocumentState {
   /** 3D 회전에 쓰는 카메라 거리. 기본값과 같으면 필드를 지운다. */
   setLayerPerspective(layerId: string, value: number): void
   removeLayer(layerId: string): void
+  /**
+   * 여러 장을 한 번에 지운다. 실행취소 한 칸이다.
+   *
+   * removeLayer 를 반복해서 부르면 안 된다. 도형 세트 하나가 스무 장까지 만드는데,
+   * 그것을 취소하는 데 Ctrl+Z 를 스무 번 눌러야 하면 취소가 아니다.
+   */
+  removeLayers(layerIds: readonly string[]): void
   reorderLayer(layerId: string, direction: -1 | 1): void
 
   /**
@@ -269,8 +276,24 @@ interface DocumentState {
   /** 순환이 생기는 지정은 무시한다. */
   setLayerParent(layerId: string, parentId: string | null): void
   setLayerParallax(layerId: string, factor: number): void
-  /** toIndex 는 문서 배열 인덱스(z 오름차순)다. */
-  moveLayerTo(layerId: string, toIndex: number): void
+  /**
+   * toIndex 는 문서 배열 인덱스(z 오름차순)다.
+   *
+   * folderId 를 주면 그 소속을 그대로 쓴다(null 이면 최상위로 꺼낸다). 생략하면
+   * 놓인 자리의 아래 이웃을 보고 추측한다. 목록에서 끌어다 놓는 경로는 접힌 폴더까지
+   * 아는 트리를 이미 들고 있으므로 반드시 지정한다. 추측에 맡기면 접힌 폴더 위에
+   * 놓았을 때 그 폴더 안으로 빨려 들어간다 (ui/layers/layerTree.ts).
+   */
+  moveLayerTo(layerId: string, toIndex: number, folderId?: string | null): void
+
+  /**
+   * 지금 걸려 있는 모션 프리셋을 걷어낸다.
+   *
+   * 프리셋이 심은 것만 지운다. 소유권 목록(presetRef)이 그대로 답이다. 사용자가
+   * 인스펙터에서 직접 만든 트랙과 이펙트, 가리기, 글자 등장은 살아남는다.
+   * 같은 카드를 한 번 더 눌러 끄는 경로가 이것을 쓴다.
+   */
+  clearPreset(): void
 
   /**
    * 모션 프리셋을 통째로 심는다.
@@ -1009,6 +1032,75 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       void orphanAssetId
     },
 
+    removeLayers(layerIds) {
+      const drop = new Set(layerIds)
+      if (drop.size === 0) return
+      mutateDoc('레이어 삭제', (d) => {
+        /*
+         * 지운 폴더의 식구는 한 겹 밖으로 나온다. removeLayer 와 같은 규칙이다.
+         * 함께 지우는 목록에 이미 들어 있으면 어차피 사라지므로 이 처리는 무해하다.
+         */
+        for (let i = d.layers.length - 1; i >= 0; i -= 1) {
+          const layer = d.layers[i]
+          if (!layer || !drop.has(layer.id)) continue
+          if (layer.type === 'group') {
+            for (const l of d.layers) {
+              if (l.folderId !== layer.id) continue
+              if (layer.folderId) l.folderId = layer.folderId
+              else delete l.folderId
+            }
+          }
+          d.layers.splice(i, 1)
+        }
+
+        // 아무 레이어도 안 쓰는 에셋을 걷어낸다. 지운 항목만 splice 한다(removeLayer 와 같은 이유).
+        for (let i = d.assets.length - 1; i >= 0; i -= 1) {
+          const asset = d.assets[i]
+          if (!asset) continue
+          if (d.layers.some((l) => l.assetId === asset.id)) continue
+          d.assets.splice(i, 1)
+        }
+
+        normalizeFolderOrder(d)
+      })
+    },
+
+    clearPreset() {
+      mutateDoc('모션 프리셋 해제', (d) => {
+        const ref = d.presetRef
+        if (!ref) return
+        const owned = ownershipOf(ref)
+        const layer = ref.layerId ? findLayer(d, ref.layerId) : undefined
+
+        if (layer) {
+          /*
+           * 소유권 병합 헬퍼를 그대로 쓴다. "새 프리셋이 아무것도 내지 않는다" 와
+           * 정확히 같은 상황이므로 규칙을 다시 적을 이유가 없다 (motions/merge.ts).
+           */
+          const drop = new Set<TrackProp>(owned.props)
+          layer.tracks = layer.tracks.filter((t) => !drop.has(t.prop))
+          layer.effects = mergePresetEffects(layer.effects, undefined, owned)
+          layer.modifiers = []
+
+          if (mergePresetReveal(layer.reveal, undefined, owned) === undefined) delete layer.reveal
+          if (mergePresetCharAnim(layer.charAnim, undefined, owned) === undefined) {
+            delete layer.charAnim
+          }
+          if (mergePresetPerspective(layer.perspective, undefined, owned) === undefined) {
+            delete layer.perspective
+          }
+          const anchor = mergePresetAnchor(layer.anchor, undefined, owned)
+          if (anchor[0] !== layer.anchor[0] || anchor[1] !== layer.anchor[1]) layer.anchor = anchor
+
+          // 프리셋이 켠 것이므로 함께 내린다. 켜진 채 남으면 담기 솔버가 계속 비켜선다.
+          layer.motionExitsFrame = false
+          delete layer.containScale
+        }
+
+        delete d.presetRef
+      })
+    },
+
     reorderLayer(layerId, direction) {
       mutateDoc('레이어 순서 변경', (d) => {
         const from = d.layers.findIndex((l) => l.id === layerId)
@@ -1173,15 +1265,31 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       }, `parallax:${layerId}`)
     },
 
-    moveLayerTo(layerId, toIndex) {
+    moveLayerTo(layerId, toIndex, folderId) {
       mutateDoc('레이어 순서 변경', (d) => {
         const from = d.layers.findIndex((l) => l.id === layerId)
         if (from < 0) return
         const to = clamp(Math.round(toIndex), 0, d.layers.length - 1)
-        if (to === from) return
+        // 소속을 함께 지정했으면 자리가 그대로여도 할 일이 남아 있다.
+        if (to === from && folderId === undefined) return
         const [moved] = d.layers.splice(from, 1)
         if (!moved) return
         d.layers.splice(to, 0, moved)
+
+        /*
+         * 소속을 지정했으면 추측하지 않는다.
+         *
+         * 목록에서 끌어다 놓는 경로는 접힘까지 반영한 트리를 이미 계산해 두었다
+         * (ui/layers/layerTree.ts dropTarget). 그쪽이 더 많이 안다.
+         */
+        if (folderId !== undefined) {
+          if (folderId === null) delete moved.folderId
+          else if (folderId !== moved.id && !isInsideFolder(d, moved.id, folderId)) {
+            moved.folderId = folderId
+          }
+          normalizeFolderOrder(d)
+          return
+        }
 
         /*
          * 놓은 자리가 곧 폴더 소속이다.

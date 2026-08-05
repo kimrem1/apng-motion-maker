@@ -53,7 +53,8 @@ interface PresetUiState {
   setStrength(strength: number): void
   setSpeed(speed: number): void
   hover(id: string | null): void
-  markApplied(id: string): void
+  /** null 이면 "지금 걸린 프리셋이 없다". 카드를 한 번 더 눌러 끄는 경로가 쓴다. */
+  markApplied(id: string | null): void
   toggleFavorite(id: string): void
   pushRecent(id: string): void
   toggleCompare(id: string): void

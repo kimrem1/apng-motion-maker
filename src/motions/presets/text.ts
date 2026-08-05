@@ -430,12 +430,12 @@ const flip = textPreset({
 const wave = textPreset({
   id: 'text.wave',
   label: '물결치듯',
-  hint: '위아래로 엇갈려 출렁이며 자리를 잡는다.',
+  hint: '여섯 글자마다 굽이 하나. 줄 전체가 한 번 출렁이며 자리를 잡는다.',
   mode: 'wave',
   ease: 'elastic',
   jitter: 0.25,
   durationMs: 1100,
-  distance: 0.6,
+  distance: 0.9,
   stagger: 0.55,
   textOnly: true,
 })

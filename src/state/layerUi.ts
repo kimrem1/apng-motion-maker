@@ -42,6 +42,17 @@ interface LayerUiState {
   /** 정본 선택 집합. 순서는 "고른 순서" 가 아니라 호출자가 넘긴 순서를 따른다. */
   selectedLayerIds: string[]
   /**
+   * 접어 둔 폴더.
+   *
+   * 문서가 아니라 화면 상태다. 저장하지 않고 실행취소도 타지 않는다. 접힘은 "지금
+   * 보기 편한 상태" 이지 그림의 일부가 아니고, 문서 형식을 늘리면 옛 파일 마이그레이션
+   * 까지 딸려 온다.
+   *
+   * 이것이 있어야 도형 세트가 쓸 만해진다. 세트 하나가 도형을 스무 장까지 만드는데,
+   * 폴더로 묶어도 식구가 전부 펼쳐져 나오면 목록이 스무 줄 그대로다.
+   */
+  collapsedFolderIds: string[]
+  /**
    * Shift 범위 선택의 기준점.
    * 인덱스가 아니라 id 로 들고 있어야 그 사이에 순서가 바뀌어도 엉뚱한 범위가 잡히지 않는다.
    */
@@ -58,10 +69,16 @@ interface LayerUiState {
   clearLayerSelection(): void
   /** 삭제된 레이어를 선택에서 걷어낸다. 변화가 없으면 아무것도 쓰지 않는다. */
   pruneLayerSelection(existingIds: readonly string[]): void
+
+  /** 폴더 하나를 접거나 편다. */
+  toggleFolderCollapsed(folderId: string): void
+  /** 폴더의 접힘을 못 박는다. 도형 세트가 방금 만든 폴더를 접어 두는 데 쓴다. */
+  setFolderCollapsed(folderId: string, collapsed: boolean): void
 }
 
 export const useLayerUiStore = create<LayerUiState>()((set, get) => ({
   selectedLayerIds: [],
+  collapsedFolderIds: [],
   anchorLayerId: null,
 
   select(id, mode, orderedIds) {
@@ -117,9 +134,45 @@ export const useLayerUiStore = create<LayerUiState>()((set, get) => ({
     const alive = new Set(existingIds)
     const ids = state.selectedLayerIds.filter((id) => alive.has(id))
     const anchor = state.anchorLayerId && alive.has(state.anchorLayerId) ? state.anchorLayerId : null
+    /*
+     * 접힘 기억도 같이 걷어낸다.
+     *
+     * 레이어 id 는 세션 단조 카운터라 다른 프로젝트의 폴더와 그대로 겹친다. 남겨 두면
+     * 파일을 새로 열었을 때 아무 상관 없는 폴더가 접힌 채로 나타난다.
+     */
+    const folders = state.collapsedFolderIds.filter((id) => alive.has(id))
+    const foldersChanged = folders.length !== state.collapsedFolderIds.length
     // 바뀐 게 없으면 조용히 나간다. 여기서 매번 set 하면 effect 가 무한 루프가 된다.
-    if (ids.length === state.selectedLayerIds.length && anchor === state.anchorLayerId) return
-    set({ selectedLayerIds: ids, anchorLayerId: anchor })
+    if (
+      ids.length === state.selectedLayerIds.length &&
+      anchor === state.anchorLayerId &&
+      !foldersChanged
+    ) {
+      return
+    }
+    set({
+      selectedLayerIds: ids,
+      anchorLayerId: anchor,
+      ...(foldersChanged ? { collapsedFolderIds: folders } : {}),
+    })
     mirror(ids, lastSelectedLayerId(ids))
+  },
+
+  toggleFolderCollapsed(folderId) {
+    const list = get().collapsedFolderIds
+    set({
+      collapsedFolderIds: list.includes(folderId)
+        ? list.filter((id) => id !== folderId)
+        : [...list, folderId],
+    })
+  },
+
+  setFolderCollapsed(folderId, collapsed) {
+    const list = get().collapsedFolderIds
+    const has = list.includes(folderId)
+    if (has === collapsed) return
+    set({
+      collapsedFolderIds: collapsed ? [...list, folderId] : list.filter((id) => id !== folderId),
+    })
   },
 }))

@@ -35,6 +35,7 @@ const ARROWS: Partial<Record<CharInMode, string>> = {
   typewriter: '|',
   fade: '◍',
   wave: '〜',
+  scramble: '⁙',
 }
 
 export function TextGallery() {
@@ -87,9 +88,15 @@ export function TextGallery() {
               type="button"
               className="mm-text-card"
               aria-pressed={current === mode}
-              title={CHAR_IN_LABELS[mode]}
+              title={
+                current === mode && mode !== 'none'
+                  ? `${CHAR_IN_LABELS[mode]} (한 번 더 누르면 뺍니다)`
+                  : CHAR_IN_LABELS[mode]
+              }
               onClick={() => {
-                for (const layer of targets) setLayerCharAnim(layer.id, { mode })
+                // 켠 카드를 다시 누르면 끈다. '없음' 은 이미 끈 상태라 그대로 둔다.
+                const next: CharInMode = current === mode && mode !== 'none' ? 'none' : mode
+                for (const layer of targets) setLayerCharAnim(layer.id, { mode: next })
               }}
             >
               <span className="mm-text-card-glyph" aria-hidden="true">

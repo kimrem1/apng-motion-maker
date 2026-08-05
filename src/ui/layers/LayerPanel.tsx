@@ -4,6 +4,9 @@
  * 목록은 위가 앞이다. 문서 배열은 z 오름차순(0 이 맨 뒤)이라 뒤집어 그린다.
  * 포토샵/피그마를 쓴 사람은 예외 없이 그렇게 기대한다.
  *
+ * 폴더는 머리행이 식구들 **위**에 오고 접을 수 있다. 그 계산은 layerTree.ts 가
+ * 전부 한다. 여기서 다시 적으면 눈에 보이는 자리와 끌어다 놓은 자리가 갈라진다.
+ *
  * 재정렬은 HTML5 드래그를 쓰지 않는다. dragImage 를 브라우저가 마음대로 그리고,
  * dragover 좌표가 200ms 단위로 끊겨 들어와 손가락보다 늦게 따라온다.
  * pointer 이벤트 + setPointerCapture 로 직접 구현한다.
@@ -12,7 +15,8 @@
  *   ul[role=listbox] / li[role=option] 이고 화살표로 이동한다.
  *   행 안의 아이콘 버튼은 tabIndex=-1 이다. 레이어 10개면 Tab 이 40번 걸리기 때문이다.
  *   대신 행에서 키로 전부 조작할 수 있다.
- *     Space 가시성, L 잠금, Enter/F2 이름 편집, Delete 삭제, Alt+상하 순서 이동
+ *     Space 가시성, L 잠금, Enter/F2 이름 편집, Delete 삭제, Alt+상하 순서 이동,
+ *     좌우 화살표로 폴더 접기/펴기
  *   합성 모드만 키보드로 못 바꾸는데, 그건 인스펙터의 LayerProperties 가 담당한다.
  */
 
@@ -37,6 +41,7 @@ import { useUiStore } from '@/state/ui.ts'
 import { addSingleShape } from '@/state/shapeActions.ts'
 import { AddLayerMenu } from './AddLayerMenu.tsx'
 import { BLEND_OPTIONS, moveLayerTo, setLayerBlend } from './layerDocActions.ts'
+import { buildLayerRows, dropTarget } from './layerTree.ts'
 import './layers.css'
 
 /** 썸네일 캔버스의 실제 픽셀. CSS 는 32px 이므로 2배 해상도다. */
@@ -138,6 +143,15 @@ function IconFolder() {
         strokeWidth="1.3"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+
+/** 폴더를 접고 펴는 삼각형. 펼침이 아래를 가리킨다. */
+function IconCaret({ open }: { open: boolean }) {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
+      <path d={open ? 'M1 3h8L5 8z' : 'M3 1v8l5-4z'} />
     </svg>
   )
 }
@@ -313,6 +327,8 @@ export function LayerPanel() {
   const select = useLayerUiStore((s) => s.select)
   const setSelectedLayerIds = useLayerUiStore((s) => s.setSelectedLayerIds)
   const pruneLayerSelection = useLayerUiStore((s) => s.pruneLayerSelection)
+  const collapsedIds = useLayerUiStore((s) => s.collapsedFolderIds)
+  const toggleFolderCollapsed = useLayerUiStore((s) => s.toggleFolderCollapsed)
   const uiSelectedId = useUiStore((s) => s.selectedLayerId)
 
   /** 로빙 tabindex 의 현재 대상. 선택과 별개다(Ctrl+화살표는 포커스만 옮긴다). */
@@ -324,38 +340,23 @@ export function LayerPanel() {
   const rowRefs = useRef(new Map<string, HTMLLIElement>())
   const dragRef = useRef<DragMeta | null>(null)
 
-  // 위가 z 가 큰 레이어다. 문서 배열은 z 오름차순이라 뒤집는다.
-  const display = useMemo(() => [...layers].reverse(), [layers])
-
-  /**
-   * 폴더 중첩 깊이. 목록의 들여쓰기가 이 값만 쓴다.
+  /*
+   * 목록에 그릴 행. 위가 앞이고 폴더 머리행이 식구들 **위**에 온다.
    *
-   * 한 번에 다 계산해 두고 행마다 조회한다. 행에서 사슬을 다시 타면 깊이의 제곱이 된다.
+   * 계산은 layerTree.ts 한 곳에만 둔다. 여기서 다시 적으면 화면과 드래그 계산이
+   * 갈라져서, 눈에 보이는 자리와 실제로 놓이는 자리가 달라진다.
    */
-  const depthById = useMemo(() => {
-    const map = new Map<string, number>()
-    const byId = new Map(layers.map((l) => [l.id, l]))
-    const depthOf = (layer: Layer, guard: number): number => {
-      const cached = map.get(layer.id)
-      if (cached !== undefined) return cached
-      if (guard > 8 || !layer.folderId) {
-        map.set(layer.id, 0)
-        return 0
-      }
-      const parent = byId.get(layer.folderId)
-      const d = parent ? depthOf(parent, guard + 1) + 1 : 0
-      map.set(layer.id, d)
-      return d
-    }
-    for (const layer of layers) depthOf(layer, 0)
-    return map
-  }, [layers])
-  const orderedIds = useMemo(() => display.map((l) => l.id), [display])
+  const collapsedSet = useMemo(() => new Set(collapsedIds), [collapsedIds])
+  const rows = useMemo(() => buildLayerRows(layers, collapsedSet), [layers, collapsedSet])
+  /** 화면에 실제로 있는 행의 id. 키보드 이동과 범위 선택이 이 순서를 쓴다. */
+  const orderedIds = useMemo(() => rows.map((r) => r.layer.id), [rows])
+  /** 접혀서 안 보이는 것까지 포함한 전부. 선택을 걷어낼 때는 이쪽으로 재야 한다. */
+  const allIds = useMemo(() => layers.map((l) => l.id), [layers])
 
-  // 삭제된 레이어를 선택에서 걷어낸다.
+  // 삭제된 레이어를 선택에서 걷어낸다. 접혀서 안 보이는 것은 살아 있는 것이다.
   useEffect(() => {
-    pruneLayerSelection(orderedIds)
-  }, [orderedIds, pruneLayerSelection])
+    pruneLayerSelection(allIds)
+  }, [allIds, pruneLayerSelection])
 
   /**
    * 밖에서(구 SourcePanel, 이미지 드롭, 프리셋 적용 등) useUiStore.selectedLayerId 만
@@ -451,17 +452,17 @@ export function LayerPanel() {
       setDrag(null)
       if (!commit || !meta.active) return
 
-      const total = orderedIds.length
       const from = meta.fromDisplay
       const boundary = meta.boundary
       // 자기 앞이나 자기 뒤 경계에 놓으면 제자리다.
       if (boundary === from || boundary === from + 1) return
 
-      const toDisplay = boundary > from ? boundary - 1 : boundary
-      // 표시 인덱스는 문서 인덱스의 역순이다.
-      moveLayerTo(meta.layerId, total - 1 - toDisplay)
+      // 경계 번호를 문서 인덱스와 폴더 소속으로 옮기는 것은 layerTree 가 한다.
+      const target = dropTarget(layers, rows, meta.layerId, boundary)
+      if (!target) return
+      moveLayerTo(meta.layerId, target.index, target.folderId)
     },
-    [orderedIds.length],
+    [layers, rows],
   )
 
   // -------------------------------------------------------------------------
@@ -500,9 +501,13 @@ export function LayerPanel() {
       const step = e.key === 'ArrowDown' ? 1 : -1
 
       if (e.altKey) {
-        // 순서 이동. 화면상 위로 = 문서 인덱스 증가.
-        const toDisplay = Math.min(total - 1, Math.max(0, di + step))
-        if (toDisplay !== di) moveLayerTo(layer.id, total - 1 - toDisplay)
+        /*
+         * 순서 이동. 드래그와 같은 규칙을 타야 하므로 경계 번호로 옮겨 계산한다.
+         * 위로 한 칸 = 윗행 앞의 경계, 아래로 한 칸 = 아랫행 뒤의 경계다.
+         */
+        const boundary = step < 0 ? di - 1 : di + 2
+        const target = dropTarget(layers, rows, layer.id, boundary)
+        if (target) moveLayerTo(layer.id, target.index, target.folderId)
         return
       }
 
@@ -511,6 +516,19 @@ export function LayerPanel() {
       if (e.shiftKey) select(next, 'range', orderedIds)
       else if (!e.ctrlKey && !e.metaKey) select(next, 'replace', orderedIds)
       focusRow(next)
+      return
+    }
+
+    /*
+     * 폴더 접기/펴기. 트리 위젯의 표준 키다.
+     * 폴더가 아닌 행에서는 아무 일도 하지 않는다. 가로 화살표로 할 다른 일이 없다.
+     */
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const row = rows[di]
+      if (!row || layer.type !== 'group') return
+      e.preventDefault()
+      const wantOpen = e.key === 'ArrowRight'
+      if (row.collapsed === wantOpen) toggleFolderCollapsed(layer.id)
       return
     }
 
@@ -626,7 +644,7 @@ export function LayerPanel() {
       </div>
 
       <div className="mm-panel-body mm-scroll">
-        {display.length === 0 ? (
+        {rows.length === 0 ? (
           <p className="mm-lyr-empty">
             이미지를 끌어다 놓거나 Ctrl+V 로 붙여넣으세요. 아래 [도형 추가] 로 도형만 넣어도 됩니다.
             <br />
@@ -639,7 +657,8 @@ export function LayerPanel() {
             aria-multiselectable="true"
             aria-label="레이어 목록, 위가 앞쪽입니다"
           >
-            {display.map((layer, di) => {
+            {rows.map((row, di) => {
+              const layer = row.layer
               const selected = selectedIds.includes(layer.id)
               const isActive = activeRowId === layer.id
               const isEditing = editingId === layer.id
@@ -654,7 +673,7 @@ export function LayerPanel() {
                 layer.locked ? 'is-locked' : '',
                 dragging && drag?.layerId === layer.id ? 'is-dragging-row' : '',
                 dragging && drag?.boundary === di ? 'is-drop-before' : '',
-                dragging && drag?.boundary === display.length && di === display.length - 1
+                dragging && drag?.boundary === rows.length && di === rows.length - 1
                   ? 'is-drop-after'
                   : '',
               ]
@@ -670,9 +689,10 @@ export function LayerPanel() {
                   }}
                   className={rowClass}
                   role="option"
-                  data-depth={Math.min(4, depthById.get(layer.id) ?? 0)}
+                  data-depth={Math.min(4, row.depth)}
                   aria-selected={selected}
-                  aria-label={`${isFolder ? '폴더 ' : ''}${layer.name}${isClipped ? ', 아래 모양으로 잘림' : ''}${layer.visible ? '' : ', 숨김'}${layer.locked ? ', 잠김' : ''}`}
+                  aria-expanded={isFolder ? !row.collapsed : undefined}
+                  aria-label={`${isFolder ? `폴더 ${layer.name}, ${row.childCount}장` : layer.name}${isClipped ? ', 아래 모양으로 잘림' : ''}${layer.visible ? '' : ', 숨김'}${layer.locked ? ', 잠김' : ''}`}
                   tabIndex={isActive ? 0 : -1}
                   onFocus={() => setActiveId(layer.id)}
                   onKeyDown={(e) => onRowKeyDown(e, layer, di)}
@@ -696,9 +716,27 @@ export function LayerPanel() {
                   </span>
 
                   {isFolder ? (
-                    <span className="mm-lyr-folder-icon" aria-hidden="true">
+                    /*
+                      폴더 아이콘 자리가 그대로 접기 버튼이다. 칸을 하나 더 만들면
+                      행 격자가 밀려 썸네일과 이름이 폴더 행에서만 다른 자리에 온다.
+
+                      접기가 있어야 폴더가 쓸모 있다. 도형 세트 하나가 도형을 스무
+                      장까지 만드는데, 접을 수 없으면 묶어도 목록은 그대로 스무 줄이다.
+                    */
+                    <button
+                      type="button"
+                      className="mm-lyr-folder-toggle"
+                      tabIndex={-1}
+                      aria-label={`${layer.name} ${row.collapsed ? '펼치기' : '접기'}`}
+                      title={row.collapsed ? '펼치기' : '접기'}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        toggleFolderCollapsed(layer.id)
+                      }}
+                    >
+                      <IconCaret open={!row.collapsed} />
                       <IconFolder />
-                    </span>
+                    </button>
                   ) : (
                     <LayerThumb assetId={layer.assetId} shape={layer.shape} name={layer.name} />
                   )}
@@ -730,6 +768,9 @@ export function LayerPanel() {
                       }}
                     >
                       {layer.name}
+                      {isFolder ? (
+                        <span className="mm-lyr-folder-count">{row.childCount}</span>
+                      ) : null}
                     </span>
                   )}
 
@@ -797,9 +838,10 @@ export function LayerPanel() {
           </ul>
         )}
 
-        {display.length > 0 ? (
+        {rows.length > 0 ? (
           <p className="mm-lyr-help">
             Ctrl 클릭으로 여러 장, Shift 클릭으로 범위 선택. 왼쪽 손잡이를 끌면 순서가 바뀝니다.
+            폴더 앞 삼각형으로 접습니다.
           </p>
         ) : null}
       </div>

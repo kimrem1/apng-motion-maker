@@ -286,6 +286,28 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
 }
 
 
+/**
+ * 지금 걸린 프리셋을 걷어낸다. 같은 카드를 한 번 더 누르는 경로다.
+ *
+ * 프리셋이 심은 것만 지운다. 사용자가 인스펙터에서 직접 만든 트랙과 이펙트는
+ * 살아남는다. 규칙은 프리셋을 갈아탈 때와 한 글자도 다르지 않다 (motions/merge.ts).
+ */
+export function clearAppliedPreset(): PresetApplyReport {
+  const presetId = usePresetUiStore.getState().appliedId
+  const doc = useDocumentStore.getState().doc
+  if (!presetId || !doc.presetRef) {
+    return { ok: false, presetId: presetId ?? '', layerId: null, message: null }
+  }
+
+  const layerId = doc.presetRef.layerId ?? null
+  useDocumentStore.getState().clearPreset()
+  usePresetUiStore.getState().markApplied(null)
+  presetParams = {}
+  clearPreview()
+
+  return { ok: true, presetId, layerId, message: '모션을 뺐습니다.' }
+}
+
 // ---------------------------------------------------------------------------
 // 속도/세기 실시간 재적용
 // ---------------------------------------------------------------------------
