@@ -31,6 +31,16 @@ export interface AppliedScene {
    */
   fitFrames: number | null
   /**
+   * 이 세트가 문서에 써 넣은 fps.
+   *
+   * 다음 재적용에서 문서 fps 가 이것과 다르면 그 사이 사용자가 직접 골랐다는 뜻이다.
+   * 그때 천장(ceilFps)을 그 값으로 내린다. 안 내리면 천장이 영원히 안 낮아져서,
+   * fps 를 10 으로 내려 둔 뒤 세기 슬라이더를 한 칸 움직이는 것만으로 fps 가 옛
+   * 값으로 되돌아간다. 모션 프리셋 쪽은 document.ts setFps 가 presetRef.baseFps 를
+   * 낮춰 같은 사고를 막는데, 도형 세트에는 대응하는 자리가 없었다.
+   */
+  fps: number
+  /**
    * 넣은 직후 레이어들의 지문.
    *
    * 슬라이더를 끌면 세트를 통째로 다시 만드는데, 그 사이에 사용자가 도형을 손봤으면
@@ -70,6 +80,11 @@ interface ShapeUiState {
   setSpeed(v: number): void
   setApplied(applied: AppliedScene | null): void
   raiseCeilFps(fps: number): number
+  /**
+   * 천장을 이 값으로 **내린다.** 사용자가 fps 를 직접 골랐을 때만 부른다.
+   * raiseCeilFps 는 최댓값만 잡으므로 내려가는 길이 따로 있어야 한다.
+   */
+  setCeilFps(fps: number): void
   /**
    * 문서가 통째로 바뀌었다. 이 문서와 무관한 기억을 버린다.
    *
@@ -113,6 +128,10 @@ export const useShapeUiStore = create<ShapeUiState>()((set, get) => ({
     const next = Math.max(fps, get().ceilFps ?? 0)
     if (next !== get().ceilFps) set({ ceilFps: next })
     return next
+  },
+  setCeilFps(fps) {
+    if (!Number.isFinite(fps) || fps <= 0) return
+    if (get().ceilFps !== fps) set({ ceilFps: fps })
   },
   resetSession() {
     if (get().applied === null && get().ceilFps === null) return

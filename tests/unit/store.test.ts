@@ -498,6 +498,34 @@ describe('캔버스 크기와 내용 배율', () => {
     expect(s().doc.layers[0]!.baseScale).toBeCloseTo(0.5, 9)
   })
 
+  /**
+   * A -> B -> A 는 언제나 제자리로 돌아와야 한다.
+   *
+   * 두 축 비율의 min 을 쓰던 때는 폭만 키웠다 되돌리는 것만으로 그림이 절반이 됐다.
+   * 키울 때는 min 이 1 로 잘리고 줄일 때는 그대로 곱해지는 비대칭 래칫이었다.
+   * 캔버스는 제자리인데 그림은 안 돌아오고, 폭을 다시 쳐도 복구되지 않았다.
+   */
+  it('한 축을 키웠다 되돌리면 그림이 제자리다', () => {
+    s().setCanvasSize(200, 200)
+    s().setStaticValue(L, 'translateX', 40)
+
+    s().setCanvasSize(400, 200, { scaleContent: true })
+    s().setCanvasSize(200, 200, { scaleContent: true })
+
+    expect(s().doc.layers[0]!.baseScale).toBeCloseTo(1, 9)
+    expect(readStaticValue(s().doc.layers[0]!, 'translateX')).toBeCloseTo(40, 9)
+  })
+
+  it('어느 순서로 왕복해도 제자리다', () => {
+    s().setCanvasSize(200, 200)
+    const before = s().doc.layers[0]!.baseScale
+
+    for (const [w, h] of [[400, 200], [400, 400], [100, 400], [100, 100], [200, 200]] as const) {
+      s().setCanvasSize(w, h, { scaleContent: true })
+    }
+    expect(s().doc.layers[0]!.baseScale).toBeCloseTo(before ?? 1, 9)
+  })
+
   it('채우기/담기 레이어는 fit 이 이미 캔버스를 따라가므로 손대지 않는다', () => {
     s().setLayerFit(L, 'cover')
     s().setCanvasSize(200, 200)

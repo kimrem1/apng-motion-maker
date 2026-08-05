@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { colorDistance, rgbToYcc } from '@/imageprep/bgRemove.ts'
+import { bleedEdgeColors, colorDistance, rgbToYcc } from '@/imageprep/bgRemove.ts'
 import { ASPECT_PRESETS, alphaBounds, fitRectToAspect, type CropRect } from '@/imageprep/crop.ts'
 
 // ---------------------------------------------------------------------------
@@ -220,5 +220,83 @@ describe('alphaBounds', () => {
 
   it('크기가 0 이면 전체 사각형을 돌려준다', () => {
     expect(alphaBounds(new Uint8ClampedArray(0), 0, 0)).toEqual({ x: 0, y: 0, w: 0, h: 0 })
+  })
+})
+
+/**
+ * 투명 픽셀의 색 채우기.
+ *
+ * straight alpha 파이프라인에서 알파 0 픽셀의 RGB 는 화면에 안 보이지만 무의미하지
+ * 않다. GPU 이중선형 보간은 RGB 와 A 를 따로 섞으므로, 그 자리에 검정이 남아 있으면
+ * 축소나 회전에서 피사체 가장자리로 스며 나온다.
+ *
+ * 저장 경로(2D 캔버스)가 그 값을 0 으로 만든다. 여는 쪽에서 같은 계산을 다시
+ * 돌려 되살리므로, 이 함수가 **몇 번을 돌려도 같은 답**을 내는 것이 전제다.
+ */
+describe('투명 픽셀 색 채우기', () => {
+  /** 가운데 한 픽셀만 불투명한 3x3. 나머지는 알파 0 이다. */
+  function cross(): { data: Uint8ClampedArray; w: number; h: number } {
+    const w = 3
+    const h = 3
+    const data = new Uint8ClampedArray(w * h * 4)
+    const mid = (1 * w + 1) * 4
+    data[mid] = 200
+    data[mid + 1] = 100
+    data[mid + 2] = 50
+    data[mid + 3] = 255
+    return { data, w, h }
+  }
+
+  it('이웃한 불투명 색으로 채우고 알파는 안 건드린다', () => {
+    const { data, w, h } = cross()
+    bleedEdgeColors(data, w, h)
+
+    for (let i = 0; i < w * h; i += 1) {
+      const p = i * 4
+      const where = `픽셀 ${i}`
+      // 알파는 그대로다. 보이는 그림이 달라지면 안 된다.
+      expect(data[p + 3], where).toBe(i === 4 ? 255 : 0)
+      // 검정이 남아 있으면 안 된다. 그 검정이 가장자리로 스며 나온다.
+      expect(data[p], where).toBeGreaterThan(0)
+    }
+    // 가운데 색은 그대로다.
+    expect([data[16], data[17], data[18]]).toEqual([200, 100, 50])
+  })
+
+  it('두 번 돌려도 같은 답이다', () => {
+    const once = cross()
+    bleedEdgeColors(once.data, once.w, once.h)
+
+    const twice = cross()
+    bleedEdgeColors(twice.data, twice.w, twice.h)
+    bleedEdgeColors(twice.data, twice.w, twice.h)
+
+    expect([...twice.data]).toEqual([...once.data])
+  })
+
+  it('저장이 RGB 를 0 으로 만든 뒤에도 같은 답으로 돌아온다', () => {
+    const original = cross()
+    bleedEdgeColors(original.data, original.w, original.h)
+
+    // 저장 경로(premultiplied 2D 캔버스)를 흉내낸다. 알파 0 이면 RGB 가 0 이 된다.
+    const saved = new Uint8ClampedArray(original.data)
+    for (let i = 0; i < saved.length; i += 4) {
+      if (saved[i + 3] === 0) {
+        saved[i] = 0
+        saved[i + 1] = 0
+        saved[i + 2] = 0
+      }
+    }
+    expect([...saved]).not.toEqual([...original.data])
+
+    bleedEdgeColors(saved, original.w, original.h)
+    expect([...saved]).toEqual([...original.data])
+  })
+
+  it('전부 불투명하면 아무것도 안 바꾼다', () => {
+    const data = new Uint8ClampedArray(2 * 2 * 4).fill(255)
+    const before = [...data]
+    bleedEdgeColors(data, 2, 2)
+    expect([...data]).toEqual(before)
   })
 })

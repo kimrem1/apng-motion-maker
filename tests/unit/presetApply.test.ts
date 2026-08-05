@@ -350,3 +350,73 @@ describe('프리셋 소유권과 레이어', () => {
     expect(s().doc.layers.find((l) => l.id === a)!.tracks.map((t) => t.prop)).not.toContain('rotate')
   })
 })
+
+/**
+ * 담기 기준 배율(Layer.containScale)은 **적용이 끝난 뒤의 레이어**에서 재야 한다.
+ *
+ * 예전에는 앞 프리셋이 남긴 기준점 / 글자등장 / 가리기 / 원근을 그대로 들고 쟀다.
+ * 그런데 그 값들은 같은 적용의 뒷단이 새 프리셋 것으로 덮는다. 즉 적용이 끝나면
+ * 존재하지 않을 상태에서 재고, 그 값이 문서에 남았다.
+ */
+describe('담기 기준 배율', () => {
+  const s = () => useDocumentStore.getState()
+
+  function keepInsideDoc(): MotionProject {
+    const d = baseDoc()
+    d.layers[0]!.keepInside = true
+    d.layers[0]!.fillsCanvas = false
+    return d
+  }
+
+  function commit(layerId: string, presetId: string): void {
+    const result = applyPresetToLayer({ doc: s().doc, layerId, presetId, strength: 0.5, speed: 1 })
+    s().applyPresetTracks({
+      layerId,
+      presetId,
+      tracks: result.tracks,
+      modifiers: result.modifiers,
+      ...(result.effects ? { effects: result.effects } : {}),
+      ...(result.anchor ? { anchor: result.anchor } : {}),
+      ...(result.charAnim ? { charAnim: result.charAnim } : {}),
+      ...(result.containScale !== undefined ? { containScale: result.containScale } : {}),
+      durationFrames: result.durationFrames,
+      macro: { speed: 1, strength: 0.5 },
+    })
+  }
+
+  beforeEach(() => {
+    s().replaceDocument(keepInsideDoc())
+    L = s().doc.layers[0]!.id
+  })
+
+  it('앞 프리셋을 거쳐도 깨끗한 레이어와 같은 기준 배율이 나온다', () => {
+    const clean = applyPresetToLayer({
+      doc: keepInsideDoc(), layerId: keepInsideDoc().layers[0]!.id,
+      presetId: 'rotate.spin360', strength: 0.5, speed: 1,
+    }).containScale
+
+    // 기준점을 변으로 옮기는 프리셋을 먼저 건다.
+    commit(L, 'flip3d.hingeIn')
+    expect(s().doc.layers[0]!.anchor).not.toEqual([0.5, 0.5])
+
+    const after = applyPresetToLayer({
+      doc: s().doc, layerId: L, presetId: 'rotate.spin360', strength: 0.5, speed: 1,
+    }).containScale
+
+    expect(after).toBe(clean)
+  })
+
+  it('A -> B -> A 가 같은 기준 배율로 돌아온다', () => {
+    const first = applyPresetToLayer({
+      doc: s().doc, layerId: L, presetId: 'rotate.spin360', strength: 0.5, speed: 1,
+    }).containScale
+
+    commit(L, 'rotate.spin360')
+    commit(L, 'flip3d.hingeIn')
+    const back = applyPresetToLayer({
+      doc: s().doc, layerId: L, presetId: 'rotate.spin360', strength: 0.5, speed: 1,
+    }).containScale
+
+    expect(back).toBe(first)
+  })
+})

@@ -200,7 +200,23 @@ const VERDICT_LABEL: Record<Verdict, string> = {
   unknown: '확인 불가',
 }
 
-function loopSentence(kind: 'gif' | 'apng', written: number, measured: number): ProbeRow {
+/**
+ * 반복 횟수 해석 진단.
+ *
+ * **두 포맷이 파일에 적는 숫자의 뜻이 다르다.** 여기가 갈려 있던 자리다.
+ *
+ *   APNG : acTL num_plays 가 곧 총 재생 횟수다. 앱도 사용자가 고른 N 을 그대로 적는다
+ *          (export/pipeline.ts mapLoop, apngNumPlays = count).
+ *   GIF  : NETSCAPE2.0 값을 앱은 "첫 재생 뒤 추가 반복 횟수" 로 적는다. N 회 재생을
+ *          고르면 N-1 을 기록한다 (export/gif/encoder.ts loopCountToRepeat).
+ *
+ * 그래서 "이 브라우저가 우리와 같은 해석을 하는가" 의 기준값이 포맷마다 한 칸 다르다.
+ * 예전에는 APNG 기준을 GIF 에도 그대로 써서, NETSCAPE 를 추가 반복으로 읽는(=앱과
+ * 같은 해석을 하는) 크롬을 "한 번 더 재생됩니다" 로 경고했다. 정상을 결함으로 보고한 것이다.
+ *
+ * measured 는 WebCodecs 의 repetitionCount, 즉 첫 재생을 뺀 추가 반복 횟수다.
+ */
+export function loopSentence(kind: 'gif' | 'apng', written: number, measured: number): ProbeRow {
   const where = kind === 'gif' ? 'GIF NETSCAPE2.0' : 'APNG acTL num_plays'
   const base = {
     id: kind === 'gif' ? 'gif-loop' : 'apng-loop',
@@ -216,24 +232,35 @@ function loopSentence(kind: 'gif' | 'apng', written: number, measured: number): 
     }
   }
 
-  // WebCodecs 의 repetitionCount 는 첫 재생을 뺀 반복 횟수다.
-  const totalPlays = measured + 1
+  /** 이 브라우저가 앱과 같은 해석을 할 때 나와야 하는 값. */
+  const agreed = kind === 'gif' ? written : written - 1
+  /** 반대 해석일 때 나오는 값. */
+  const opposite = kind === 'gif' ? written - 1 : written
 
-  if (measured === written) {
-    return {
-      ...base,
-      verdict: 'warn',
-      headline: `${written}회로 적으면 이 브라우저는 총 ${totalPlays}번 재생합니다.`,
-      detail: `${where} 에 ${written} 을 기록했고 디코더가 돌려준 반복 횟수도 ${measured} 입니다. 즉 파일에 적힌 숫자를 "첫 재생 뒤 추가 반복 횟수" 로 읽습니다. 한 번 더 재생됩니다.`,
-    }
-  }
-
-  if (measured === written - 1) {
+  if (measured === agreed) {
+    const meaning =
+      kind === 'gif'
+        ? '파일에 적힌 숫자를 "첫 재생 뒤 추가 반복 횟수" 로 읽습니다'
+        : '파일에 적힌 숫자를 "총 재생 횟수" 로 읽습니다'
     return {
       ...base,
       verdict: 'ok',
-      headline: `${written}회로 적으면 이 브라우저는 정확히 ${totalPlays}번 재생합니다.`,
-      detail: `${where} 에 ${written} 을 기록했고 디코더가 돌려준 반복 횟수는 ${measured} 입니다. 즉 파일에 적힌 숫자를 "총 재생 횟수" 로 읽습니다. 설정한 대로 나옵니다.`,
+      headline: 'N번 반복으로 설정하면 이 브라우저는 정확히 N번 재생합니다.',
+      detail: `${where} 에 ${written} 을 기록했고 디코더가 돌려준 반복 횟수는 ${measured} 입니다. 즉 ${meaning}. 이 앱이 값을 적는 방식과 같으므로 설정한 대로 나옵니다.`,
+    }
+  }
+
+  if (measured === opposite) {
+    const drift = kind === 'gif' ? '한 번 적게' : '한 번 더'
+    const meaning =
+      kind === 'gif'
+        ? '파일에 적힌 숫자를 "총 재생 횟수" 로 읽습니다'
+        : '파일에 적힌 숫자를 "첫 재생 뒤 추가 반복 횟수" 로 읽습니다'
+    return {
+      ...base,
+      verdict: 'warn',
+      headline: `N번 반복으로 설정하면 이 브라우저는 ${drift} 재생합니다.`,
+      detail: `${where} 에 ${written} 을 기록했는데 디코더가 돌려준 반복 횟수는 ${measured} 입니다. 즉 ${meaning}. 이 앱이 값을 적는 방식과 반대라 재생 횟수가 한 번 어긋납니다.`,
     }
   }
 

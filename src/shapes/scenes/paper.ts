@@ -17,9 +17,10 @@
  * 흐르는 띠가 성립하는 근거가 이 숫자 하나다.
  */
 
-import { createShapeSpec, shiftColor, withAlpha } from '@/core/shape.ts'
+import { SHAPE_LIMITS, createShapeSpec, shiftColor, withAlpha } from '@/core/shape.ts'
+import { SHAPE_SIZE_MAX } from '@/core/types.ts'
 import type { SceneLayer, ShapeScene } from '../types.ts'
-import { atRatio, fixed, gain, pct, pick, stops, timingOf, track } from '../shared.ts'
+import { atRatio, clamp, fixed, gain, pct, pick, stops, timingOf, track } from '../shared.ts'
 
 /**
  * 빗금 띠 한 장의 치수.
@@ -33,10 +34,15 @@ function tapeSize(canvasW: number, canvasH: number, thickness: number): {
   height: number
   cells: number
 } {
-  const width = Math.round(Math.hypot(canvasW, canvasH) * 1.5)
+  // 도형이 실제로 받는 값으로 자른다. 자르기 전 값을 쓰면 무늬 밀도가 계산과 갈라진다.
+  const width = Math.min(SHAPE_SIZE_MAX, Math.round(Math.hypot(canvasW, canvasH) * 1.5))
   const height = Math.max(6, Math.round(canvasH * thickness))
   // 한 칸이 띠 두께의 1.1 배쯤 되게. 빗금이 45도로 보이는 비율이다.
-  const cells = Math.max(4, Math.round(width / Math.max(4, height * 1.1)))
+  const cells = clamp(
+    Math.round(width / Math.max(4, height * 1.1)),
+    Math.max(4, SHAPE_LIMITS.points.min),
+    SHAPE_LIMITS.points.max,
+  )
   return { width, height, cells }
 }
 
@@ -283,8 +289,20 @@ export const PAPER_SCENES: ShapeScene[] = [
        * 띠는 캔버스보다 넉넉히 길다. 정확히 한 칸만 밀 것이라, 남는 길이가 한 칸보다
        * 크기만 하면 흐르는 동안 어느 쪽 끝도 화면에 들어오지 않는다.
        */
-      const width = Math.round(ctx.canvasW * 2)
-      const cells = Math.max(6, Math.round(width / Math.max(6, height * 1.6)))
+      /*
+       * 폭과 칸 수를 **도형이 실제로 받는 값으로** 미리 자른다.
+       *
+       * normalizeShapeSpec 이 폭을 SHAPE_SIZE_MAX 로, 칸 수를 SHAPE_LIMITS.points.max
+       * (36)로 자른다. 자르기 전 값으로 이동량을 계산하면 "미는 거리" 와 "한 칸의
+       * 폭" 이 갈라져 이음새가 튄다. 1280x720 에서 cells 가 64 로 나와 실제 36 칸과
+       * 두 배 가까이 어긋났다. 카드가 약속한 "이음새가 없습니다" 가 거짓이 된다.
+       */
+      const width = Math.min(SHAPE_SIZE_MAX, Math.round(ctx.canvasW * 2))
+      const cells = clamp(
+        Math.round(width / Math.max(6, height * 1.6)),
+        Math.max(6, SHAPE_LIMITS.points.min),
+        SHAPE_LIMITS.points.max,
+      )
       /*
        * 이음새의 근거. 한 칸의 폭이 정확히 width / cells 이므로, 그만큼 밀면 빗금이
        * 이전 칸의 자리에 정확히 겹친다. 첫 프레임과 마지막 프레임의 그림이 같다.

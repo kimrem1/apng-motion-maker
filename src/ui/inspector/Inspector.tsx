@@ -31,7 +31,7 @@ import { TextSection } from './TextSection.tsx'
 import { CharAnimSection } from './CharAnimSection.tsx'
 import { ShapeSection } from '@/ui/inspector/ShapeSection.tsx'
 import { useUiStore } from '@/state/ui.ts'
-import { frameForEdit } from '@/ui/canvas/livePlayhead.ts'
+import { useEditFrame } from './useEditFrame.ts'
 import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
 import { NumberField, SelectField, TextField, ToggleField, type SelectOption } from '@/ui/widgets/Field.tsx'
 
@@ -252,41 +252,8 @@ function LayerSection({ layer }: { layer: Layer }) {
   const setLayerPerspective = useDocumentStore((s) => s.setLayerPerspective)
   const frame = useUiStore((s) => s.playheadFrame)
 
-  /**
-   * 한 번의 편집이 쓰는 프레임. 편집 세션이 열려 있을 때만 값이 있다.
-   *
-   * NumberField 는 글자 하나마다 onChange 를 쏜다. 재생 중이면 그 사이 재생 헤드가
-   * 움직여서 "12" 를 치는 동안 서로 다른 프레임에 키가 두 개 생긴다.
-   * 그래서 편집이 시작되면 재생을 멈추고 그 순간의 프레임을 고정한다.
-   * 스크럽이 재생을 멈추는 것과 같은 관습이다 (Timeline.onPointerDown).
-   */
-  const editFrameRef = useRef<number | null>(null)
-
-  function beginEdit(): number {
-    const ui = useUiStore.getState()
-    /*
-     * 재생 중이면 스토어의 playheadFrame 을 읽으면 안 된다.
-     *
-     * 그 값은 100ms 마다만 갱신돼 한두 프레임 뒤처져 있고, 정확한 값은 정지
-     * 이펙트가 나중에 확정한다. setPlaying(false) 는 React 상태 변경이라 같은
-     * tick 에서는 아직 안 돈다. 그래서 여기서 낡은 프레임을 못 박으면, 입력한
-     * 값이 화면이 보여 준 프레임이 아니라 그 앞 프레임에 쓰이고 입력 칸은
-     * 블러 직후 보간값으로 되돌아갔다 (ui/canvas/livePlayhead.ts).
-     */
-    const at = frameForEdit(ui.playing, ui.playheadFrame)
-    if (ui.playing) {
-      ui.setPlaying(false)
-      // 정지 이펙트가 곧 같은 값을 넣지만, 그 사이 read() 가 다른 프레임을 보면
-      // 방금 쓴 값이 입력 칸에 안 돌아온다. 여기서 먼저 맞춰 둔다.
-      ui.setPlayheadFrame(at)
-    }
-    if (editFrameRef.current === null) editFrameRef.current = at
-    return editFrameRef.current
-  }
-
-  function endEdit(): void {
-    editFrameRef.current = null
-  }
+  // 한 번의 편집이 쓰는 프레임. 규칙은 useEditFrame.ts 한 곳에만 있다.
+  const { beginEdit, endEdit } = useEditFrame()
 
   /**
    * 애니메이션 중인 속성은 현재 프레임 값을 보여주고, 편집하면 그 프레임에 키를 찍는다.
@@ -507,10 +474,13 @@ function RevealSection({ layer }: { layer: Layer }) {
    * 아니면 상수 키를 고친다. 이 분기가 없으면 진행률을 한 번 건드리는 순간
    * 찍어 둔 키가 통째로 상수로 뭉개진다.
    */
+  const { beginEdit, endEdit } = useEditFrame()
+
   function writeProgress(value: number): void {
-    const ui = useUiStore.getState()
-    if (ui.playing) ui.setPlaying(false)
-    if (isAnimated(layer, 'reveal')) setValueAtFrame(layer.id, 'reveal', ui.playheadFrame, value)
+    // 레이어 섹션과 같은 편집 세션을 쓴다. 없으면 재생 중에 두 자리 수를 입력할 때
+    // 서로 다른 프레임에 키가 두 개 생긴다 (useEditFrame.ts).
+    const at = beginEdit()
+    if (isAnimated(layer, 'reveal')) setValueAtFrame(layer.id, 'reveal', at, value)
     else setStaticValue(layer.id, 'reveal', value)
   }
 
@@ -593,6 +563,8 @@ function RevealSection({ layer }: { layer: Layer }) {
                 suffix="%"
                 hint="스톱워치를 켜면 타임라인에서 시간에 따라 밀 수 있습니다."
                 ariaLabel="가리기 진행률"
+                onEditStart={beginEdit}
+                onEditEnd={endEdit}
                 onChange={(v) => writeProgress(clamp(v / 100, 0, 1))}
               />
             </div>

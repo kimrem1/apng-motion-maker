@@ -335,3 +335,75 @@ describe('roundRect', () => {
     expect(out.y + out.h).toBeLessThanOrEqual(20)
   })
 })
+
+/**
+ * 크롭 상자는 어떤 드래그로도 그림 밖으로 나가면 안 된다.
+ *
+ * clamp 한 줄에 경계와 최소 크기를 함께 넣어 둔 것이 문제였다. 상자가 최소 크기보다
+ * 얇고 경계에 붙어 있으면 두 제약이 뒤집히고(lo > hi), clamp 는 그것을 방어하지
+ * 않는다. **생성 드래그는 start 가 w=h=0 이라 언제나 그 조건이다.** 드래그 중
+ * 오버레이가 그림 밖에 그려지고, 손을 떼면 roundRect 가 다시 안으로 밀어 넣어
+ * 사용자가 그린 상자와 확정된 상자가 어긋났다.
+ */
+describe('크롭 드래그와 경계', () => {
+  const bounds: CropRect = { x: 0, y: 0, w: 400, h: 400 }
+
+  it('왼쪽 위 모서리 근처에서 시작한 생성 드래그가 밖으로 안 나간다', () => {
+    const out = applyCropDrag({
+      start: { x: 5, y: 5, w: 0, h: 0 },
+      handle: 'nw',
+      dx: -2,
+      dy: -2,
+      bounds,
+      ratio: null,
+    })
+    expect(out.x).toBeGreaterThanOrEqual(0)
+    expect(out.y).toBeGreaterThanOrEqual(0)
+  })
+
+  it('오른쪽 끝 근처에서 시작한 생성 드래그가 밖으로 안 나간다', () => {
+    const out = applyCropDrag({
+      start: { x: 397, y: 200, w: 0, h: 0 },
+      handle: 'se',
+      dx: 3,
+      dy: 3,
+      bounds,
+      ratio: null,
+    })
+    expect(out.x + out.w).toBeLessThanOrEqual(bounds.w)
+    expect(out.y + out.h).toBeLessThanOrEqual(bounds.h)
+  })
+
+  it('어떤 핸들 / 시작점 / 이동량 조합에서도 경계를 안 넘는다', () => {
+    const handles = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w', 'move'] as const
+    const bad: string[] = []
+
+    // 난수를 안 쓴다. 같은 검사가 언제나 같은 조합을 돈다.
+    for (const handle of handles) {
+      for (const sx of [0, 3, 197, 396, 400]) {
+        for (const sy of [0, 3, 197, 396, 400]) {
+          for (const sw of [0, 1, 9, 200]) {
+            for (const d of [-400, -9, -1, 0, 1, 9, 400]) {
+              for (const ratio of [null, 1, 16 / 9]) {
+                const out = applyCropDrag({
+                  start: { x: sx, y: sy, w: sw, h: sw },
+                  handle,
+                  dx: d,
+                  dy: d,
+                  bounds,
+                  ratio,
+                })
+                const where = `${handle} start=${sx},${sy},${sw} d=${d} ratio=${ratio}`
+                if (out.x < -1e-9 || out.y < -1e-9) bad.push(`${where} 음수 ${out.x},${out.y}`)
+                if (out.x + out.w > bounds.w + 1e-9) bad.push(`${where} 오른쪽 ${out.x + out.w}`)
+                if (out.y + out.h > bounds.h + 1e-9) bad.push(`${where} 아래 ${out.y + out.h}`)
+                if (out.w < 0 || out.h < 0) bad.push(`${where} 뒤집힘 ${out.w}x${out.h}`)
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(bad.slice(0, 8)).toEqual([])
+  })
+})

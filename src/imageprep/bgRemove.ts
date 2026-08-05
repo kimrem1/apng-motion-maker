@@ -473,7 +473,7 @@ function applyFeather(data: Uint8ClampedArray, w: number, h: number, featherPx: 
  * 픽셀에만 쓴다. 읽는 영역과 쓰는 영역이 겹치지 않으므로 순회 순서와 무관하게
  * 같은 결과가 나온다.
  */
-function bleedEdgeColors(data: Uint8ClampedArray, w: number, h: number): void {
+export function bleedEdgeColors(data: Uint8ClampedArray, w: number, h: number): void {
   const n = w * h
   const filled = new Uint8Array(n)
   let hasEmpty = false

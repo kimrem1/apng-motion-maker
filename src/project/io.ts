@@ -9,6 +9,7 @@
 import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { advanceIdCounter, maxIdOrdinal } from '@/core/factory.ts'
+import { bitmapFromImageData, bleedEdgeColors, readPixels } from '@/imageprep/bgRemove.ts'
 import type { MotionProject } from '@/core/types.ts'
 // 패널이 아니라 비트맵 보관소다. React 도 DOM 패널도 참조하지 않는다.
 import { clearPrepOriginals } from '@/ui/prep/prepOriginals.ts'
@@ -84,10 +85,16 @@ const BITMAP_OPTIONS: ImageBitmapOptions = {
 /**
  * 비트맵을 PNG 바이트로.
  *
- * 알파를 보존해야 한다. 2D 캔버스는 내부적으로 프리멀티플라이드 저장이라
- * 반투명 픽셀의 RGB 는 왕복에서 양자화 오차를 얻는다. 이걸 없애려면 원본 파일 바이트를
- * 들고 있어야 하는데 지금 파이프라인은 디코드 후 비트맵만 남긴다.
- * 알파 자체(0/255 및 중간값)는 그대로 보존되므로 실용적인 손실은 없다.
+ * **알려진 손실이 둘 있다.** 2D 캔버스 백킹 스토어가 premultiplied 8비트이기 때문이다.
+ *
+ *   1. 반투명 픽셀의 RGB 정밀도가 조금 깎인다 (a=0.1 이면 사실상 4비트 색).
+ *   2. 알파 0 픽셀의 RGB 는 통째로 0 이 된다. 이쪽이 눈에 보이는 손실이다.
+ *      배경 제거가 심어 둔 색 번짐 방지(bgRemove.ts bleedEdgeColors)가 저장 한 번에
+ *      취소되고, 다시 연 그림을 축소/회전하면 어두운 테두리가 생긴다.
+ *
+ * 2번은 여는 쪽에서 같은 계산을 다시 돌려 되살린다(healTransparentColors).
+ * 1번을 없애려면 원본 파일 바이트를 들고 있거나 WebGL 로 읽어야 하는데, 지금
+ * 파이프라인은 디코드 후 비트맵만 남긴다.
  */
 export async function bitmapToPng(bitmap: ImageBitmap): Promise<Uint8Array> {
   const blob = await bitmapToPngBlob(bitmap)
@@ -122,6 +129,34 @@ async function bitmapToPngBlob(bitmap: ImageBitmap): Promise<Blob> {
 export async function pngToBitmap(bytes: Uint8Array): Promise<ImageBitmap> {
   const blob = new Blob([toBlobPart(bytes)], { type: 'image/png' })
   return await createImageBitmap(blob, BITMAP_OPTIONS)
+}
+
+/**
+ * 배경을 지운 그림의 **투명 픽셀 색을 되살린다.**
+ *
+ * 저장 경로가 그 값을 지운다. bitmapToPngBlob 은 2D 캔버스를 거치는데 그 백킹
+ * 스토어는 premultiplied 8비트라, 알파 0 픽셀의 RGB 는 구조적으로 0 이 된다
+ * (bgRemove.ts readPixels 주석이 같은 사실을 적어 두었다). 그래서 배경 제거가
+ * 심어 둔 색 번짐 방지(bleedEdgeColors)가 저장 한 번에 취소되고, 다시 연 그림에
+ * 축소나 회전을 걸면 GPU 이중선형 보간이 그 검정을 가장자리로 끌어와 어두운
+ * 테두리가 생긴다.
+ *
+ * 원래 값을 복원할 수는 없다. 대신 **같은 계산을 다시 돌린다.** bleedEdgeColors 는
+ * 이웃한 불투명 픽셀에서 색을 채우는 순수 함수이므로, 저장 전에 돌렸든 지금
+ * 돌리든 같은 결과가 나온다.
+ *
+ * 배경을 지운 적이 있는 에셋에만 돌린다. 전부 불투명한 그림에는 할 일이 없고
+ * (bleedEdgeColors 가 곧바로 빠져나온다), 픽셀을 한 번 읽는 비용만 남기 때문이다.
+ */
+async function healTransparentColors(bitmap: ImageBitmap): Promise<ImageBitmap> {
+  try {
+    const image = readPixels(bitmap)
+    bleedEdgeColors(image.data, image.width, image.height)
+    return await bitmapFromImageData(image)
+  } catch {
+    // 픽셀을 못 읽는 환경이면 그냥 원본을 쓴다. 가장자리가 조금 어두울 뿐이다.
+    return bitmap
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +199,11 @@ export async function applyBundle(bundle: ProjectBundle): Promise<ApplyBundleRes
       continue
     }
     try {
-      decoded.set(ref.id, await pngToBitmap(png))
+      const bitmap = await pngToBitmap(png)
+      decoded.set(
+        ref.id,
+        ref.prep?.bgRemove?.enabled === true ? await healTransparentColors(bitmap) : bitmap,
+      )
     } catch {
       missingAssetIds.push(ref.id)
     }

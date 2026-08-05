@@ -32,6 +32,7 @@ import {
   useDocumentStore,
 } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
+import { useEditFrame } from './useEditFrame.ts'
 import { AnimateToggle } from '@/ui/inspector/AnimateToggle.tsx'
 import { NumberField, SelectField } from '@/ui/widgets/Field.tsx'
 
@@ -83,10 +84,19 @@ export function CharAnimSection({ layer }: { layer: Layer }) {
   const toFrames = (sec: number): number => Math.round(sec * safeFps)
   const lastFrame = Math.max(1, durationFrames - 1)
 
+  const { beginEdit, endEdit } = useEditFrame()
+
+  /*
+   * 한 번의 편집은 한 프레임에만 쓴다.
+   *
+   * NumberField 는 글자마다 onChange 를 쏜다. 매번 playheadFrame 을 새로 읽으면
+   * "50" 을 치는 동안 5% 키와 50% 키가 서로 다른 프레임에 생겨, 등장 곡선
+   * 한가운데 계단이 남고 시작 / 걸리는 시간 표시까지 틀어진다. 레이어 섹션에는
+   * 있던 장치가 여기만 빠져 있었다 (useEditFrame.ts).
+   */
   function writeProgress(value: number): void {
-    const ui = useUiStore.getState()
-    if (ui.playing) ui.setPlaying(false)
-    if (isAnimated(layer, 'charIn')) setValueAtFrame(layer.id, 'charIn', ui.playheadFrame, value)
+    const at = beginEdit()
+    if (isAnimated(layer, 'charIn')) setValueAtFrame(layer.id, 'charIn', at, value)
     else setStaticValue(layer.id, 'charIn', value)
   }
 
@@ -241,6 +251,8 @@ export function CharAnimSection({ layer }: { layer: Layer }) {
                 suffix="%"
                 hint="0 이면 출발점, 100 이면 제자리입니다. 모양을 고르면 자동으로 0에서 100까지 흐릅니다."
                 ariaLabel="등장 진행률"
+                onEditStart={beginEdit}
+                onEditEnd={endEdit}
                 onChange={(v) => writeProgress(clamp(v / 100, 0, 1))}
               />
             </div>

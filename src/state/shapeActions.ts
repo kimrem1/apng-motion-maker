@@ -12,6 +12,7 @@ import { buildShapeScene, createSceneContext, SHAPE_SCENE_BY_ID } from '@/shapes
 import { useDocumentStore } from './document.ts'
 import { useLayerUiStore } from './layerUi.ts'
 import { useShapeUiStore } from './shapeUi.ts'
+import { useUiStore } from './ui.ts'
 
 /** 슬라이더 드래그 중 다시 만드는 간격. 실행취소 병합 창(500ms)보다 짧아야 한다. */
 const LIVE_MS = 140
@@ -195,6 +196,21 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
       ? doc.timeline.durationFrames
       : undefined
 
+  /*
+   * 그 사이 사용자가 fps 를 직접 골랐으면 천장을 그 값으로 내린다.
+   *
+   * 천장(ceilFps)은 느린 속도에서 fps 를 얼마나 내릴 수 있는지의 기준이고, 한 번
+   * 올라가면 안 내려간다. 그래서 세트를 넣은 뒤 fps 를 25 에서 10 으로 내려 두면,
+   * 세기 슬라이더를 한 칸 움직이는 것만으로 옛 천장 25 가 다시 쓰여 fps 가
+   * 되돌아갔다. 세기는 시간에 작용하지 않는다는 계약이 거기서 깨진다.
+   *
+   * 문서 스토어가 도형 패널을 알면 안 되므로(이 파일 상단 주석) 여기서 판정한다.
+   * 우리가 써 넣은 fps 와 지금 문서 fps 가 다르면 그것은 사용자가 고른 값이다.
+   */
+  if (reused && reused.fps !== doc.timeline.fps) {
+    useShapeUiStore.getState().setCeilFps(doc.timeline.fps)
+  }
+
   const emission = buildShapeScene(
     sceneId,
     createSceneContext({
@@ -237,6 +253,7 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
     sceneId,
     layerIds,
     fitFrames: fitFrames ?? null,
+    fps: nextDoc.timeline.fps,
     signature: signatureOf(nextDoc, layerIds),
   })
 
@@ -248,10 +265,42 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
    * 접어 두면 목록에 한 줄이고, 삼각형을 눌러 언제든 안을 볼 수 있다.
    */
   const madeFolder = nextDoc.layers.find((l) => l.id === layerIds[0] && l.type === 'group')
-  if (madeFolder) useLayerUiStore.getState().setFolderCollapsed(madeFolder.id, true)
-  // 슬라이더를 끄는 중에는 선택을 옮기지 않는다. 인스펙터가 매번 다른 레이어로
-  // 튀면 값을 읽는 중에 화면이 흔들린다.
-  if (!live && layerIds.length > 0) {
+  const layerUi = useLayerUiStore.getState()
+
+  if (live) {
+    /*
+     * 슬라이더 재적용은 선택과 폴더 접힘을 **새 id 로 옮긴다.**
+     *
+     * 예전에는 라이브 경로에서 아무것도 안 건드렸다. 목적은 "인스펙터가 매번 다른
+     * 레이어로 튀지 않게" 였는데 결과는 반대였다. 재적용은 옛 레이어를 지우고 새
+     * id 로 다시 만들므로 기존 선택이 유지되는 것이 아니라 댕글링이 되고,
+     * LayerPanel 의 정리(pruneLayerSelection)가 그것을 빈 배열로 걷어낸다. 인스펙터가
+     * '선택 없음' 으로 비고, 그 상태로는 모션 갤러리에서 고를 대상도 없다.
+     *
+     * 옛 목록과 새 목록은 자리끼리 짝이 맞는다. 같은 세트를 같은 개수로 다시
+     * 만들었기 때문이다. 개수가 다르면(그럴 이유는 없지만) 손대지 않는다.
+     */
+    if (previous.length === layerIds.length && layerIds.length > 0) {
+      const remap = new Map(previous.map((old, i) => [old, layerIds[i] as string]))
+
+      const nextSelected = layerUi.selectedLayerIds.map((id) => remap.get(id) ?? id)
+      if (nextSelected.some((id, i) => id !== layerUi.selectedLayerIds[i])) {
+        // 미러 대상(인스펙터가 보는 한 장)도 함께 옮긴다. state/ui.ts selectedLayerId.
+        const primary = useUiStore.getState().selectedLayerId
+        layerUi.setSelectedLayerIds(nextSelected, (primary && remap.get(primary)) ?? primary ?? null)
+      }
+
+      // 펼쳐 둔 폴더를 다시 접지 않는다. 접힘은 사용자가 정한 것이다.
+      const oldFolderId = previous[0]
+      if (madeFolder && oldFolderId !== undefined) {
+        layerUi.setFolderCollapsed(madeFolder.id, layerUi.collapsedFolderIds.includes(oldFolderId))
+      }
+    }
+    return { ok: true }
+  }
+
+  if (madeFolder) layerUi.setFolderCollapsed(madeFolder.id, true)
+  if (layerIds.length > 0) {
     /*
      * 폴더로 묶었으면 **폴더 하나만** 고른다.
      *
@@ -260,8 +309,8 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
      * 어디에 걸릴지 알기 어렵다. 폴더 하나면 답이 분명하다.
      */
     const folderId = madeFolder?.id
-    if (folderId) useLayerUiStore.getState().setSelectedLayerIds([folderId], folderId)
-    else useLayerUiStore.getState().setSelectedLayerIds(layerIds, layerIds[layerIds.length - 1] ?? null)
+    if (folderId) layerUi.setSelectedLayerIds([folderId], folderId)
+    else layerUi.setSelectedLayerIds(layerIds, layerIds[layerIds.length - 1] ?? null)
   }
   return { ok: true }
 }

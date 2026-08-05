@@ -377,6 +377,63 @@ export interface CropDragArgs {
  *   - 위/아래 핸들은 높이가 기준이고, 좌/우 핸들은 폭이 기준이다. 이때 나머지
  *     축은 시작 사각형의 중심을 유지한 채 늘거나 준다.
  */
+/**
+ * 한 축의 두 끝을 **경계 안에 두면서** 최소 크기를 확보한다.
+ *
+ * 예전에는 clamp 한 줄로 두 제약을 한꺼번에 넣었다.
+ *   `x0 = clamp(start.x + dx, bx0, x1 - minSize)`
+ * 상한 자리에 최소 크기가, 하한 자리에 경계가 들어가 있어서 지금 상자가 최소
+ * 크기보다 얇고 경계에 붙어 있으면 두 제약이 뒤집힌다(lo=0 > hi=-3). clamp 는
+ * lo > hi 를 방어하지 않고 hi 를 그대로 돌려주므로 상자가 그림 밖으로 나갔다.
+ * **생성 드래그는 start 가 w=h=0 이라 언제나 이 조건에 걸린다.**
+ *
+ * 그래서 순서를 나눈다. 끄는 쪽을 먼저 경계로 자르고, 그러고도 모자라면 반대쪽을
+ * 민다. 반대쪽까지 경계에 닿으면 경계 폭 전체를 쓴다. 경계가 최소 크기보다 좁으면
+ * 경계가 이긴다. 어느 경로로도 [b0, b1] 을 벗어나지 않는다.
+ */
+function fitSpan(
+  lo: number,
+  hi: number,
+  b0: number,
+  b1: number,
+  minSize: number,
+  movedLow: boolean,
+): [number, number] {
+  let a = clamp(lo, b0, b1)
+  let b = clamp(hi, b0, b1)
+  if (b - a >= minSize) return [a, b]
+
+  // 경계 자체가 최소 크기보다 좁다. 더 확보할 자리가 없다.
+  if (b1 - b0 <= minSize) return [b0, b1]
+
+  if (movedLow) {
+    a = b - minSize
+    if (a < b0) {
+      a = b0
+      b = b0 + minSize
+    }
+  } else {
+    b = a + minSize
+    if (b > b1) {
+      b = b1
+      a = b1 - minSize
+    }
+  }
+  return [a, b]
+}
+
+/** 사각형 하나를 경계 안으로 가둔다. 음수 폭은 0 으로 접는다. */
+function containRect(r: CropRect, b0x: number, b0y: number, b1x: number, b1y: number): CropRect {
+  const w = clamp(r.w, 0, Math.max(0, b1x - b0x))
+  const h = clamp(r.h, 0, Math.max(0, b1y - b0y))
+  return {
+    x: clamp(r.x, b0x, Math.max(b0x, b1x - w)),
+    y: clamp(r.y, b0y, Math.max(b0y, b1y - h)),
+    w,
+    h,
+  }
+}
+
 export function applyCropDrag(args: CropDragArgs): CropRect {
   const { start, handle, dx, dy, bounds, ratio } = args
   const minSize = Math.max(1, args.min ?? CROP_MIN_SIZE)
@@ -407,13 +464,24 @@ export function applyCropDrag(args: CropDragArgs): CropRect {
   let x1 = start.x + start.w
   let y1 = start.y + start.h
 
-  if (west) x0 = clamp(start.x + dx, bx0, x1 - minSize)
-  if (east) x1 = clamp(x1 + dx, x0 + minSize, bx1)
-  if (north) y0 = clamp(start.y + dy, by0, y1 - minSize)
-  if (south) y1 = clamp(y1 + dy, y0 + minSize, by1)
+  /*
+   * 잡지 않은 축도 통과시킨다. 시작 상자 자체가 경계 밖일 수 있기 때문이다
+   * (캔버스를 줄인 뒤 옛 크롭이 남아 있는 경우). 이 함수의 계약은 "경계를 넘거나
+   * 뒤집히는 사고는 전부 여기서 막는다" 이므로, 손대지 않은 축도 예외가 아니다.
+   */
+  if (west) [x0, x1] = fitSpan(start.x + dx, x1, bx0, bx1, minSize, true)
+  else if (east) [x0, x1] = fitSpan(x0, x1 + dx, bx0, bx1, minSize, false)
+  else [x0, x1] = fitSpan(x0, x1, bx0, bx1, minSize, false)
+
+  if (north) [y0, y1] = fitSpan(start.y + dy, y1, by0, by1, minSize, true)
+  else if (south) [y0, y1] = fitSpan(y0, y1 + dy, by0, by1, minSize, false)
+  else [y0, y1] = fitSpan(y0, y1, by0, by1, minSize, false)
 
   const free: CropRect = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
   if (ratio === null || !Number.isFinite(ratio) || ratio <= 0) return free
+
+  /** 비율 계산은 음수 폭을 낼 수 있다. 반환 직전에 한 번 더 가둔다. */
+  const contained = (r: CropRect): CropRect => containRect(r, bx0, by0, bx1, by1)
 
   // --- 비율 잠금 -----------------------------------------------------------
   const corner = (west || east) && (north || south)
@@ -428,12 +496,12 @@ export function applyCropDrag(args: CropDragArgs): CropRect {
     let w = Math.min(free.w, availW, availH * ratio)
     if (w < minSize) w = Math.min(minSize, availW, availH * ratio)
     const h = w / ratio
-    return {
+    return contained({
       x: west ? ax - w : ax,
       y: north ? ay - h : ay,
       w,
       h,
-    }
+    })
   }
 
   // 한 축만 잡은 핸들. 나머지 축은 시작 중심을 유지한다.
@@ -446,12 +514,12 @@ export function applyCropDrag(args: CropDragArgs): CropRect {
     let h = Math.min(free.h, availH, maxW / ratio)
     if (h < minSize) h = Math.min(minSize, availH, maxW / ratio)
     const w = h * ratio
-    return {
+    return contained({
       x: clamp(cx - w / 2, bx0, bx1 - w),
       y: north ? ay - h : ay,
       w,
       h,
-    }
+    })
   }
 
   const ax = west ? x1 : x0
@@ -461,12 +529,12 @@ export function applyCropDrag(args: CropDragArgs): CropRect {
   let w = Math.min(free.w, availW, maxH * ratio)
   if (w < minSize) w = Math.min(minSize, availW, maxH * ratio)
   const h = w / ratio
-  return {
+  return contained({
     x: west ? ax - w : ax,
     y: clamp(cy - h / 2, by0, by1 - h),
     w,
     h,
-  }
+  })
 }
 
 /**

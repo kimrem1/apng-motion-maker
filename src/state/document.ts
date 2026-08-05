@@ -1748,14 +1748,20 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         if (beforeW <= 0 || beforeH <= 0) return
 
         /*
-         * 두 축 비율 중 **작은 쪽**을 쓴다.
+         * **짧은 변**이 얼마나 달라졌는가. 그것이 배율이다.
          *
-         * 해상도 컨트롤은 비율을 유지하므로 둘이 같다. 인스펙터에서 한 축만 줄인
-         * 경우에만 갈리는데, 그때 작은 쪽을 쓰면 줄인 축에 맞춰 그림이 들어가고
-         * 한 축만 키운 경우에는 1 이 되어 그림이 그대로 남는다. 큰 쪽을 쓰면
-         * 폭만 늘렸는데 그림이 세로로 삐져나간다.
+         * 해상도 컨트롤은 비율을 유지하므로 두 축이 같이 움직이고, 짧은 변의 비율이
+         * 곧 그 배율이다. 한 축만 줄이면 짧은 변이 그만큼 줄어 그림도 따라 들어가고,
+         * 한 축만 키우면 짧은 변이 그대로라 그림도 그대로다. 지금까지의 동작이다.
+         *
+         * 두 축 비율의 min 을 쓰던 것이 문제였다. 그 식은 **되돌릴 수 없다.**
+         * 폭을 512 -> 1024 로 키우면 min(2, 1) = 1 이라 그대로인데, 다시 512 로
+         * 되돌리면 min(0.5, 1) = 0.5 가 되어 그림만 절반으로 줄었다. 캔버스는
+         * 제자리인데 그림은 안 돌아오고, 폭을 아무리 다시 쳐도 복구되지 않았다
+         * (Ctrl+Z 로만 되돌아간다). 짧은 변 하나를 기준으로 삼으면 A -> B -> A 가
+         * 언제나 1 로 돌아온다. 두 값의 비가 아니라 한 값의 비이기 때문이다.
          */
-        const factor = Math.min(nextW / beforeW, nextH / beforeH)
+        const factor = Math.min(nextW, nextH) / Math.min(beforeW, beforeH)
         if (!Number.isFinite(factor) || factor <= 0 || Math.abs(factor - 1) < 1e-9) return
 
         for (const layer of d.layers) {

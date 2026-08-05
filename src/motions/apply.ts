@@ -539,16 +539,61 @@ function containReferenceScale(args: {
   }
 
   const read = readEmission(emission)
+  /*
+   * 잴 레이어는 **적용이 끝난 뒤의 모습**이어야 한다.
+   *
+   * 예전에는 트랙과 모디파이어만 갈아끼우고 기준점 / 글자등장 / 가리기 / 원근은
+   * `...layer` 로 앞 프리셋이 남긴 값을 그대로 들고 쟀다. 그런데 바로 그 값들을
+   * 같은 적용의 뒷단(state/document.ts applyPresetTracks)이 새 프리셋 것으로 덮거나
+   * 기본값으로 되돌린다. 즉 적용이 끝나면 존재하지 않을 상태에서 기준 배율을 재고,
+   * 그 값이 Layer.containScale 로 문서에 남았다.
+   *
+   * 그래서 「경첩 열리며 등장」(기준점을 변으로 옮긴다) 다음에 「한 바퀴 회전」을
+   * 누르면, 기준점은 한가운데로 돌아가는데 담기 배율만 변에서 돈 원 기준(0.6)으로
+   * 박혀 그림이 60% 로 줄어든 채 돌았다. 깨끗한 레이어에 같은 프리셋만 누르면
+   * 100% 다. A->B->A 가 원래 값으로 안 돌아오는 자리이기도 하다.
+   *
+   * 병합 규칙은 여기서 다시 적지 않는다. 확정 적용과 같은 헬퍼를 쓴다(merge.ts).
+   */
+  /*
+   * 잴 레이어는 **적용이 끝난 뒤의 모습**이어야 한다.
+   *
+   * 예전에는 트랙과 모디파이어만 갈아끼우고 기준점 / 글자등장 / 가리기 / 원근은
+   * `...layer` 로 앞 프리셋이 남긴 값을 그대로 들고 쟀다. 그런데 바로 그 값들을
+   * 같은 적용의 뒷단(state/document.ts applyPresetTracks)이 새 프리셋 것으로 덮거나
+   * 기본값으로 되돌린다. 즉 적용이 끝나면 존재하지 않을 상태에서 기준 배율을 재고,
+   * 그 값이 Layer.containScale 로 문서에 남았다.
+   *
+   * 그래서 「경첩 열리며 등장」(기준점을 변으로 옮긴다) 다음에 「한 바퀴 회전」을
+   * 누르면, 기준점은 한가운데로 돌아가는데 담기 배율만 변에서 돈 원 기준(0.6)으로
+   * 박혀 그림이 60% 로 줄어든 채 돌았다. 깨끗한 레이어에 같은 프리셋만 누르면
+   * 100% 다. A -> B -> A 가 원래 값으로 안 돌아오는 자리이기도 하다.
+   *
+   * 병합 규칙은 여기서 다시 적지 않는다. 확정 적용과 같은 헬퍼를 쓴다(merge.ts).
+   */
+  const owned = ownershipFor(doc.presetRef, layer.id)
+  const probeReveal = mergePresetReveal(layer.reveal, read.reveal, owned)
+  const probeCharAnim = mergePresetCharAnim(layer.charAnim, read.charAnim, owned)
+  const probePerspective = mergePresetPerspective(layer.perspective, read.perspective, owned)
+
   const probeLayer: Layer = {
     ...layer,
     tracks: read.tracks,
     modifiers: read.modifiers,
+    anchor: mergePresetAnchor(layer.anchor, read.anchor, owned),
     // 부모 상속까지 재현할 필요는 없다. 기준값은 이 레이어 자신의 모션 크기다.
     parentId: null,
     fillsCanvas: false,
     keepInside: true,
     motionExitsFrame: false,
   }
+  // 없으면 키 자체를 만들지 않는다. 문서 규칙과 같다(core/types.ts).
+  if (probeReveal) probeLayer.reveal = probeReveal
+  else delete probeLayer.reveal
+  if (probeCharAnim) probeLayer.charAnim = probeCharAnim
+  else delete probeLayer.charAnim
+  if (probePerspective !== undefined) probeLayer.perspective = probePerspective
+  else delete probeLayer.perspective
   const probeDoc: MotionProject = {
     ...doc,
     layers: [probeLayer],

@@ -135,6 +135,16 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
       doc.canvas.h,
     ),
   )
+  /**
+   * '직접 고르기' 초기값을 이미 깔았는가.
+   *
+   * 라디오를 다시 고를 때마다 초기값을 깔면 사용자 편집이 사라진다. 처음 한 번만
+   * 깔고, 그 뒤로는 custom 이 사용자의 것이다. 기본 목적이 custom 이면 위의
+   * useState 초기화가 이미 그 역할을 했으므로 처음부터 켜 둔다.
+   */
+  const customTouchedRef = useRef(
+    (PURPOSE_BY_ID.get(DEFAULT_PURPOSE_ID) ?? EXPORT_PURPOSES[0]!).custom === true,
+  )
   const [estimate, setEstimate] = useState<SizeEstimate | null>(null)
   const [estimating, setEstimating] = useState(false)
 
@@ -544,10 +554,20 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
                           checked={purposeId === p.id}
                           disabled={disabled || busy}
                           onChange={() => {
-                            setPurposeId(p.id)
-                            if (p.custom) {
+                            /*
+                             * '직접 고르기' 로 **처음 들어올 때만** 초기값을 깐다.
+                             *
+                             * 조건 없이 깔면 다른 프리셋을 눌러 봤다가 돌아오는 것만으로
+                             * 사용자가 맞춰 둔 형식 / 크기 / 색상 / 디더가 통째로
+                             * 되돌아간다. custom 은 이 다이얼로그에서 유일하게 사용자가
+                             * 직접 편집하는 상태라, 리셋 조건이 '선택됨' 이면 편집 결과가
+                             * 보존되지 않는다.
+                             */
+                            if (p.custom && !customTouchedRef.current) {
                               setCustom(settingsForPurpose(p, doc.canvas.w, doc.canvas.h))
+                              customTouchedRef.current = true
                             }
+                            setPurposeId(p.id)
                           }}
                         />
                         <span className="mm-purpose-text">

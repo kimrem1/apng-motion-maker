@@ -332,6 +332,32 @@ describe('도형 세트 카탈로그', () => {
     }
   })
 
+  /**
+   * 흐르는 띠는 "한 칸만큼 민다" 가 이음새의 유일한 근거다.
+   *
+   * 칸 수(points)는 SHAPE_LIMITS.points.max 에서, 폭은 SHAPE_SIZE_MAX 에서 잘린다.
+   * 자르기 전 값으로 이동량을 계산하면 미는 거리와 실제 한 칸이 갈라진다.
+   * 1280x720 에서 cells 가 64 로 나와 실제 36 칸과 거의 두 배 어긋나 있었다.
+   */
+  it('흐르는 띠가 정확히 한 칸만큼 민다', () => {
+    for (const [w, h] of [[512, 512], [640, 480], [1280, 720], [1920, 1080], [3000, 1000]] as const) {
+      for (const strength of [0, 0.1, 0.5, 1]) {
+        const out = buildShapeScene('bars.marquee', createSceneContext({ canvasW: w, canvasH: h, strength }))
+        if (!out) throw new Error('bars.marquee')
+        const ticks = out.layers.find((l) => l.name.includes('빗금'))!
+        // 세트가 내는 값이 아니라 문서에 실제로 들어갈 값으로 잰다.
+        const spec = normalizeShapeSpec(ticks.shape)
+        const track = ticks.tracks.find((t) => t.prop === 'translateX')!
+        const move = Math.abs(track.keys[track.keys.length - 1]!.v - track.keys[0]!.v)
+        const cell = (spec.width / spec.points / w) * 100
+
+        const where = `${w}x${h} 세기${strength}`
+        expect(spec.points, where).toBeLessThanOrEqual(SHAPE_LIMITS.points.max)
+        expect(move, where).toBeCloseTo(cell, 9)
+      }
+    }
+  })
+
   it('이미 만들어 둔 길이가 있으면 그 길이에 맞춘다', () => {
     for (const scene of SHAPE_SCENES) {
       const out = buildShapeScene(scene.id, createSceneContext({ fitFrames: 77, fps: 20 }))
@@ -801,6 +827,64 @@ describe('도형 세트 세션 기억', () => {
     applyShapeScene('bars.loading', true)
     // 지운 한 장이 되살아나지 않는다. 폴더와 남은 두 장도 그대로다.
     expect(s().doc.layers).toHaveLength(3)
+  })
+
+  /**
+   * 사용자가 fps 를 직접 고르면 그것이 새 천장이다.
+   *
+   * ceilFps 는 느린 속도에서 fps 를 얼마나 내릴 수 있는지의 기준인데 한 번 올라가면
+   * 안 내려갔다. 그래서 fps 를 25 에서 10 으로 내려 둔 뒤 세기 슬라이더를 한 칸
+   * 움직이는 것만으로 fps 가 25 로 되돌아갔다. 세기는 시간에 작용하지 않는다.
+   */
+  it('사용자가 고른 fps 를 세기 슬라이더가 되돌리지 않는다', () => {
+    applyShapeScene('pulse.ripple')
+    const madeFps = s().doc.timeline.fps
+    const madeFrames = s().doc.timeline.durationFrames
+
+    s().setFps(10)
+    expect(s().doc.timeline.fps).toBe(10)
+
+    useShapeUiStore.getState().setStrength(0.9)
+    expect(applyShapeScene('pulse.ripple', true).ok).toBe(true)
+    expect(s().doc.timeline.fps).toBe(10)
+
+    // 한 번 더 끌어도 흘러가지 않는다.
+    useShapeUiStore.getState().setStrength(0.2)
+    expect(applyShapeScene('pulse.ripple', true).ok).toBe(true)
+    expect(s().doc.timeline.fps).toBe(10)
+
+    // 고치기 전에는 여기서 madeFps(25) 로 되돌아갔다.
+    expect(madeFps).not.toBe(10)
+    expect(madeFrames).toBeGreaterThan(0)
+  })
+
+  /**
+   * 라이브 재적용은 레이어를 지우고 새 id 로 다시 만든다. 선택을 안 옮기면
+   * 그 선택은 유지되는 것이 아니라 댕글링이 되고, LayerPanel 의 정리가 빈 배열로
+   * 걷어내 인스펙터가 '선택 없음' 이 된다. 펼쳐 둔 폴더도 다시 접혔다.
+   */
+  it('슬라이더 재적용이 선택과 폴더 접힘을 새 레이어로 옮긴다', () => {
+    useLayerUiStore.setState({ collapsedFolderIds: [] })
+    applyShapeScene('bars.equalizer')
+
+    const before = useShapeUiStore.getState().applied!.layerIds
+    const folderId = before[0]!
+    expect(useLayerUiStore.getState().selectedLayerIds).toEqual([folderId])
+    expect(useLayerUiStore.getState().collapsedFolderIds).toContain(folderId)
+
+    // 사용자가 폴더를 펼친다.
+    useLayerUiStore.getState().setFolderCollapsed(folderId, false)
+
+    useShapeUiStore.getState().setStrength(0.8)
+    expect(applyShapeScene('bars.equalizer', true).ok).toBe(true)
+
+    const after = useShapeUiStore.getState().applied!.layerIds
+    expect(after[0]).not.toBe(folderId)
+    // 선택이 새 폴더로 따라왔다. 문서에 살아 있는 id 여야 한다.
+    expect(useLayerUiStore.getState().selectedLayerIds).toEqual([after[0]])
+    expect(s().doc.layers.some((l) => l.id === after[0])).toBe(true)
+    // 펼쳐 둔 상태도 그대로다.
+    expect(useLayerUiStore.getState().collapsedFolderIds).not.toContain(after[0])
   })
 
   it('다른 문서를 열면 앞 문서의 기억을 버린다', () => {

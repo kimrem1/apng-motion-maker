@@ -216,10 +216,16 @@ export function readbackToStraight(
  * 알파를 유지하는 경우 null 을 돌려주고, 그때만 un-premultiply 경로를 탄다.
  */
 export function resolveMatte(doc: MotionProject, settings: ExportSettings): Rgb255 | null {
-  // WebP 도 APNG 와 같은 8비트 알파다. 매트를 깔면 투명이 사라진다.
-  const keepsAlpha =
-    settings.format === 'apng' || settings.format === 'webp' || settings.transparent
-  if (keepsAlpha) return null
+  /*
+   * APNG 는 언제나 알파를 담는다. 화면의 토글도 APNG 에서만 잠겨 있다.
+   *
+   * WebP 는 여기서 빠진다. 알파를 **담을 수 있는 것**과 **담아야 하는 것**은 다르다.
+   * 예전에는 형식만 보고 통과시켜 settings.transparent 를 아예 안 읽었고, 그래서
+   * 내보내기 다이얼로그의 '투명 배경 유지' 토글이 WebP 에서 눌리기만 하고 아무
+   * 효과도 없는 죽은 컨트롤이었다. 정책이 두 곳에 있으면서 조건이 서로 달랐다
+   * (ui/export/ExportDialog.tsx 는 APNG 만 잠근다).
+   */
+  if (settings.format === 'apng' || settings.transparent) return null
   const [r, g, b] = parseHexColor(doc.canvas.background.matteColor)
   return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)]
 }
