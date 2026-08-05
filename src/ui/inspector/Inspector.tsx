@@ -31,6 +31,7 @@ import { TextSection } from './TextSection.tsx'
 import { CharAnimSection } from './CharAnimSection.tsx'
 import { ShapeSection } from '@/ui/inspector/ShapeSection.tsx'
 import { useUiStore } from '@/state/ui.ts'
+import { frameForEdit } from '@/ui/canvas/livePlayhead.ts'
 import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
 import { NumberField, SelectField, TextField, ToggleField, type SelectOption } from '@/ui/widgets/Field.tsx'
 
@@ -263,8 +264,23 @@ function LayerSection({ layer }: { layer: Layer }) {
 
   function beginEdit(): number {
     const ui = useUiStore.getState()
-    if (ui.playing) ui.setPlaying(false)
-    if (editFrameRef.current === null) editFrameRef.current = ui.playheadFrame
+    /*
+     * 재생 중이면 스토어의 playheadFrame 을 읽으면 안 된다.
+     *
+     * 그 값은 100ms 마다만 갱신돼 한두 프레임 뒤처져 있고, 정확한 값은 정지
+     * 이펙트가 나중에 확정한다. setPlaying(false) 는 React 상태 변경이라 같은
+     * tick 에서는 아직 안 돈다. 그래서 여기서 낡은 프레임을 못 박으면, 입력한
+     * 값이 화면이 보여 준 프레임이 아니라 그 앞 프레임에 쓰이고 입력 칸은
+     * 블러 직후 보간값으로 되돌아갔다 (ui/canvas/livePlayhead.ts).
+     */
+    const at = frameForEdit(ui.playing, ui.playheadFrame)
+    if (ui.playing) {
+      ui.setPlaying(false)
+      // 정지 이펙트가 곧 같은 값을 넣지만, 그 사이 read() 가 다른 프레임을 보면
+      // 방금 쓴 값이 입력 칸에 안 돌아온다. 여기서 먼저 맞춰 둔다.
+      ui.setPlayheadFrame(at)
+    }
+    if (editFrameRef.current === null) editFrameRef.current = at
     return editFrameRef.current
   }
 

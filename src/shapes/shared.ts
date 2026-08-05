@@ -22,10 +22,17 @@ export function gain(strength: number): number {
 }
 
 export interface Timing {
-  /** 이 세트가 쓸 프레임 수. */
+  /** 이 세트의 **한 주기**가 쓸 프레임 수. */
   span: number
   /** 그 길이를 담기 위해 확정된 fps. */
   fps: number
+  /**
+   * 그 주기를 몇 번 이어 붙일 것인가. 이미 만들어 둔 타임라인에 맞출 때만 1 보다 크다.
+   *
+   * 세트 구현은 이 값을 쓰지 않는다. 한 주기만 만들면 되고, 이어 붙이는 일은
+   * registry.ts 의 buildShapeScene 이 한다. 세트마다 반복을 손으로 짜면 43벌이 된다.
+   */
+  reps: number
 }
 
 /**
@@ -47,18 +54,54 @@ const MAX_STOPS = 6
  *
  * 이미 만들어 둔 타임라인이 있으면(fitFrames) 그 길이에 맞춘다. 배경 장식을 얹었다고
  * 사용자가 만들어 둔 5초짜리 모션이 1.2초로 잘리면 안 된다.
+ *
+ * 그때도 속도는 살아 있어야 한다. 예전에는 fitFrames 를 그대로 span 으로 썼고, 그러면
+ * 속도 노브가 아무 일도 하지 않아 화면에서 잠겨 있었다. 게다가 2초짜리 파동 하나를
+ * 문서 길이만큼 늘여 버려서 세트가 설계된 템포를 잃었다.
+ *
+ * 그래서 fit 에서도 속도로 **한 주기**를 구하고, 그 주기를 문서 길이 안에 몇 번
+ * 넣을지(reps)를 함께 낸다. 지키는 규칙은 셋이다.
+ *
+ *   1. 속도 1 에서는 문서 길이가 변하지 않는다. 세트를 얹었다는 이유만으로
+ *      남이 맞춰 둔 타임라인이 길어지거나 짧아지면 안 된다.
+ *   2. 속도를 올리면 같은 길이 안에서 주기가 잘게 쪼개진다.
+ *   3. 한 주기도 다 못 담을 만큼 느려지면, 그때만 문서를 늘린다. 여기서 길이를
+ *      묶어 두면 슬라이더 왼쪽 절반이 죽는다. 줄이지는 않으므로 남의 모션은
+ *      아무것도 잃지 않는다.
+ *
+ * 늘린 길이가 다음 기준선이 되면 속도를 되돌려도 안 돌아오므로, 기준선은 세트를
+ * 처음 넣을 때 값을 기억해 쓴다 (state/shapeUi.ts AppliedScene.fitFrames).
  */
 export function timingOf(ctx: SceneContext, defaultMs: number): Timing {
-  if (ctx.fitFrames !== undefined && ctx.fitFrames >= 2) {
-    return {
-      span: clamp(Math.round(ctx.fitFrames), MAX_STOPS, FRAMES_MAX),
-      fps: ctx.fps > 0 ? ctx.fps : 25,
-    }
-  }
   const speed = clamp(Number.isFinite(ctx.speed) && ctx.speed > 0 ? ctx.speed : 1, SPEED_MIN, SPEED_MAX)
+
+  if (ctx.fitFrames !== undefined && ctx.fitFrames >= 2) {
+    const total = clamp(Math.round(ctx.fitFrames), MAX_STOPS, FRAMES_MAX)
+    // fps 는 문서 것을 그대로 쓴다. 여기서 내리면 남의 모션까지 함께 느려진다.
+    const fps = ctx.fps > 0 ? ctx.fps : 25
+    /*
+     * 속도 1 에서 이 문서가 세트를 몇 번 담는가. 이것이 기준이다.
+     *
+     * 주기가 문서보다 길면 0.x 가 나오는데 1 로 올린다. 그 세트는 문서 길이에
+     * 맞춰 한 번만 도는 것이 속도 1 이다. 여기서 늘려 버리면 규칙 1 이 깨진다.
+     */
+    const natural = Math.max(MAX_STOPS, Math.round((defaultMs / 1000) * fps))
+    const repsAt1 = Math.max(1, Math.round(total / natural))
+    const want = repsAt1 * speed
+
+    if (want < 1) {
+      // 한 주기도 다 못 담는다. 문서를 늘린다.
+      const span = clamp(Math.round(total / want), MAX_STOPS, FRAMES_MAX)
+      return { span, fps, reps: 1 }
+    }
+    // 주기 하나가 MAX_STOPS 보다 짧아지면 키를 정수 프레임에 못 놓는다.
+    const reps = clamp(Math.round(want), 1, Math.max(1, Math.floor(total / MAX_STOPS)))
+    return { span: clamp(Math.round(total / reps), MAX_STOPS, FRAMES_MAX), fps, reps }
+  }
+
   const sec = defaultMs / 1000 / speed
   const fps = fpsForDuration(sec, ctx.fps > 0 ? ctx.fps : 25)
-  return { span: clamp(Math.round(sec * fps), MAX_STOPS, FRAMES_MAX), fps }
+  return { span: clamp(Math.round(sec * fps), MAX_STOPS, FRAMES_MAX), fps, reps: 1 }
 }
 
 /**

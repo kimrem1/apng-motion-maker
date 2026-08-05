@@ -61,6 +61,23 @@ export function ownershipOf(ref: PresetRef | undefined): PresetOwnership {
 }
 
 /**
+ * **이 레이어에 대한** 소유권. 프리셋을 얹을 때는 언제나 이쪽을 쓴다.
+ *
+ * presetRef 는 문서에 하나뿐인데 소유권은 레이어마다 다르다. 그 둘을 안 맞추면
+ * 이렇게 된다. 이미지 A 에 '한 바퀴 회전' 을 걸어 두면 presetRef.props 에 rotate 가
+ * 남는다. 그 뒤 도형 B 를 골라 회전 키를 **손으로** 찍고 B 에 '톡 튀며 등장'
+ * (회전을 안 내는 프리셋)을 누르면, A 의 소유권 목록으로 B 의 회전 트랙을 걷어낸다.
+ * 사용자가 만든 것을 살린다는 이 파일의 계약이 레이어가 바뀌는 순간 깨진다.
+ * 기준점 / 가리기 / 글자 등장 / 원근도 같은 길로 사라진다.
+ *
+ * layerId 가 없으면 옛 프로젝트다. 그때는 대조할 방법이 없으므로 지금까지처럼 본다.
+ */
+export function ownershipFor(ref: PresetRef | undefined, layerId: string): PresetOwnership {
+  if (ref?.layerId !== undefined && ref.layerId !== layerId) return ownershipOf(undefined)
+  return ownershipOf(ref)
+}
+
+/**
  * 가리기 병합.
  *
  * 사용자가 손으로 넣은 것은 지우지 않는다

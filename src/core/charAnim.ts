@@ -190,9 +190,18 @@ export function charRank(spec: CharAnimSpec, index: number, count: number): numb
     case 'backward':
       return n - 1 - i
     case 'center': {
-      // 가운데가 0, 바깥으로 갈수록 커진다.
+      /*
+       * 가운데가 0, 바깥으로 갈수록 커진다.
+       *
+       * floor 여야 한다. round 로 두면 짝수 글자수에서 mid 가 .5 라 가장 안쪽 글자도
+       * 1 이 되고, 최대 rank 가 n/2 로 한 칸 올라간다. 그런데 charProgress 의
+       * maxRank 는 floor((n-1)/2) 이므로 둘이 갈린다. 갈리면 바깥 글자의
+       * start + span 이 1 을 넘어, t < 1 구간에서 영영 도착하지 못하다가 마지막
+       * 프레임에 툭 순간이동한다. rank 0 인 글자도 없어서 애니메이션 앞부분에는
+       * 줄 전체가 얼어 있었다. floor 는 두 문제를 한 번에 없앤다 ([1,0,0,1]).
+       */
       const mid = (n - 1) / 2
-      return Math.round(Math.abs(i - mid))
+      return Math.floor(Math.abs(i - mid))
     }
     case 'edges': {
       const mid = (n - 1) / 2

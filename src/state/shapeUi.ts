@@ -12,6 +12,7 @@
 
 import { create } from 'zustand'
 
+import { SPEED_MAX, SPEED_MIN } from '@/core/types.ts'
 import { DEFAULT_SHAPE_COLOR } from '@/shapes/registry.ts'
 import type { ShapeSceneGroup } from '@/shapes/types.ts'
 
@@ -20,6 +21,15 @@ export type ShapeGroupFilter = ShapeSceneGroup | 'all'
 export interface AppliedScene {
   sceneId: string
   layerIds: string[]
+  /**
+   * 이 세트를 처음 넣을 때 문서에 있던 길이(프레임). 맞출 것이 없었으면 null 이다.
+   *
+   * 슬라이더를 끌 때마다 지금 문서 길이를 다시 읽으면 안 된다. 아주 느린 속도에서는
+   * 세트가 문서를 늘리는데(shapes/shared.ts timingOf), 그 늘어난 값이 다음 기준선이
+   * 되면 속도를 1 로 되돌려도 길이가 안 돌아온다. 속도를 왕복할 때마다 문서가
+   * 계속 길어지는 래칫이 된다. 기준선은 처음 한 번 정하고 고정한다.
+   */
+  fitFrames: number | null
   /**
    * 넣은 직후 레이어들의 지문.
    *
@@ -92,7 +102,9 @@ export const useShapeUiStore = create<ShapeUiState>()((set, get) => ({
     set({ strength: Math.min(1, Math.max(0, v)) })
   },
   setSpeed(v) {
-    set({ speed: v })
+    // setStrength 와 같은 이유로 여기서 가둔다. 스토어에 범위 밖 값이 들어가면
+    // 슬라이더 위치와 실제로 쓰이는 값(buildShapeScene 이 다시 자른다)이 갈린다.
+    set({ speed: Number.isFinite(v) ? Math.min(SPEED_MAX, Math.max(SPEED_MIN, v)) : 1 })
   },
   setApplied(applied) {
     set({ applied })

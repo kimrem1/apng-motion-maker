@@ -41,11 +41,19 @@ export function advanceIdCounter(n: number): void {
   if (Number.isFinite(n) && n > idCounter) idCounter = Math.floor(n)
 }
 
-/** 문서 안에서 쓰인 id 의 최대 순번. 접두어 뒤는 36진수다. */
+/**
+ * 문서 안에서 쓰인 id 의 최대 순번. 접두어 뒤는 36진수다.
+ *
+ * 접두어는 **한 글자**다. nextId 호출부가 전부 그렇다 (a c e l m t z).
+ * `[a-z]+` 로 두면 탐욕 매칭이 36진수 순번의 앞 글자를 접두어로 먹는다.
+ * 순번 360 은 'a0' 이라 'la0' 이 '0'(=0) 으로 읽혔고, 최대 순번이 359('9z')에서
+ * 멈췄다. 그러면 카운터를 다 못 감아 파일을 연 뒤 발급한 id 가 문서 안의 id 와
+ * 겹친다 (project/io.ts reserveIdCounter).
+ */
 export function maxIdOrdinal(ids: Iterable<string>): number {
   let max = 0
   for (const id of ids) {
-    const m = /^[a-z]+([0-9a-z]+)$/i.exec(id)
+    const m = /^[a-z]([0-9a-z]+)$/i.exec(id)
     if (!m || !m[1]) continue
     const n = parseInt(m[1], 36)
     if (Number.isFinite(n) && n > max) max = n

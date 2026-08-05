@@ -8,7 +8,7 @@
 
 import { assetRegistry } from '@/state/assets.ts'
 import { useDocumentStore } from '@/state/document.ts'
-import { nextId } from '@/core/factory.ts'
+import { advanceIdCounter, maxIdOrdinal } from '@/core/factory.ts'
 import type { MotionProject } from '@/core/types.ts'
 // 패널이 아니라 비트맵 보관소다. React 도 DOM 패널도 참조하지 않는다.
 import { clearPrepOriginals } from '@/ui/prep/prepOriginals.ts'
@@ -210,16 +210,9 @@ export async function restoreBundle(bundle: ProjectBundle): Promise<void> {
  * 그 뒤로는 조회가 엉뚱한 레이어를 집고 실행취소 패치가 어긋난다.
  */
 function reserveIdCounter(doc: MotionProject): void {
-  const pattern = /^[a-z]+([0-9a-z]+)$/
-  let max = 0
-
+  const ids: string[] = []
   const scan = (id: string | null | undefined): void => {
-    if (!id) return
-    const m = pattern.exec(id)
-    const digits = m?.[1]
-    if (!digits) return
-    const n = Number.parseInt(digits, 36)
-    if (Number.isFinite(n) && n > max) max = n
+    if (id) ids.push(id)
   }
 
   for (const asset of doc.assets) scan(asset.id)
@@ -230,13 +223,19 @@ function reserveIdCounter(doc: MotionProject): void {
     for (const fx of layer.effects) scan(fx.id)
   }
 
-  // 카운터를 직접 읽을 방법이 없으므로 한 번 뽑아서 현재 값을 본다.
-  // 상한을 두어 이상한 파일이 루프를 오래 붙잡지 못하게 한다.
-  const limit = Math.min(max, 100000)
-  for (let i = 0; i <= limit; i += 1) {
-    const probe = Number.parseInt(nextId('z').slice(1), 36)
-    if (!Number.isFinite(probe) || probe > limit) return
-  }
+  /*
+   * 읽는 규칙과 감는 방법을 둘 다 core/factory.ts 에 맡긴다.
+   *
+   * 예전에는 여기서 정규식을 다시 적었고 그것이 틀렸다. `[a-z]+` 가 36진수 순번의
+   * 앞 글자를 접두어로 먹어(순번 360 이 'a0' 이다) 최대치가 359 에서 멈췄다.
+   * 그리고 카운터를 nextId('z') 로 한 칸씩 뽑아 가며 감았는데, 상한(10만)에 걸리면
+   * 조용히 포기하는 데다 감는 방법이 이미 advanceIdCounter 로 있었다.
+   *
+   * 다 감기지 않으면 파일을 연 뒤 발급한 id 가 문서 안의 id 와 겹친다. 그러면
+   * 조회가 엉뚱한 레이어를 집고, 다시 저장했다 열 때 migrate 가 중복 id 를 새로
+   * 매기면서 folderId 가 가리키던 자리를 잃어 레이어가 폴더에서 튕겨 나온다.
+   */
+  advanceIdCounter(maxIdOrdinal(ids))
 }
 
 /** 저장 창에 넣을 기본 이름. 첫 레이어 이름을 쓴다. */

@@ -33,6 +33,24 @@ export function speedFromP(p: number): number {
   return SPEED_MIN * Math.exp(LOG_RATIO * t)
 }
 
+/**
+ * 슬라이더 위치 -> 속도. 단, 1배 자리에 걸림쇠를 둔다.
+ *
+ * 1배는 눈금 위의 정확한 자리가 아니다(p = 0.7686...). 한 칸이 0.005 라 손잡이가
+ * 아무리 가까이 가도 0.974 나 1.02 에서 멈춘다. 배수로 몇 퍼센트 차이는 눈에 안
+ * 보이지만, "1배면 길이를 안 건드린다" 처럼 1을 경계로 삼는 규칙에서는 손잡이를
+ * 가운데 둬도 규칙이 안 걸린다(도형 세트가 그렇다. shapes/shared.ts timingOf).
+ *
+ * 한 칸 안쪽이면 정확히 1로 붙인다. speedFromP 자체를 고치지는 않는다. 그쪽은
+ * p 와 speed 를 왕복하는 순수 변환이라 스냅이 들어가면 왕복이 깨진다.
+ */
+export function speedFromPSnapped(p: number): number {
+  const t = clamp(Number.isFinite(p) ? p : 0, 0, 1)
+  // p 로 재고 speed 로 재지 않는다. speed 로 재면 exp/log 왕복 오차가 한 칸 경계에서
+  // 걸림쇠를 놓친다.
+  return Math.abs(t - pFromSpeed(1)) <= SPEED_STEP + 1e-9 ? 1 : speedFromP(t)
+}
+
 /** 속도 -> 슬라이더 위치 */
 export function pFromSpeed(speed: number): number {
   if (!Number.isFinite(speed) || speed <= 0) return pFromSpeed(1)

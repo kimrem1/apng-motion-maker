@@ -347,9 +347,18 @@ function reapplyTargetId(): string | null {
   const id = usePresetUiStore.getState().appliedId
   if (!id) return null
   const doc = useDocumentStore.getState().doc
+  /*
+   * presetRef 가 없으면 이 문서에 얹힌 프리셋이 없다는 뜻이다. 재적용할 것이 없다.
+   *
+   * appliedId 는 화면 상태라 문서와 따로 논다. Ctrl+Z 로 적용을 되감거나 다른
+   * 프로젝트를 열면 presetRef 만 사라지고 appliedId 는 남는다. 그 상태에서
+   * 아래 검사들은 전부 `?.` 라 조용히 통과하고, 슬라이더를 스치는 것만으로 앞
+   * 문서의 모션이 지금 고른 레이어에 심겼다. 가드가 통째로 죽어 있던 자리다.
+   */
+  if (!doc.presetRef) return null
   // PRO 에서 손본 문서에 재적용하면 그 편집이 조용히 사라진다.
   // 그 길은 [프리셋으로 리셋] 버튼 하나만 연다.
-  if (doc.presetRef?.dirty === true) return null
+  if (doc.presetRef.dirty === true) return null
 
   /*
    * 재적용은 프리셋이 실제로 얹힌 레이어에만 한다.

@@ -10,7 +10,15 @@
 import { strToU8, zipSync } from 'fflate'
 import { describe, expect, it } from 'vitest'
 
-import { createEmptyProject, createImageLayer, createStaticTrack, resetIdCounter } from '@/core/factory.ts'
+import {
+  advanceIdCounter,
+  createEmptyProject,
+  createImageLayer,
+  createStaticTrack,
+  maxIdOrdinal,
+  nextId,
+  resetIdCounter,
+} from '@/core/factory.ts'
 import {
   CANVAS_MAX,
   CANVAS_MIN,
@@ -412,5 +420,50 @@ describe('migrateProject', () => {
 
     expect(result.doc.assets.length).toBe(1)
     expect(result.doc.assets[0]!.storeKey).toBe('idb:asset:a1')
+  })
+})
+
+/**
+ * 파일에서 온 id 와 앞으로 만들 id 가 겹치면 안 된다.
+ *
+ * nextId 는 세션 단조 카운터라 새 탭에서 0 부터 시작한다. 파일을 열 때 카운터를
+ * 문서의 최대 순번까지 감아 두는데, 그 최대치를 읽는 정규식이 틀려 있었다.
+ * `[a-z]+` 가 탐욕적이라 36진수 순번의 앞 글자를 접두어로 먹는다. 순번 360 은
+ * 'a0' 이므로 'la0' 이 '0'(=0) 으로 읽혔고, 카운터가 359 에서 멈췄다.
+ *
+ * 그러면 그 뒤 발급하는 id 가 문서 안의 레이어/트랙과 겹친다. 조회가 엉뚱한
+ * 레이어를 집고, 다시 저장했다 열면 migrate 가 중복 id 를 새로 매기면서
+ * folderId 가 가리키던 자리를 잃어 레이어가 폴더에서 튕겨 나온다.
+ */
+describe('id 카운터 되감기', () => {
+  it('36진수 순번을 끝까지 읽는다', () => {
+    // 359 = '9z', 360 = 'a0'. 여기가 정확히 갈리던 경계다.
+    expect(maxIdOrdinal(['l9z'])).toBe(359)
+    expect(maxIdOrdinal(['la0'])).toBe(360)
+    expect(maxIdOrdinal(['la1'])).toBe(361)
+    expect(maxIdOrdinal(['lab'])).toBe(371)
+    expect(maxIdOrdinal(['tzzz'])).toBe(46655)
+    // 여러 접두어가 섞여도 최댓값 하나다.
+    expect(maxIdOrdinal(['l9z', 'ta0', 'm5', 'e1'])).toBe(360)
+  })
+
+  it('id 처럼 안 생긴 것은 건너뛴다', () => {
+    expect(maxIdOrdinal(['', 'idb:asset:a1', 'l', '12', 'L1'])).toBe(1)
+  })
+
+  it('되감은 뒤 발급하는 id 가 문서 안의 id 와 겹치지 않는다', () => {
+    resetIdCounter()
+    // 순번 360 이 넘어가는 문서. 옛 정규식이 359 에서 멈추던 구간이다.
+    const used = ['l9z', 'la0', 'la1', 'lab', 'tb7']
+    advanceIdCounter(maxIdOrdinal(used))
+
+    const taken = new Set(used)
+    for (let i = 0; i < 50; i += 1) {
+      for (const prefix of ['l', 't', 'm']) {
+        const id = nextId(prefix)
+        expect(taken.has(id), id).toBe(false)
+        taken.add(id)
+      }
+    }
   })
 })

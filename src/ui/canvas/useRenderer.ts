@@ -27,6 +27,7 @@ import { useDocumentStore } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { getPreviewDoc, subscribePreviewDoc } from '@/state/presetActions.ts'
 import { announceFailure } from '@/ui/a11y/announce.ts'
+import { setLivePlayheadFrame } from './livePlayhead.ts'
 import { setActiveRenderer } from './rendererHandle.ts'
 
 /**
@@ -90,6 +91,15 @@ export function useRenderer(): UseRendererResult {
   const publishedAtRef = useRef(0)
 
   const renderAt = useCallback((frame: number) => {
+    /*
+     * 화면에 나가는 프레임을 모듈에 그대로 남긴다. 컨텍스트가 없어 그리지 못해도
+     * 남긴다. "지금 몇 프레임인가" 는 그림이 나갔는지와 별개의 사실이다.
+     *
+     * 스토어의 playheadFrame 은 재생 중 100ms 마다만 갱신돼 뒤처져 있다. 재생을
+     * 멈추고 그 프레임에 키를 찍는 조작은 그 값을 읽으면 안 된다 (livePlayhead.ts).
+     */
+    setLivePlayheadFrame(frame)
+
     const renderer = rendererRef.current
     const cache = cacheRef.current
     const canvas = canvasRef.current

@@ -16,8 +16,11 @@
 import { useMemo, useState } from 'react'
 
 import { SHAPE_KIND_LABELS, toHex6 } from '@/core/shape.ts'
-import { SHAPE_KIND_LIST, SPEED_MAX, SPEED_MIN, type ShapeKind } from '@/core/types.ts'
+import { SHAPE_KIND_LIST, type ShapeKind } from '@/core/types.ts'
 import { useDocumentStore } from '@/state/document.ts'
+// 속도 눈금은 모션 갤러리와 같은 것을 쓴다. 같은 로그 눈금을 두 벌 두면 두 슬라이더가
+// 같은 자리에서 다른 배수를 뜻하게 된다.
+import { SPEED_STEP, pFromSpeed, speedFromPSnapped } from '@/state/speedScale.ts'
 import {
   addSingleShape,
   applyShapeScene,
@@ -30,22 +33,6 @@ import { SHAPE_SCENES } from '@/shapes/registry.ts'
 import { SHAPE_GROUP_LABELS, SHAPE_GROUP_ORDER } from '@/shapes/types.ts'
 import { SceneGlyph, ShapeKindIcon } from './ShapeGlyphs.tsx'
 import './shapes.css'
-
-/**
- * 속도 슬라이더의 눈금.
- * 모션 갤러리와 같은 로그 눈금이다. 가운데가 1 이고 양쪽 끝이 최소/최대다.
- */
-function speedFromP(p: number): number {
-  const lo = Math.log(SPEED_MIN)
-  const hi = Math.log(SPEED_MAX)
-  return Math.exp(lo + (hi - lo) * Math.min(1, Math.max(0, p)))
-}
-
-function pFromSpeed(speed: number): number {
-  const lo = Math.log(SPEED_MIN)
-  const hi = Math.log(SPEED_MAX)
-  return (Math.log(Math.min(SPEED_MAX, Math.max(SPEED_MIN, speed))) - lo) / (hi - lo)
-}
 
 export function ShapeGallery() {
   const group = useShapeUiStore((s) => s.group)
@@ -66,8 +53,10 @@ export function ShapeGallery() {
   /**
    * 이 세트가 이미 있는 타임라인에 얹히는가.
    *
-   * 그러면 길이는 그 타임라인을 따르고 속도 노브는 아무 일도 하지 않는다.
-   * 노브를 켜 둔 채로 두면 "끌어도 아무 변화가 없다" 가 된다.
+   * 그러면 문서 길이는 그 타임라인을 따른다. 속도는 그 안에서 세트의 주기를 몇 번
+   * 반복할지를 정한다(shapes/shared.ts timingOf). 안내 문구를 고르는 데만 쓴다.
+   * 예전에는 이 값으로 속도 슬라이더를 잠갔는데, 이미지를 한 장만 올려도 노브가
+   * 영영 안 열려서 "속도를 조절할 수 없다" 가 됐다.
    */
   const fitsExisting = useMemo(() => {
     const ids = new Set(applied?.layerIds ?? [])
@@ -129,14 +118,17 @@ export function ShapeGallery() {
               aria-label="도형 색"
               onChange={(e) => {
                 setColor(e.target.value)
-                reapplyShapeSceneSoon()
+                reapplyShapeSceneSoon(setNotice)
               }}
-              onBlur={() => commitShapeSceneNow()}
+              onBlur={() => commitShapeSceneNow(setNotice)}
             />
           </div>
         </div>
 
-        <label className="mm-field mm-shape-knob">
+        <label
+          className="mm-field mm-shape-knob"
+          title={applied ? undefined : '세트를 먼저 고르면 조절할 수 있습니다'}
+        >
           <span className="mm-field-label">도형 세기</span>
           <input
             type="range"
@@ -148,31 +140,34 @@ export function ShapeGallery() {
             aria-label="도형 세트 세기"
             onChange={(e) => {
               setStrength(Number(e.target.value))
-              reapplyShapeSceneSoon()
+              reapplyShapeSceneSoon(setNotice)
             }}
-            onPointerUp={() => commitShapeSceneNow()}
-            onKeyUp={() => commitShapeSceneNow()}
-            onBlur={() => commitShapeSceneNow()}
+            onPointerUp={() => commitShapeSceneNow(setNotice)}
+            onKeyUp={() => commitShapeSceneNow(setNotice)}
+            onBlur={() => commitShapeSceneNow(setNotice)}
           />
         </label>
 
-        <label className="mm-field mm-shape-knob">
+        <label
+          className="mm-field mm-shape-knob"
+          title={applied ? undefined : '세트를 먼저 고르면 조절할 수 있습니다'}
+        >
           <span className="mm-field-label">도형 속도</span>
           <input
             type="range"
             min={0}
             max={1}
-            step={0.02}
+            step={SPEED_STEP}
             value={pFromSpeed(speed)}
-            disabled={!applied || fitsExisting}
+            disabled={!applied}
             aria-label="도형 세트 속도"
             onChange={(e) => {
-              setSpeed(speedFromP(Number(e.target.value)))
-              reapplyShapeSceneSoon()
+              setSpeed(speedFromPSnapped(Number(e.target.value)))
+              reapplyShapeSceneSoon(setNotice)
             }}
-            onPointerUp={() => commitShapeSceneNow()}
-            onKeyUp={() => commitShapeSceneNow()}
-            onBlur={() => commitShapeSceneNow()}
+            onPointerUp={() => commitShapeSceneNow(setNotice)}
+            onKeyUp={() => commitShapeSceneNow(setNotice)}
+            onBlur={() => commitShapeSceneNow(setNotice)}
           />
         </label>
       </div>
@@ -184,7 +179,7 @@ export function ShapeGallery() {
       <p className="mm-shape-help">
         {applied
           ? fitsExisting
-            ? '색과 세기는 방금 넣은 세트에 바로 반영됩니다. 길이는 이미 만들어 둔 타임라인에 맞춥니다.'
+            ? '색과 세기와 속도는 방금 넣은 세트에 바로 반영됩니다. 전체 길이는 이미 만들어 둔 타임라인을 그대로 두고, 속도는 그 안에서 세트가 몇 번 반복할지를 정합니다.'
             : '색과 세기와 속도는 방금 넣은 세트에 바로 반영됩니다. 세트를 손보면 그때부터는 카드를 다시 눌러야 합니다.'
           : '세트를 고르면 세기와 속도를 여기서 조절할 수 있습니다. 색은 다음에 넣을 도형에 쓰입니다.'}
       </p>

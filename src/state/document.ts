@@ -64,6 +64,7 @@ import {
   mergePresetPerspective,
   mergePresetReveal,
   mergePresetTracks,
+  ownershipFor,
   ownershipOf,
 } from '@/motions/merge.ts'
 import { probeAlpha } from '@/imageprep/alphaProbe.ts'
@@ -1458,7 +1459,9 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
 
         // 소유권 규칙은 motions/merge.ts 한 곳에만 둔다. 호버 미리보기도 같은 헬퍼를 쓴다.
         // 규칙이 두 벌이면 미리보기와 클릭 결과가 갈린다.
-        const owned = ownershipOf(d.presetRef)
+        // ownershipOf 가 아니라 ownershipFor 다. 앞 프리셋이 다른 레이어에 걸려 있었으면
+        // 그 소유권으로 이 레이어의 수동 편집을 걷어내면 안 된다.
+        const owned = ownershipFor(d.presetRef, layerId)
         const nextTracks = tracks.map((t) => ({ ...t, id: t.id || nextId('t') }))
         const nextFx = (effects ?? []).map((e) => ({ ...e, id: e.id || nextId('e') }))
 
@@ -1634,6 +1637,10 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           track.keys[i] = split.a
           track.keys[i + 1] = split.b
           track.keys.splice(i + 1, 0, split.mid)
+          // 아래 구간 밖 경로와 **같은 표시를 남긴다.** 한 함수 안에서 두 길이
+          // '사용자가 손댔다' 를 다르게 판정하면, 두 키 사이에 찍은 키만 dirty 가
+          // 안 켜져 EASY 슬라이더가 그 트랙을 통째로 갈아끼우며 지워 버린다.
+          markPresetDirty(d)
           return
         }
 

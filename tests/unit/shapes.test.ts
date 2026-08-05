@@ -28,12 +28,12 @@ import {
 import { evalTrack } from '@/easing/curve.ts'
 import { migrateProject } from '@/project/migrate.ts'
 import { buildShapeScene, createSceneContext, SHAPE_SCENES, SHAPE_SCENE_BY_ID } from '@/shapes/registry.ts'
-import { stops } from '@/shapes/shared.ts'
+import { stops, timingOf } from '@/shapes/shared.ts'
 import { SHAPE_GROUP_LABELS, SHAPE_GROUP_ORDER } from '@/shapes/types.ts'
 import { applyPresetToLayer } from '@/motions/apply.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useLayerUiStore } from '@/state/layerUi.ts'
-import { applyShapeScene } from '@/state/shapeActions.ts'
+import { applyShapeScene, commitShapeSceneNow, reapplyShapeSceneSoon } from '@/state/shapeActions.ts'
 import { useShapeUiStore } from '@/state/shapeUi.ts'
 
 const s = () => useDocumentStore.getState()
@@ -341,6 +341,157 @@ describe('도형 세트 카탈로그', () => {
   })
 })
 
+/**
+ * 이미 만들어 둔 타임라인 위에서의 속도.
+ *
+ * 예전에는 fitFrames 가 있으면 속도를 통째로 무시했고, 그래서 화면에서도 속도
+ * 슬라이더를 잠가 뒀다. 이미지를 한 장이라도 올려 두면 노브가 영영 안 열려
+ * "도형 속도를 조절할 수 없다" 가 됐다. 지금은 속도가 **한 주기의 길이**를 정하고
+ * 그 주기를 문서 길이 안에 이어 붙인다.
+ */
+describe('맞춘 길이 위에서의 도형 속도', () => {
+  const FITS = [8, 12, 20, 40, 77, 96, 120]
+  const SPEEDS = [0.1, 0.3, 0.5, 0.75, 1, 1.25, 1.5, 2]
+
+  it('속도 1 에서는 이미 만들어 둔 길이가 한 프레임도 안 변한다', () => {
+    for (const scene of SHAPE_SCENES) {
+      for (const fit of FITS) {
+        for (const fps of [10, 12.5, 20, 25, 50]) {
+          const out = buildShapeScene(scene.id, createSceneContext({ fitFrames: fit, fps, speed: 1 }))
+          expect(out?.durationFrames, `${scene.id} fit=${fit} fps=${fps}`).toBe(fit)
+        }
+      }
+    }
+  })
+
+  it('어떤 속도에서도 남의 타임라인을 줄이지 않는다', () => {
+    for (const scene of SHAPE_SCENES) {
+      for (const fit of FITS) {
+        for (const speed of SPEEDS) {
+          const out = buildShapeScene(scene.id, createSceneContext({ fitFrames: fit, fps: 20, speed }))
+          const where = `${scene.id} fit=${fit} speed=${speed}`
+          expect(out?.durationFrames ?? 0, where).toBeGreaterThanOrEqual(fit)
+          expect(out?.durationFrames ?? 0, where).toBeLessThanOrEqual(FRAMES_MAX)
+          // 빠르게 하면서 길이가 늘어날 이유는 없다.
+          if (speed >= 1) expect(out?.durationFrames, where).toBe(fit)
+        }
+      }
+    }
+  })
+
+  it('속도 노브가 실제로 무언가를 바꾼다', () => {
+    for (const scene of SHAPE_SCENES) {
+      const slow = buildShapeScene(scene.id, createSceneContext({ fitFrames: 77, fps: 20, speed: 0.5 }))
+      const mid = buildShapeScene(scene.id, createSceneContext({ fitFrames: 77, fps: 20, speed: 1 }))
+      const fast = buildShapeScene(scene.id, createSceneContext({ fitFrames: 77, fps: 20, speed: 2 }))
+      expect(JSON.stringify(mid), scene.id).not.toBe(JSON.stringify(fast))
+      expect(JSON.stringify(mid), scene.id).not.toBe(JSON.stringify(slow))
+    }
+  })
+
+  it('이어 붙인 뒤에도 키가 오름차순이고 재생 구간 안에 있다', () => {
+    const bad: string[] = []
+    for (const scene of SHAPE_SCENES) {
+      for (const fit of FITS) {
+        for (const speed of SPEEDS) {
+          const out = buildShapeScene(scene.id, createSceneContext({ fitFrames: fit, fps: 20, speed }))
+          if (!out) { bad.push(`${scene.id} null`); continue }
+          const where = `${scene.id} fit=${fit} speed=${speed}`
+          for (const layer of out.layers) {
+            for (const track of layer.tracks) {
+              if (track.keys.length === 0) bad.push(`${where} ${track.prop} 키 없음`)
+              let prev = -1
+              for (const key of track.keys) {
+                if (!Number.isInteger(key.f)) bad.push(`${where} ${track.prop} 정수 아님 ${key.f}`)
+                if (key.f <= prev) bad.push(`${where} ${track.prop} 역순 ${key.f}<=${prev}`)
+                if (key.f > out.durationFrames) bad.push(`${where} ${track.prop} 구간 밖 ${key.f}`)
+                if (!Number.isFinite(key.v)) bad.push(`${where} ${track.prop} 값이 수가 아님`)
+                prev = key.f
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(bad.slice(0, 10)).toEqual([])
+  })
+
+  /**
+   * 한 바퀴 도는 세트는 주기마다 **이어서** 돌아야 한다.
+   *
+   * 0 -> 360 을 그대로 복사하면 두 번째 주기의 첫 키가 다시 0 이라, 겹친 키를 버리는
+   * 규칙에 걸려 트랙이 360 에 멈춘다. 팽이가 한 바퀴만 돌고 서 있던 사고가 그것이다.
+   */
+  it('한 바퀴 도는 세트가 주기마다 이어서 돈다', () => {
+    let checked = 0
+    for (const scene of SHAPE_SCENES) {
+      const ctx = createSceneContext({ fitFrames: 120, fps: 20, speed: 2 })
+      const reps = timingOf(ctx, scene.defaultDurationMs).reps
+      if (reps < 2) continue
+      const out = buildShapeScene(scene.id, ctx)
+      if (!out) throw new Error(scene.id)
+      for (const layer of out.layers) {
+        for (const track of layer.tracks) {
+          if (track.unit !== 'deg' || track.keys.length < 3) continue
+          const first = track.keys[0]!.v
+          const last = track.keys[track.keys.length - 1]!.v
+          // 한 바퀴를 도는 트랙만 본다. 제자리로 돌아오는 흔들림(쫀득 팝의 -18도)은
+          // 이어 붙이면 안 되고, 그것은 아래 '기울어 가지 않는다' 검사가 본다.
+          if (Math.abs(last - first) < 359.9) continue
+          checked += 1
+          const where = `${scene.id} ${layer.name}`
+          // 반대로 도는 조각(색종이)도 있다. 처음 방향으로 계속 가기만 하면 된다.
+          const dir = Math.sign(last - first)
+          let prev = first - dir
+          for (const key of track.keys) {
+            expect((key.v - prev) * dir, where).toBeGreaterThanOrEqual(0)
+            prev = key.v
+          }
+          /*
+           * 주기마다 같은 각도만큼 더 돈다. 한 주기치에서 멈추면(예전 사고) 여기서 걸린다.
+           * 이음새에서 키가 합쳐지므로 정확히 reps 배가 아니라 그 이상만 확인한다.
+           */
+          expect(Math.abs(last - first), where).toBeGreaterThan(360)
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
+  /**
+   * 한 바퀴가 아닌 각도 트랙은 이어 붙여도 기울어 가면 안 된다.
+   *
+   * 쫀득 팝의 회전은 -18도에서 0도로 펴지는 흔들림이다. "각도면 무조건 이어 돈다"
+   * 로 두면 주기마다 18도씩 더해져 도형이 열 바퀴째에는 180도 누워 있게 된다.
+   */
+  it('한 바퀴가 아닌 각도는 주기마다 기울어 가지 않는다', () => {
+    const swingOf = (keys: readonly { v: number }[]): number =>
+      Math.max(...keys.map((k) => k.v)) - Math.min(...keys.map((k) => k.v))
+
+    for (const scene of SHAPE_SCENES) {
+      const ctx = createSceneContext({ fitFrames: 120, fps: 20, speed: 2 })
+      if (timingOf(ctx, scene.defaultDurationMs).reps < 2) continue
+      const out = buildShapeScene(scene.id, ctx)
+      // 이어 붙이지 않은 한 주기가 기준이다. 진폭은 속도와 무관하다.
+      const one = buildShapeScene(scene.id, createSceneContext({ fps: 20, speed: 1 }))
+      if (!out || !one) throw new Error(scene.id)
+
+      for (let i = 0; i < out.layers.length; i += 1) {
+        const layer = out.layers[i]!
+        for (const track of layer.tracks) {
+          if (track.unit !== 'deg') continue
+          const base = one.layers[i]?.tracks.find((t) => t.prop === track.prop)
+          if (!base) continue
+          const baseSwing = swingOf(base.keys)
+          // 한 바퀴 도는 트랙은 주기마다 더해지는 것이 맞다. 앞 검사가 본다.
+          if (baseSwing >= 359.9) continue
+          expect(swingOf(track.keys), `${scene.id} ${layer.name}`).toBeCloseTo(baseSwing, 3)
+        }
+      }
+    }
+  })
+})
+
 describe('키 프레임 배치 헬퍼', () => {
   it('오름차순이고 끝을 넘지 않는다', () => {
     expect(stops(10, [0, 0.5, 1])).toEqual([0, 5, 10])
@@ -559,6 +710,72 @@ describe('도형 세트 세션 기억', () => {
     expect(useLayerUiStore.getState().collapsedFolderIds).toContain(folderId)
   })
 
+  it('손댄 세트에서 슬라이더를 끌면 이유를 알려 준다', () => {
+    /*
+     * 슬라이더가 드래그 도중에 잠기는 것이 이 경로의 결과다. 이유를 화면에 안 내면
+     * "슬라이더가 갑자기 안 움직인다" 로 읽힌다. 예전에는 이 문구가 죽은 코드였다.
+     */
+    applyShapeScene('pulse.ripple')
+    const target = s().doc.layers.find((l) => l.type === 'shape')!.id
+    s().setShapeSpec(target, { color: '#ff0000ff' })
+
+    const seen: string[] = []
+    useShapeUiStore.getState().setStrength(0.9)
+    commitShapeSceneNow((m) => seen.push(m))
+    // 스로틀에 걸린 것이 없으면 확정도 아무 일을 하지 않는다. 드래그부터 태운다.
+    if (seen.length === 0) {
+      reapplyShapeSceneSoon((m) => seen.push(m))
+      commitShapeSceneNow((m) => seen.push(m))
+    }
+    expect(seen.join(' ')).toContain('손댄 세트')
+  })
+
+  /**
+   * 지문이 키의 **개수**만 볼 때 뚫려 있던 구멍.
+   *
+   * 캔버스 드래그는 키가 하나뿐인 정적 트랙의 값만 고치고 개수를 안 바꾼다. 세트의
+   * 위치 트랙은 전부 단일 키라 항상 그 길이다. 그래서 도형을 옮겨 놓고 슬라이더를
+   * 한 칸 움직이면 세트가 통째로 다시 만들어지며 옮긴 자리가 사라졌다.
+   */
+  it('도형을 끌어 옮긴 세트는 라이브 재적용이 건드리지 않는다', () => {
+    applyShapeScene('bars.equalizer')
+    const bar = s().doc.layers.find((l) => l.type === 'shape')!
+    const keysBefore = bar.tracks.find((t) => t.prop === 'translateX')?.keys.length
+    s().setLayerTranslate([{ layerId: bar.id, x: 40, y: 0 }], 0)
+
+    const moved = s().doc.layers.find((l) => l.id === bar.id)!
+    const track = moved.tracks.find((t) => t.prop === 'translateX')!
+    // 키 개수는 그대로다. 값만 바뀐다. 여기가 옛 지문이 못 보던 자리다.
+    expect(track.keys.length).toBe(keysBefore)
+
+    const report = applyShapeScene('bars.equalizer', true)
+    expect(report.ok).toBe(false)
+    expect(s().doc.layers.some((l) => l.id === bar.id)).toBe(true)
+  })
+
+  it('숨기거나 잠근 세트는 라이브 재적용이 건드리지 않는다', () => {
+    for (const [key, value] of [['visible', false], ['locked', true]] as const) {
+      s().replaceDocument(emptyDoc())
+      useShapeUiStore.setState({ applied: null, ceilFps: null })
+      applyShapeScene('bars.loading')
+      const target = s().doc.layers.find((l) => l.type === 'shape')!.id
+      s().setLayerFlag(target, key, value)
+
+      expect(applyShapeScene('bars.loading', true).ok, key).toBe(false)
+      expect(s().doc.layers.some((l) => l.id === target), key).toBe(true)
+      expect(s().doc.layers.find((l) => l.id === target)![key], key).toBe(value)
+    }
+  })
+
+  it('기준점을 옮긴 세트는 라이브 재적용이 건드리지 않는다', () => {
+    applyShapeScene('bars.loading')
+    const target = s().doc.layers.find((l) => l.type === 'shape')!.id
+    s().setLayerAnchor(target, 0, 1)
+
+    expect(applyShapeScene('bars.loading', true).ok).toBe(false)
+    expect(s().doc.layers.find((l) => l.id === target)!.anchor).toEqual([0, 1])
+  })
+
   it('손댄 세트는 라이브 재적용이 건드리지 않는다', () => {
     applyShapeScene('pulse.ripple')
     // 손을 댄다. 이제 다시 만들면 그 편집이 사라지므로 라이브 재적용을 막아야 한다.
@@ -632,6 +849,40 @@ describe('도형 세트 세션 기억', () => {
     applyShapeScene('accent.sparkle')
     expect(s().doc.timeline.durationFrames).toBe(96)
     expect(s().doc.timeline.fps).toBe(20)
+  })
+
+  /**
+   * 속도를 왕복해도 문서 길이가 제자리로 돌아온다.
+   *
+   * 아주 느린 속도에서는 세트가 문서를 늘린다(한 주기도 못 담으므로). 그 늘어난
+   * 길이를 다음 기준선으로 삼으면 슬라이더를 좌우로 흔들 때마다 문서가 계속
+   * 길어진다. 기준선은 세트를 처음 넣을 때 값으로 고정한다.
+   */
+  it('속도를 왕복해도 문서 길이가 제자리로 돌아온다', () => {
+    const doc = emptyDoc()
+    const ref: AssetRef = {
+      id: 'a1', name: 'x', storeKey: 'k', naturalW: 20, naturalH: 20, hasAlpha: true,
+    }
+    doc.assets.push(ref)
+    doc.layers.push(createImageLayer(ref, 0))
+    doc.timeline.durationFrames = 60
+    doc.timeline.fps = 20
+    s().replaceDocument(doc)
+
+    applyShapeScene('pulse.ripple')
+    expect(s().doc.timeline.durationFrames).toBe(60)
+    expect(useShapeUiStore.getState().applied?.fitFrames).toBe(60)
+
+    for (const speed of [0.1, 0.25, 0.1, 2, 0.1]) {
+      useShapeUiStore.getState().setSpeed(speed)
+      applyShapeScene('pulse.ripple', true)
+      expect(s().doc.timeline.durationFrames, `속도 ${speed}`).toBeGreaterThanOrEqual(60)
+      expect(useShapeUiStore.getState().applied?.fitFrames, `속도 ${speed}`).toBe(60)
+    }
+
+    useShapeUiStore.getState().setSpeed(1)
+    applyShapeScene('pulse.ripple', true)
+    expect(s().doc.timeline.durationFrames).toBe(60)
   })
 })
 

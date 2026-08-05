@@ -34,18 +34,40 @@ useDocumentStore.subscribe((state) => {
 /**
  * 레이어 한 장의 지문. 세트가 만든 그대로인지 판정한다.
  *
- * 이름 / 모양 / 트랙의 모양까지 본다. 키 값 하나까지 담지 않는 이유는 지문을 만드는
- * 비용이 슬라이더 드래그마다 들기 때문이고, 사용자가 손대는 것은 대개 색·크기·키
- * 개수라 이 정도로 충분하다.
+ * **키의 개수가 아니라 값까지 본다.** 개수만 보던 때 큰 구멍이 있었다. 도형을
+ * 캔버스에서 끌어 옮기는 길(document.ts writeTranslatePx)은 키가 하나뿐인 정적
+ * 트랙의 값만 고치고 개수를 안 바꾼다. 세트의 위치 트랙은 전부 shared.ts fixed()
+ * 가 만든 단일 키라 항상 그 길이다. 그래서 도형을 옮겨 놓고 세기 슬라이더를 한 칸
+ * 움직이면 세트가 통째로 다시 만들어지며 옮긴 자리가 말없이 사라졌다.
+ *
+ * 표시/잠금/혼합/기준점/모디파이어도 같은 이유로 담는다. 전부 레이어를 갈아끼우면
+ * 사라지는데 지문에는 안 잡히던 값들이다.
+ *
+ * 비용은 슬라이더 드래그마다 든다. 세트 하나가 최대 스무 장 × 트랙 서너 개 ×
+ * 키 스무 개 수준이라 문자열 몇 KB 다. 140ms 간격에서 무시할 만하다.
  */
 function fingerprintOf(layer: Layer): string {
   const shape = layer.shape
-  const tracks = layer.tracks.map((t) => `${t.prop}:${t.unit}:${t.keys.length}`).join(',')
+  const tracks = layer.tracks
+    .map((t) => `${t.prop}:${t.unit}:${t.keys.map((k) => `${k.f}=${k.v}`).join('/')}`)
+    .join(',')
   // 가리기와 원근을 통째로 담는다. 일부만 담으면 경계 흐림 하나 바꾼 세트를
   // 슬라이더가 못 알아보고 그대로 갈아끼운다.
   const reveal = layer.reveal ? JSON.stringify(layer.reveal) : '-'
   const persp = layer.perspective ?? '-'
-  return `${layer.name}|${shape ? JSON.stringify(shape) : '-'}|${tracks}|${layer.effects.length}|${reveal}|${persp}`
+  const flags = `${layer.visible ? 'v' : '-'}${layer.locked ? 'l' : '-'}${layer.blend}`
+  const anchor = layer.anchor.join(',')
+  return [
+    layer.name,
+    shape ? JSON.stringify(shape) : '-',
+    tracks,
+    layer.effects.length,
+    reveal,
+    persp,
+    flags,
+    anchor,
+    layer.modifiers.length,
+  ].join('|')
 }
 
 function signatureOf(doc: MotionProject, layerIds: readonly string[]): string {
@@ -160,9 +182,18 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
    *
    * 갈아끼울 레이어를 뺀 나머지가 남아 있다는 것은 사용자가 만든 다른 내용이
    * 있다는 뜻이다. 배경 장식 하나를 얹었다고 5초짜리 모션이 1.2초로 잘리면 안 된다.
+   *
+   * 갈아끼우는 중이면 **처음 넣을 때 잰 길이**를 쓴다. 지금 문서 길이를 다시 읽으면,
+   * 아주 느린 속도에서 세트가 늘려 놓은 길이가 다음 기준선이 되어 속도를 왕복할
+   * 때마다 문서가 계속 길어진다 (shapeUi.ts AppliedScene.fitFrames).
    */
   const others = doc.layers.filter((l) => !previous.includes(l.id))
-  const fitFrames = others.length > 0 ? doc.timeline.durationFrames : undefined
+  const reused = previous.length > 0 ? ui.applied : null
+  const fitFrames = reused
+    ? (reused.fitFrames ?? undefined)
+    : others.length > 0
+      ? doc.timeline.durationFrames
+      : undefined
 
   const emission = buildShapeScene(
     sceneId,
@@ -205,6 +236,7 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
   useShapeUiStore.getState().setApplied({
     sceneId,
     layerIds,
+    fitFrames: fitFrames ?? null,
     signature: signatureOf(nextDoc, layerIds),
   })
 
@@ -242,13 +274,29 @@ let liveTimer: ReturnType<typeof setTimeout> | null = null
 let livePending = false
 
 /**
+ * 라이브 재적용이 할 말이 생겼을 때 부른다.
+ *
+ * 손댄 세트는 다시 만들지 않고 applied 를 놓는데(위 153행), 그러면 잡고 있던
+ * 슬라이더가 드래그 도중에 잠긴다. 이유를 안 알려 주면 "슬라이더가 갑자기 안
+ * 움직인다" 가 된다. 스로틀 때문에 반환값으로는 못 돌려주므로 콜백으로 뺀다.
+ */
+export type LiveNotice = (message: string) => void
+
+function runLive(onNotice?: LiveNotice): void {
+  const current = useShapeUiStore.getState().applied
+  if (!current) return
+  const report = applyShapeScene(current.sceneId, true)
+  if (!report.ok && report.message && onNotice) onNotice(report.message)
+}
+
+/**
  * 방금 넣은 세트를 지금 노브 값으로 다시 만든다.
  *
  * 트레일링 스로틀이다. 드래그 한 번에 수십 번 다시 만들면 도형 스무 장짜리 세트에서
  * 프레임이 떨어진다. 간격(140ms)은 실행취소 병합 창(500ms)보다 짧아서 드래그 전체가
  * 실행취소 한 칸으로 남는다.
  */
-export function reapplyShapeSceneSoon(): void {
+export function reapplyShapeSceneSoon(onNotice?: LiveNotice): void {
   const applied = useShapeUiStore.getState().applied
   if (!applied) return
   livePending = true
@@ -257,19 +305,17 @@ export function reapplyShapeSceneSoon(): void {
     liveTimer = null
     if (!livePending) return
     livePending = false
-    const current = useShapeUiStore.getState().applied
-    if (current) applyShapeScene(current.sceneId, true)
+    runLive(onNotice)
   }, LIVE_MS)
 }
 
 /** 손을 뗐을 때 마지막 값으로 한 번 더 확정한다. */
-export function commitShapeSceneNow(): void {
+export function commitShapeSceneNow(onNotice?: LiveNotice): void {
   if (liveTimer !== null) {
     clearTimeout(liveTimer)
     liveTimer = null
   }
   if (!livePending) return
   livePending = false
-  const current = useShapeUiStore.getState().applied
-  if (current) applyShapeScene(current.sceneId, true)
+  runLive(onNotice)
 }

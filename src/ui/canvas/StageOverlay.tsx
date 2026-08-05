@@ -28,6 +28,7 @@ import type { Mat3 } from '@/core/transform.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useLayerUiStore } from '@/state/layerUi.ts'
 import { useUiStore } from '@/state/ui.ts'
+import { frameForEdit } from './livePlayhead.ts'
 import {
   buildStageScene,
   dragMove,
@@ -203,10 +204,19 @@ export function StageOverlay({ scale }: StageOverlayProps) {
     if (e.button !== 0) return
 
     const ui = useUiStore.getState()
-    // 스크럽과 같은 관습이다. 편집이 시작되면 재생을 멈추고 그 프레임에 못 박는다.
-    // 멈추지 않으면 드래그 도중 재생헤드가 흘러 키가 여러 프레임에 흩어진다.
-    const at = Math.round(ui.playheadFrame)
-    if (ui.playing) ui.setPlaying(false)
+    /*
+     * 스크럽과 같은 관습이다. 편집이 시작되면 재생을 멈추고 그 프레임에 못 박는다.
+     * 멈추지 않으면 드래그 도중 재생헤드가 흘러 키가 여러 프레임에 흩어진다.
+     *
+     * 재생 중에는 스토어가 아니라 실제로 그려지고 있는 프레임을 읽는다. 스토어는
+     * 100ms 마다만 갱신돼 뒤처져 있어, 놓은 자리와 다른 프레임에 키가 남았다
+     * (ui/canvas/livePlayhead.ts, Inspector.beginEdit 와 같은 이유).
+     */
+    const at = frameForEdit(ui.playing, ui.playheadFrame)
+    if (ui.playing) {
+      ui.setPlaying(false)
+      ui.setPlayheadFrame(at)
+    }
 
     const point = toCanvas(e)
     const scene = sceneNow(at)

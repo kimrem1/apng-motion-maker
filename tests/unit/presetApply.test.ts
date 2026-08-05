@@ -277,3 +277,76 @@ describe('미리보기와 확정 적용이 같은 레이어를 만든다 (motion
     expect(s().past.length).toBe(before)
   })
 })
+
+/**
+ * 소유권은 **그 프리셋이 얹힌 레이어**에서만 뜻이 있다 (motions/merge.ts ownershipFor).
+ *
+ * presetRef 는 문서에 하나뿐이라, 레이어 A 에 걸어 둔 프리셋의 소유권 목록으로
+ * 레이어 B 를 병합하면 B 에서 사용자가 손으로 만든 것이 말없이 사라진다.
+ */
+describe('프리셋 소유권과 레이어', () => {
+  const s = () => useDocumentStore.getState()
+
+  function twoLayerDoc(): MotionProject {
+    const d = baseDoc()
+    const ref = d.assets[0]!
+    d.layers.push(createImageLayer(ref, 1))
+    return d
+  }
+
+  function commit(layerId: string, presetId: string): void {
+    const result = applyPresetToLayer({ doc: s().doc, layerId, presetId, strength: 0.5, speed: 1 })
+    s().applyPresetTracks({
+      layerId,
+      presetId,
+      tracks: result.tracks,
+      modifiers: result.modifiers,
+      ...(result.effects ? { effects: result.effects } : {}),
+      ...(result.anchor ? { anchor: result.anchor } : {}),
+      durationFrames: result.durationFrames,
+      macro: { speed: 1, strength: 0.5 },
+    })
+  }
+
+  beforeEach(() => {
+    s().replaceDocument(twoLayerDoc())
+  })
+
+  it('다른 레이어에 걸린 프리셋의 소유권으로 이 레이어의 수동 트랙을 지우지 않는다', () => {
+    const [a, b] = s().doc.layers.map((l) => l.id) as [string, string]
+
+    // A 에 회전 프리셋. presetRef.props 에 rotate 가 남는다.
+    commit(a, 'rotate.spin360')
+    expect(s().doc.presetRef?.props ?? []).toContain('rotate')
+    expect(s().doc.presetRef?.layerId).toBe(a)
+
+    // B 에는 사용자가 직접 회전 키를 찍는다.
+    s().toggleAnimated(b, 'rotate', 0)
+    s().setValueAtFrame(b, 'rotate', 10, 45)
+    expect(s().doc.layers.find((l) => l.id === b)!.tracks.some((t) => t.prop === 'rotate')).toBe(true)
+
+    // B 에 회전을 안 내는 프리셋을 얹는다. B 의 수동 회전은 살아 있어야 한다.
+    commit(b, 'zoom.pop')
+    const layerB = s().doc.layers.find((l) => l.id === b)!
+    expect(layerB.tracks.map((t) => t.prop)).toContain('rotate')
+  })
+
+  it('미리보기도 같은 판단을 한다', () => {
+    const [a, b] = s().doc.layers.map((l) => l.id) as [string, string]
+    commit(a, 'rotate.spin360')
+    s().toggleAnimated(b, 'rotate', 0)
+    s().setValueAtFrame(b, 'rotate', 10, 45)
+
+    const result = applyPresetToLayer({ doc: s().doc, layerId: b, presetId: 'zoom.pop', strength: 0.5, speed: 1 })
+    const previewed = withPresetApplied(s().doc, b, result)
+    expect(previewed.layers.find((l) => l.id === b)!.tracks.map((t) => t.prop)).toContain('rotate')
+  })
+
+  it('같은 레이어에 다시 얹을 때는 앞 프리셋의 트랙을 그대로 걷어낸다', () => {
+    const [a] = s().doc.layers.map((l) => l.id) as [string, string]
+    commit(a, 'rotate.spin360')
+    commit(a, 'zoom.pop')
+    // 소유권이 살아 있으므로 회전은 사라진다. 이 계약까지 깨면 모션이 겹쳐 재생된다.
+    expect(s().doc.layers.find((l) => l.id === a)!.tracks.map((t) => t.prop)).not.toContain('rotate')
+  })
+})

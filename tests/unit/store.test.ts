@@ -560,6 +560,34 @@ describe('presetRef 기록', () => {
     s().setValueAtFrame(L, 'scale', 0, 1.2)
     expect(s().doc.presetRef?.dirty).toBe(true)
   })
+
+  /**
+   * addKeyframe 은 두 갈래다. 두 키 **사이**면 de Casteljau 로 쪼개고, 구간 **밖**이면
+   * 끝 값을 복제한다. 사이 분기가 조기 return 하느라 dirty 표시를 지나쳤다.
+   * 그러면 EASY 에 '프리셋에서 벗어났습니다' 가 안 뜨고 슬라이더가 열린 채로 남아,
+   * 조금만 끌어도 방금 찍은 키가 트랙째 갈아끼워지며 사라진다.
+   */
+  it('키를 어디에 찍든 손댄 것으로 표시한다', () => {
+    for (const [where, frame] of [['두 키 사이', 5], ['구간 밖', 20]] as const) {
+      s().applyPresetTracks({
+        layerId: L,
+        presetId: 'zoom.pop',
+        tracks: [
+          { id: '', prop: 'scale', unit: 'ratio', keys: [
+            { f: 0, v: 0.86, interp: 'bezier' },
+            { f: 10, v: 1, interp: 'bezier' },
+          ] },
+        ],
+        modifiers: [],
+        macro: { speed: 1, strength: 0.5 },
+      })
+      expect(s().doc.presetRef?.dirty, where).toBe(false)
+
+      s().addKeyframe(L, 'scale', frame)
+      expect(getTrack(s().doc.layers[0]!, 'scale')!.keys.some((k) => k.f === frame), where).toBe(true)
+      expect(s().doc.presetRef?.dirty, where).toBe(true)
+    }
+  })
 })
 
 /**

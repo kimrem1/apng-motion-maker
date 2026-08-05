@@ -21,8 +21,8 @@ import { baselineFps, baselineSec, fpsForDuration } from '@/motions/apply.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { usePresetUiStore } from '@/state/presetUi.ts'
 import { useUiStore } from '@/state/ui.ts'
-import { applyPresetToDocument } from '@/state/presetActions.ts'
-import { SPEED_STEP, pFromSpeed, speedFromP } from '@/state/speedScale.ts'
+import { applyPresetToDocument, commitMacroNow, reapplyAppliedPresetSoon } from '@/state/presetActions.ts'
+import { SPEED_STEP, pFromSpeed, speedFromP, speedFromPSnapped } from '@/state/speedScale.ts'
 
 const SIZE = 500
 
@@ -79,6 +79,22 @@ describe('속도 눈금 변환', () => {
     expect(speedFromP(2)).toBeCloseTo(SPEED_MAX, 9)
     expect(pFromSpeed(0)).toBeCloseTo(pFromSpeed(1), 9)
     expect(pFromSpeed(Number.NaN)).toBeCloseTo(pFromSpeed(1), 9)
+  })
+
+  /**
+   * 1배는 눈금 위의 정확한 자리가 아니다(p = 0.7686...). 손잡이를 가운데 둬도
+   * 0.974 나 1.02 에서 멈춘다. "1배면 길이를 안 건드린다" 를 1 로 판정하는 쪽에서는
+   * 그 몇 퍼센트가 규칙을 못 걸리게 한다 (도형 세트, shapes/shared.ts timingOf).
+   */
+  it('1배 자리에 걸림쇠가 있다', () => {
+    const center = pFromSpeed(1)
+    for (const p of [center, center - SPEED_STEP, center + SPEED_STEP]) {
+      expect(speedFromPSnapped(p)).toBe(1)
+    }
+    // 걸림쇠는 한 칸 안쪽에서만 동작한다. 그 밖에서는 눈금 그대로다.
+    for (const p of [0, 0.5, center - SPEED_STEP * 3, center + SPEED_STEP * 3, 1]) {
+      expect(speedFromPSnapped(p)).toBeCloseTo(speedFromP(p), 9)
+    }
   })
 })
 
@@ -234,5 +250,59 @@ describe('프리셋 교체와 기준선', () => {
 
     // 홀드 스냅으로 한두 프레임은 움직일 수 있다. 옛 기준선(75)으로 돌아가면 실패다.
     expect(useDocumentStore.getState().doc.timeline.durationFrames).toBeGreaterThan(85)
+  })
+})
+
+/**
+ * 재적용은 **프리셋이 실제로 얹힌 레이어에만** 한다.
+ *
+ * presetUi.appliedId 는 화면 상태라 문서와 따로 논다. Ctrl+Z 로 적용을 되감거나
+ * 다른 프로젝트를 열면 doc.presetRef 만 사라지고 appliedId 는 남는다. 그 상태에서
+ * 가드가 전부 `?.` 로 통과해, 슬라이더를 스치는 것만으로 앞 문서의 모션이 지금
+ * 고른 레이어에 심겼다.
+ */
+describe('재적용 대상 가드', () => {
+  const s = () => useDocumentStore.getState()
+
+  it('실행취소로 프리셋이 사라지면 슬라이더가 아무 일도 하지 않는다', () => {
+    reset()
+    applyAt('zoom.pop', 1)
+    expect(s().doc.presetRef).toBeDefined()
+    expect(usePresetUiStore.getState().appliedId).toBe('zoom.pop')
+
+    s().undo()
+    expect(s().doc.presetRef).toBeUndefined()
+    // 화면 상태는 그대로 남는다. 이것이 이 버그의 전제다.
+    expect(usePresetUiStore.getState().appliedId).toBe('zoom.pop')
+
+    const layersBefore = JSON.stringify(s().doc.layers)
+    const pastBefore = s().past.length
+    usePresetUiStore.getState().setSpeed(0.4)
+    reapplyAppliedPresetSoon()
+    expect(commitMacroNow()).toBeNull()
+    expect(JSON.stringify(s().doc.layers)).toBe(layersBefore)
+    expect(s().past.length).toBe(pastBefore)
+  })
+
+  it('다른 문서를 열어도 앞 문서의 프리셋이 따라오지 않는다', () => {
+    reset()
+    applyAt('slide.left', 1)
+    expect(usePresetUiStore.getState().appliedId).toBe('slide.left')
+
+    // presetRef 가 없는 새 문서. 옛 화면 상태만 남아 있다.
+    const fresh = createEmptyProject()
+    const asset: AssetRef = {
+      id: 'b1', name: 'q.png', storeKey: 'n', naturalW: 100, naturalH: 100, hasAlpha: true,
+    }
+    fresh.assets.push(asset)
+    fresh.layers.push(createImageLayer(asset, 0))
+    s().replaceDocument(fresh)
+    useUiStore.setState({ selectedLayerId: s().doc.layers[0]!.id })
+
+    const before = JSON.stringify(s().doc.layers)
+    usePresetUiStore.getState().setStrength(0.9)
+    reapplyAppliedPresetSoon()
+    expect(commitMacroNow()).toBeNull()
+    expect(JSON.stringify(s().doc.layers)).toBe(before)
   })
 })

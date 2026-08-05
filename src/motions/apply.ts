@@ -41,7 +41,7 @@ import {
   mergePresetPerspective,
   mergePresetReveal,
   mergePresetTracks,
-  ownershipOf,
+  ownershipFor,
 } from './merge.ts'
 
 // ---------------------------------------------------------------------------
@@ -624,7 +624,8 @@ export function withPresetApplied(
   layerId: string,
   result: PresetApplyResult,
 ): MotionProject {
-  const owned = ownershipOf(doc.presetRef)
+  // 확정 적용(document.ts applyPresetTracks)과 같은 헬퍼여야 미리보기와 결과가 갈리지 않는다.
+  const owned = ownershipFor(doc.presetRef, layerId)
   const layers = doc.layers.map((layer) =>
     layer.id === layerId
       ? {
