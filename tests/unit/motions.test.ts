@@ -188,6 +188,8 @@ const FIXED_AMPLITUDE = new Set([
   // 자리에서 나타나기만 하는 글자 모션. 움직임 자체가 없어 세기가 걸릴 곳이 없다.
   'text.typewriter',
   'text.fade',
+  // 굴리기도 같다. 자리에 앉은 채 그리는 칸만 바뀐다 (core/charAnim.ts).
+  'text.scramble',
   // 뒤집기는 90도에서 0도까지 한 번 도는 것이 전부다. flip3d.turn 과 같은 이유다.
   'text.flip',
   'fade.in',
@@ -224,7 +226,7 @@ const M3_PRESETS = MOTION_PRESETS.filter(
 
 describe('카탈로그 구성', () => {
   it('아홉 카테고리 구성이 표와 같다', () => {
-    expect(byCategory('appear')).toHaveLength(12)
+    expect(byCategory('appear')).toHaveLength(16)
     expect(byCategory('disappear')).toHaveLength(9)
     expect(byCategory('move')).toHaveLength(14)
     expect(byCategory('attention')).toHaveLength(14)
@@ -235,10 +237,10 @@ describe('카탈로그 구성', () => {
     expect(byCategory('combo')).toHaveLength(4)
   })
 
-  it('전부 합쳐 94종이다 (A12 + B9 + C14 + D14 + E4 + F6 + G5 + H8 + I4 + J18)', () => {
+  it('전부 합쳐 99종이다 (A16 + B9 + C14 + D14 + E4 + F6 + G5 + H8 + I4 + J19)', () => {
     const total = CATEGORY_IDS.map((c) => byCategory(c).length).reduce((a, b) => a + b, 0)
-    expect(total).toBe(94)
-    expect(MOTION_PRESETS).toHaveLength(94)
+    expect(total).toBe(99)
+    expect(MOTION_PRESETS).toHaveLength(99)
   })
 
   it('조합 프리셋이 들어와 있다', () => {

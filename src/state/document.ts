@@ -57,6 +57,7 @@ import { createRevealSpec, normalizeRevealSpec } from '@/core/reveal.ts'
 import { evalTrack, insertKeyframe } from '@/easing/curve.ts'
 import { EASING_PRESET_BY_ID } from '@/easing/presets.ts'
 import {
+  mergePresetAnchor,
   mergePresetCharAnim,
   mergePresetEffects,
   mergePresetPerspective,
@@ -305,6 +306,8 @@ interface DocumentState {
     charAnim?: CharAnimSpec
     /** 3D 회전에 쓰는 카메라 거리. 없으면 지운다(기본값으로 되돌아간다). */
     perspective?: number
+    /** 프리셋이 옮긴 기준점. 없으면 한가운데로 되돌린다. 경첩 계열만 낸다. */
+    anchor?: [number, number]
     /** 속도 1 기준 재생 시간(초). 속도 노브의 기준선이다. */
     baseSec?: number
     /** 속도 1 기준 fps. 속도 유도 fps 의 천장이다. */
@@ -1272,7 +1275,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
     },
 
-    applyPresetTracks({ layerId, presetId, tracks, modifiers, effects, durationFrames, loopMode, fps, allowExit, containScale, reveal, charAnim, perspective, baseSec, baseFps, macro }) {
+    applyPresetTracks({ layerId, presetId, tracks, modifiers, effects, durationFrames, loopMode, fps, allowExit, containScale, reveal, charAnim, perspective, anchor, baseSec, baseFps, macro }) {
       mutateDoc('모션 프리셋 적용', (d) => {
         const layer = findLayer(d, layerId)
         if (!layer) return
@@ -1310,6 +1313,16 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           delete layer.perspective
         }
 
+        /*
+         * 기준점만 규칙이 조금 다르다. 지울 수 있는 값이 아니라 언제나 두 숫자를
+         * 갖는 필드라, 걷어낼 때는 한가운데로 되돌린다. 값이 그대로면 대입하지
+         * 않는다. immer 가 배열 대입을 패치로 기록하기 때문이다.
+         */
+        const nextAnchor = mergePresetAnchor(layer.anchor, anchor, owned)
+        if (nextAnchor[0] !== layer.anchor[0] || nextAnchor[1] !== layer.anchor[1]) {
+          layer.anchor = nextAnchor
+        }
+
         if (durationFrames !== undefined) {
           d.timeline.durationFrames = clamp(Math.round(durationFrames), 2, FRAMES_MAX)
         }
@@ -1332,6 +1345,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           ...(reveal && reveal.mode !== 'none' ? { ownsReveal: true } : {}),
           ...(charAnim && charAnim.mode !== 'none' ? { ownsCharAnim: true } : {}),
           ...(perspective !== undefined ? { ownsPerspective: true } : {}),
+          ...(anchor ? { ownsAnchor: true } : {}),
           // 요청한 기준선을 그대로 보관한다. 지금 durationFrames 는 프리셋이 홀드
           // 배수로 스냅한 결과라, 그걸 되먹이면 속도를 왕복할 때마다 길이가 늘어난다.
           ...(baseSec !== undefined ? { baseSec } : {}),

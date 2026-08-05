@@ -33,7 +33,12 @@ import { BLEND_FS, BLEND_MODE_CODE } from './shaders/blend.ts'
 import { SHAPE_FS, SHAPE_KIND_CODE } from './shaders/shape.ts'
 import { TEXT_FS, TEXT_VS } from './shaders/text.ts'
 import { TextRasterCache, type TextRaster } from './textAtlas.ts'
-import { charEasedProgress, charProgress, charTransformAt } from '../charAnim.ts'
+import {
+  charEasedProgress,
+  charProgress,
+  charScrambleSlot,
+  charTransformAt,
+} from '../charAnim.ts'
 import {
   disposeEffectResources,
   effectWarmupCombos,
@@ -733,11 +738,12 @@ export class Renderer {
     let drawn = 0
     for (const glyph of layout.glyphs) {
       if (glyph.order < 0) continue
-      const slot = drawn
+      /*
+       * 아틀라스 칸 번호는 **glyph.order 와 같다.** 굽는 쪽(textAtlas.bakeText)이
+       * order >= 0 인 글리프만 같은 순서로 격자에 넣기 때문이다.
+       */
+      let slot = drawn
       drawn += 1
-
-      const col = slot % raster.cols
-      const row = Math.floor(slot / raster.cols)
 
       // 글자 칸의 한가운데. 배치가 정한 자리를 그대로 쓴다.
       const cx = glyph.x + glyph.w / 2
@@ -760,8 +766,21 @@ export class Renderer {
         sc = ct.scale
         scx = ct.scaleX
         alpha = ct.opacity
+
+        /*
+         * 굴리기는 **그리는 칸만** 바꾼다. 자리도 크기도 그대로다.
+         *
+         * 격자가 균일해서 어느 칸을 빌려도 쿼드 크기가 같다. 글자마다 다른 전진폭
+         * (glyph.w)은 자리를 정할 때 이미 쓰였고 그리는 데는 quadW 를 쓰므로, 빌린
+         * 글자는 원래 글자가 앉을 상자 한가운데에 그대로 앉는다.
+         */
+        const borrowed = charScrambleSlot(anim, glyph.order, count, raw)
+        if (borrowed >= 0) slot = borrowed
       }
       if (alpha <= 0) continue
+
+      const col = slot % raster.cols
+      const row = Math.floor(slot / raster.cols)
 
       /*
        * 글자 하나의 매트릭스.

@@ -80,8 +80,8 @@ function maxStep(values: number[]): number {
 // ---------------------------------------------------------------------------
 
 describe('카탈로그 구성', () => {
-  it('열 카테고리 94종이다', () => {
-    expect(MOTION_PRESETS).toHaveLength(94)
+  it('열 카테고리 99종이다', () => {
+    expect(MOTION_PRESETS).toHaveLength(99)
     expect(byCategory('shake')).toHaveLength(6)
     expect(byCategory('boil')).toHaveLength(5)
     expect(byCategory('glitch')).toHaveLength(8)
@@ -92,7 +92,9 @@ describe('카탈로그 구성', () => {
     // combo.popGlitchIn 은 등장, combo.slideFadeGlitch 는 사라짐에 속한다.
     expect(MOTION_PRESET_BY_ID.get('combo.popGlitchIn')?.category).toBe('appear')
     expect(MOTION_PRESET_BY_ID.get('combo.slideFadeGlitch')?.category).toBe('disappear')
-    expect(byCategory('appear')).toHaveLength(12)
+    // combo.shineIn 도 같은 규칙이다. 등장 트랙과 이펙트를 함께 내지만 카테고리는 등장이다.
+    expect(MOTION_PRESET_BY_ID.get('combo.shineIn')?.category).toBe('appear')
+    expect(byCategory('appear')).toHaveLength(16)
     expect(byCategory('disappear')).toHaveLength(9)
   })
 

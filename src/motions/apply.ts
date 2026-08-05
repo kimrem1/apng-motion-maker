@@ -41,6 +41,7 @@ import { layerIntrinsicSize } from '@/core/shape.ts'
 import type { EmitContext, MotionPreset, PresetEmission } from './types.ts'
 import { MOTION_PRESET_BY_ID, applyPreset, resolveParams } from './registry.ts'
 import {
+  mergePresetAnchor,
   mergePresetCharAnim,
   mergePresetEffects,
   mergePresetPerspective,
@@ -109,6 +110,8 @@ export interface PresetApplyResult {
   reveal?: RevealSpec
   /** 3D 회전에 쓰는 카메라 거리. 없으면 기본값으로 되돌아간다. */
   perspective?: number
+  /** 프리셋이 옮긴 기준점. Layer.anchor 로 들어간다. 경첩 계열만 낸다. */
+  anchor?: [number, number]
   /** 프리셋이 요구하는 반복 방식. 없으면 현재 설정을 유지한다. */
   suggestedLoop?: LoopMode
   /**
@@ -259,6 +262,17 @@ interface ReadEmission {
   reveal?: RevealSpec
   charAnim?: CharAnimSpec
   perspective?: number
+  anchor?: [number, number]
+}
+
+/** [0,1] 두 개짜리 기준점만 통과시킨다. 범위 밖이면 없는 것으로 본다. */
+function readAnchor(source: Loose): [number, number] | undefined {
+  const raw = source['anchor']
+  if (!Array.isArray(raw) || raw.length < 2) return undefined
+  const [x, y] = raw
+  if (typeof x !== 'number' || !Number.isFinite(x)) return undefined
+  if (typeof y !== 'number' || !Number.isFinite(y)) return undefined
+  return [clamp(x, 0, 1), clamp(y, 0, 1)]
 }
 
 function readEmission(emission: PresetEmission): ReadEmission {
@@ -281,6 +295,7 @@ function readEmission(emission: PresetEmission): ReadEmission {
       ? normalizeRevealSpec(rawReveal as Partial<RevealSpec>)
       : undefined
   const perspective = readNumber(e, ['perspective'])
+  const anchor = readAnchor(e)
   return {
     tracks,
     modifiers,
@@ -292,6 +307,7 @@ function readEmission(emission: PresetEmission): ReadEmission {
     ...(reveal && reveal.mode !== 'none' ? { reveal } : {}),
     ...(charAnim && charAnim.mode !== 'none' ? { charAnim } : {}),
     ...(perspective !== undefined && perspective >= 0 ? { perspective } : {}),
+    ...(anchor ? { anchor } : {}),
   }
 }
 
@@ -454,6 +470,7 @@ export function applyPresetToLayer(args: PresetApplyArgs): PresetApplyResult {
   if (read.reveal) result.reveal = read.reveal
   if (read.charAnim) result.charAnim = read.charAnim
   if (read.perspective !== undefined) result.perspective = read.perspective
+  if (read.anchor) result.anchor = read.anchor
   if (!allowExit) {
     const reference = containReferenceScale({
       doc: args.doc,
@@ -634,6 +651,7 @@ export function withPresetApplied(
           reveal: mergePresetReveal(layer.reveal, result.reveal, owned),
           charAnim: mergePresetCharAnim(layer.charAnim, result.charAnim, owned),
           perspective: mergePresetPerspective(layer.perspective, result.perspective, owned),
+          anchor: mergePresetAnchor(layer.anchor, result.anchor, owned),
         }
       : layer,
   )

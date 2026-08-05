@@ -71,6 +71,11 @@ const CATEGORY_BY_ID: Record<string, EffectCategory> = {
   'fx.pixelate': 'texture',
   'fx.dirBlur': 'texture',
   'fx.blur': 'texture',
+  // 잔상은 뭉개는 것이 아니라 사본을 겹치는 것이라 질감 쪽이다.
+  'fx.trail': 'texture',
+  // 광택과 번지는 빛은 둘 다 "밝기를 더하는" 일이다. 사람들은 색 쪽에서 찾는다.
+  'fx.shine': 'color',
+  'fx.bloom': 'color',
   // 렌즈 색수차는 고장난 신호가 아니라 광학 현상이다. 사람들은 색 쪽에서 찾는다.
   'fx.lensChroma': 'color',
   'fx.gradient': 'color',

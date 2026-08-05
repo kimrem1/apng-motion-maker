@@ -29,6 +29,8 @@ export const REVEAL_MODE_LABELS: Record<RevealMode, string> = {
   iris: '가운데에서 원으로',
   clock: '시계 방향으로',
   blinds: '블라인드',
+  ink: '잉크처럼 번지며',
+  fan: '부채처럼 펼쳐지며',
 }
 
 /** u_revealMode 로 넘기는 코드. REVEAL_MODE_LIST 의 순서와 같아야 한다. */
@@ -43,6 +45,19 @@ export const REVEAL_MODE_CODE: Record<RevealMode, number> = {
   iris: 7,
   clock: 8,
   blinds: 9,
+  ink: 10,
+  fan: 11,
+}
+
+/**
+ * 칸 수 슬라이더가 이 모양에서 무엇을 뜻하는가.
+ *
+ * 저장되는 값은 `slats` 하나다. 블라인드에서는 칸 수이고 잉크에서는 얼룩의 잘기다.
+ * 값을 두 벌로 나누면 모양을 갈아탈 때마다 한쪽이 기본값으로 되돌아간다.
+ */
+export const REVEAL_SLATS_LABELS: Partial<Record<RevealMode, string>> = {
+  blinds: '칸 수',
+  ink: '얼룩 잘기',
 }
 
 export const REVEAL_LIMITS = {

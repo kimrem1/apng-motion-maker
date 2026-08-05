@@ -27,6 +27,54 @@ uniform float u_revealAngle;
 uniform float u_revealFlip;
 
 const float MM_TAU = 6.28318530718;
+/*
+ * 반 바퀴. MM_PI 라는 이름은 쓸 수 없다.
+ *
+ * 이 조각은 도형 셰이더에 **통째로 삽입되는데** 그쪽이 이미 MM_PI 를 선언하고 있다.
+ * 같은 이름을 두 번 선언하면 GLSL 은 재정의 오류로 컴파일을 거부하고, 도형 레이어가
+ * 통째로 안 그려진다. 공유 조각은 이름 하나까지 남의 자리를 침범하지 않아야 한다.
+ */
+const float MM_HALF_TURN = 3.14159265359;
+
+/*
+ * 잉크 얼룩용 값 노이즈.
+ *
+ * 이펙트 쪽 노이즈 아틀라스를 쓰지 않는다. 가리기는 이미지 / 도형 / 글자 셰이더
+ * **셋 다**에 들어가는 조각이라, 텍스처를 하나 더 물리면 세 파이프라인 모두가
+ * 유닛을 하나씩 더 잡아먹는다. 가리기 하나 때문에 치를 값이 아니다.
+ *
+ * u_revealMode 는 유니폼이므로 아래 분기는 워프 안에서 갈리지 않는다. 잉크를
+ * 안 쓰는 레이어에서 이 계산의 비용은 정확히 0 이다.
+ */
+float mmRevealHash(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.x + q.y) * q.z);
+}
+
+float mmRevealNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  // 스무스스텝 보간. 선형으로 두면 격자선이 마름모꼴로 드러난다.
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = mmRevealHash(i);
+  float b = mmRevealHash(i + vec2(1.0, 0.0));
+  float c = mmRevealHash(i + vec2(0.0, 1.0));
+  float d = mmRevealHash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+/** 4 옥타브. 합이 0.9375 라 나눠서 0~1 로 되돌린다. */
+float mmRevealFbm(vec2 p) {
+  float v = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 4; i += 1) {
+    v += amp * mmRevealNoise(p);
+    p *= 2.0;
+    amp *= 0.5;
+  }
+  return v / 0.9375;
+}
 
 /*
  * 픽셀마다 "몇 시에 드러나는가" 를 0~1 로 매긴다.
@@ -53,6 +101,32 @@ float mmRevealField(vec2 uv) {
     float n = max(1.0, u_revealSlats);
     float y = uv.y * n;
     return y - floor(y);
+  }
+  if (u_revealMode == 10) {
+    /*
+     * 잉크. 가운데에서 자라는 것은 iris 와 같고 경계가 들쭉날쭉한 것만 다르다.
+     *
+     * 노이즈만 쓰면 얼룩이 온 화면에 **동시에** 피어올라 번지는 것으로 안 보인다.
+     * 그래서 반지름을 뼈대로 깔고 노이즈를 45% 만 섞는다. 이 비율이 경계다.
+     * 더 섞으면 순서가 무너지고 덜 섞으면 그냥 둥근 원이다.
+     */
+    float scale = max(1.0, u_revealSlats) * 0.5;
+    float n = mmRevealFbm(uv * scale);
+    float radial = length(uv - 0.5) / 0.70710678;
+    return clamp(mix(radial, n, 0.45), 0.0, 1.0);
+  }
+  if (u_revealMode == 11) {
+    /*
+     * 부채. 손잡이가 **아래 변의 가운데**다.
+     *
+     * clock 과 한가운데를 나눠 쓰지 않는 이유가 여기다. 부채도 아치도 무지개도
+     * 회전축이 그림 한복판이 아니라 아래 끝에 있다. 한복판을 돌리면 아래쪽 절반이
+     * 먼저 열려 버려서 "펼쳐진다" 가 아니라 "돌아간다" 로 보인다.
+     */
+    vec2 d = vec2(uv.x - 0.5, uv.y - 1.0);
+    // 오른쪽이 0, 위가 pi/2, 왼쪽이 pi. uv 가 [0,1] 이라 -d.y 는 언제나 0 이상이다.
+    float a = atan(-d.y, d.x);
+    return 1.0 - a / MM_HALF_TURN;
   }
   return 0.0;
 }

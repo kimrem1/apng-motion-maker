@@ -1024,10 +1024,289 @@ const gradient: EffectDef = {
   ],
 }
 
+// ---------------------------------------------------------------------------
+// 18. 광택 훑기
+// ---------------------------------------------------------------------------
+
+/**
+ * 밝은 띠 하나가 표면을 사선으로 지나간다.
+ *
+ * ---------------------------------------------------------------------------
+ * 왜 도형 세트가 아니라 이펙트인가
+ * ---------------------------------------------------------------------------
+ * 빛줄기를 도형 한 장으로 만들어 위에 얹으면 **실루엣 밖으로 삐져나간다.** 부채,
+ * 배지, 글자처럼 네모가 아닌 것 위에서 곧바로 티가 난다. 마스크로 잘라내려면
+ * 클리핑을 걸어야 하고 그러면 레이어가 두 장이 된다.
+ *
+ * 이펙트로 두면 알파를 손대지 않으므로 **그려진 자리에만** 광택이 앉는다. 별 모양에
+ * 걸면 별 안에서만 빛이 지나간다.
+ *
+ * 위치가 애니메이션 대상이다(EffectParam = number | Track). 스톱워치를 켜고 0 에서
+ * 1 로 밀면 띠가 한 번 지나간다.
+ */
+const SHINE_CHUNK = /* glsl */ `
+uniform vec3  u_fx_shine_color;
+uniform float u_fx_shine_pos;     // 0..1. 0 이면 띠가 아직 한쪽 밖이다.
+uniform float u_fx_shine_width;
+uniform float u_fx_shine_angle;   // rad
+uniform float u_fx_shine_sharp;
+uniform float u_fx_shine_amount;
+
+vec4 grade_fx_shine(vec4 c, vec2 uv) {
+  if (c.a <= 0.0 || u_fx_shine_amount <= 0.0) return c;
+
+  vec2 dir = vec2(cos(u_fx_shine_angle), sin(u_fx_shine_angle));
+  float p = dot(uv - 0.5, dir) + 0.5;
+
+  float half_w = max(1e-4, u_fx_shine_width * 0.5);
+  /*
+   * 이동 구간을 띠 폭만큼 양쪽으로 늘린다.
+   *
+   * 0..1 을 그대로 쓰면 위치 0 에서 이미 띠의 절반이 화면 안에 들어와 있다.
+   * 시작과 끝에서 완전히 밖에 있어야 "지나갔다" 로 보인다.
+   */
+  float center = mix(-half_w, 1.0 + half_w, clamp(u_fx_shine_pos, 0.0, 1.0));
+
+  float d = clamp(abs(p - center) / half_w, 0.0, 1.0);
+  float k = pow(1.0 - d, max(0.2, u_fx_shine_sharp));
+
+  vec4 s = unpremul(c);
+  vec3 lit = u_fx_shine_color * (k * u_fx_shine_amount);
+  // 스크린. 빛은 더해지는 것이라 곱하기로는 밝아지지 않는다.
+  s.rgb = 1.0 - (1.0 - s.rgb) * (1.0 - clamp(lit, 0.0, 1.0));
+  // 알파는 손대지 않는다. 그것이 이 조각이 도형 대신 쓰이는 이유다.
+  return premul(vec4(clamp(s.rgb, 0.0, 1.0), c.a));
+}
+`
+
+const shine: EffectDef = {
+  id: 'fx.shine',
+  label: '광택 훑기',
+  hint: '밝은 띠가 표면을 사선으로 지나간다. 위치에 스톱워치를 켜면 한 번 훑고 지나간다.',
+  stage: 'C',
+  cost: 'free',
+  preservesAlpha: true,
+  fn: 'grade_fx_shine',
+  chunk: SHINE_CHUNK,
+  params: [
+    { key: 'color', label: '빛 색', type: 'color', default: 0xffffff },
+    { key: 'pos', label: '위치', type: 'number', min: 0, max: 1, step: 0.01, default: 0.5 },
+    { key: 'width', label: '띠 폭', type: 'number', min: 0.02, max: 1.5, step: 0.01, default: 0.28 },
+    { key: 'angle', label: '기울기', type: 'number', min: 0, max: 360, step: 1, unit: '°', default: 20 },
+    { key: 'sharp', label: '가장자리 세기', type: 'number', min: 0.2, max: 6, step: 0.1, default: 2 },
+    { key: 'amount', label: '밝기', type: 'number', min: 0, max: 1, step: 0.01, default: 0.8 },
+  ],
+  uniforms: [
+    { name: 'u_fx_shine_color', type: 'vec3', value: (c) => rgbOf(pv(c, 'color', 0xffffff)) },
+    { name: 'u_fx_shine_pos', type: 'float', value: (c) => pv(c, 'pos', 0.5) },
+    { name: 'u_fx_shine_width', type: 'float', value: (c) => pv(c, 'width', 0.28) },
+    { name: 'u_fx_shine_angle', type: 'float', value: (c) => pv(c, 'angle', 20) * DEG2RAD },
+    { name: 'u_fx_shine_sharp', type: 'float', value: (c) => pv(c, 'sharp', 2) },
+    { name: 'u_fx_shine_amount', type: 'float', value: (c) => pv(c, 'amount', 0.8) },
+  ],
+}
+
+// ---------------------------------------------------------------------------
+// 19. 잔상 겹치기
+// ---------------------------------------------------------------------------
+
+/**
+ * 같은 그림을 한 방향으로 조금씩 밀어 여러 겹 뒤에 깐다.
+ *
+ * ---------------------------------------------------------------------------
+ * 방향성 블러와 무엇이 다른가
+ * ---------------------------------------------------------------------------
+ * 방향성 블러는 표본을 촘촘히 뽑아 **매끄럽게 뭉갠다.** 이쪽은 사본을 띄엄띄엄
+ * 놓아 **한 장 한 장이 보인다.** 레퍼런스에서 글자가 빠르게 미끄러질 때 뒤에 남는
+ * 것은 뭉개진 얼룩이 아니라 옅어지는 사본들이다. 둘은 서로를 대신하지 못한다.
+ *
+ * 사본은 원본 **뒤에** 깐다. 위에 얹으면 원본이 자기 잔상에 가려 흐려진다.
+ * premultiplied 라 over 합성이 `앞 + 뒤 * (1 - 앞.a)` 한 줄이고, 스칼라를 곱해도
+ * rgb <= a 가 유지된다.
+ */
+const TRAIL_CHUNK = /* glsl */ `
+uniform float u_fx_trail_step;    // px. 사본 한 겹 사이의 거리
+uniform float u_fx_trail_angle;   // rad
+uniform int   u_fx_trail_count;
+uniform float u_fx_trail_decay;
+uniform float u_fx_trail_amount;
+
+vec4 fx_trail_tap(vec2 uv) {
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
+  return texture(u_image, uv);
+}
+
+vec4 grade_fx_trail(vec4 c, vec2 uv) {
+  int n = clamp(u_fx_trail_count, 0, 12);
+  if (n < 1 || u_fx_trail_amount <= 0.0 || u_fx_trail_step <= 0.0) return c;
+
+  vec2 stepUv = vec2(cos(u_fx_trail_angle), sin(u_fx_trail_angle))
+              * u_fx_trail_step / u_resolution;
+  float decay = clamp(u_fx_trail_decay, 0.05, 1.0);
+
+  /*
+   * 먼 것부터 쌓는다. 매번 새로 뽑은 사본이 지금까지 쌓인 것보다 앞에 온다.
+   * 가까운 것부터 쌓으면 먼 사본이 가까운 사본을 덮어 순서가 뒤집힌다.
+   */
+  vec4 acc = vec4(0.0);
+  for (int i = 12; i >= 1; i--) {
+    if (i > n) continue;
+    float f = pow(decay, float(i)) * u_fx_trail_amount;
+    vec4 g = fx_trail_tap(uv - stepUv * float(i)) * f;
+    acc = g + acc * (1.0 - g.a);
+  }
+  // 원본이 맨 앞이다.
+  return c + acc * (1.0 - c.a);
+}
+`
+
+const trail: EffectDef = {
+  id: 'fx.trail',
+  label: '잔상 겹치기',
+  hint: '같은 그림을 한 방향으로 밀어 뒤에 여러 겹 깐다. 빠르게 지나가는 느낌이 난다.',
+  stage: 'C',
+  cost: 'low',
+  // 알파를 늘린다. 잔상이 실루엣 밖으로 나가는 것이 이 조각의 목적이다.
+  preservesAlpha: false,
+  // 이웃 픽셀을 읽는다. 융합하면 조각 순서가 어긋난다 (파일 머리주석).
+  fusable: false,
+  fn: 'grade_fx_trail',
+  chunk: TRAIL_CHUNK,
+  params: [
+    { key: 'step', label: '겹 간격', type: 'number', min: 0, max: 60, step: 0.5, unit: 'px', default: 8 },
+    { key: 'angle', label: '방향', type: 'number', min: 0, max: 360, step: 1, unit: '°', default: 180 },
+    { key: 'count', label: '겹 수', type: 'number', min: 1, max: 12, step: 1, unit: '겹', default: 5 },
+    { key: 'decay', label: '옅어짐', type: 'number', min: 0.05, max: 1, step: 0.01, default: 0.62 },
+    { key: 'amount', label: '진하기', type: 'number', min: 0, max: 1, step: 0.01, default: 0.8 },
+  ],
+  uniforms: [
+    { name: 'u_fx_trail_step', type: 'float', value: (c) => pv(c, 'step', 8) },
+    { name: 'u_fx_trail_angle', type: 'float', value: (c) => pv(c, 'angle', 180) * DEG2RAD },
+    {
+      name: 'u_fx_trail_count',
+      type: 'int',
+      value: (c) => Math.min(12, Math.max(0, Math.round(pv(c, 'count', 5)))),
+    },
+    { name: 'u_fx_trail_decay', type: 'float', value: (c) => pv(c, 'decay', 0.62) },
+    { name: 'u_fx_trail_amount', type: 'float', value: (c) => pv(c, 'amount', 0.8) },
+  ],
+}
+
+// ---------------------------------------------------------------------------
+// 20. 번지는 빛
+// ---------------------------------------------------------------------------
+
+/**
+ * 밝은 곳만 골라 흐린 뒤 되더한다.
+ *
+ * ---------------------------------------------------------------------------
+ * '부드러운 흐림' 과 무엇이 다른가
+ * ---------------------------------------------------------------------------
+ * 흐림은 그림 **전체**를 뭉갠다. 이쪽은 문턱값을 넘는 밝은 부분만 뽑아 흐린 뒤
+ * 원본 위에 더하므로, **또렷함은 그대로 두고 빛만 번진다.** 레퍼런스의 빛나는 구,
+ * 얼음 글자, 신사 문에서 형태가 살아 있으면서 주변이 환한 이유가 이것이다.
+ *
+ * ---------------------------------------------------------------------------
+ * 알파를 늘린다
+ * ---------------------------------------------------------------------------
+ * 빛은 물체 **밖으로** 번져야 빛으로 보인다. 알파를 그대로 두면 실루엣 안에서만
+ * 밝아져서 그냥 노출을 올린 것과 구별이 안 된다. 그래서 이 조각은 번진 빛을
+ * premultiplied 색 한 장으로 만들어 원본 **뒤에** 깐다. 그만큼 알파가 커진다.
+ *
+ * 투명 배경 스티커에서 배경이 통째로 불투명해지는 일은 없다. 번진 빛의 알파는
+ * 원본 알파를 흐린 값이 상한이라, 원본이 투명한 먼 곳에서는 0 으로 수렴한다.
+ */
+const BLOOM_CHUNK = /* glsl */ `
+uniform float u_fx_bloom_radius;
+uniform int   u_fx_bloom_taps;
+uniform float u_fx_bloom_threshold;
+uniform float u_fx_bloom_amount;
+uniform float u_fx_bloom_spread;
+
+vec4 fx_bloom_tap(vec2 uv) {
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
+  return texture(u_image, uv);
+}
+
+/** 이 픽셀이 내놓는 빛. premultiplied 한 장으로 돌려준다. */
+vec4 fx_bloom_light(vec4 s) {
+  if (s.a <= 0.0) return vec4(0.0);
+  vec4 st = unpremul(s);
+  float lum = max(st.r, max(st.g, st.b));
+  float th = clamp(u_fx_bloom_threshold, 0.0, 0.99);
+  float over = max(lum - th, 0.0) / (1.0 - th);
+  // 알파를 곱해 둔다. 반투명한 곳은 그만큼 덜 빛난다.
+  return vec4(st.rgb * over, over) * s.a;
+}
+
+vec4 grade_fx_bloom(vec4 c, vec2 uv) {
+  int taps = clamp(u_fx_bloom_taps, 1, 48);
+  if (taps < 2 || u_fx_bloom_radius <= 0.0 || u_fx_bloom_amount <= 0.0) return c;
+
+  vec4 acc = fx_bloom_light(c);
+  float count = 1.0;
+  const float GOLDEN = 2.39996323;
+
+  for (int i = 1; i < 48; i++) {
+    if (i >= taps) break;
+    float fi = float(i);
+    float r = sqrt(fi / float(taps - 1)) * u_fx_bloom_radius;
+    float a = fi * GOLDEN;
+    acc += fx_bloom_light(fx_bloom_tap(uv + vec2(cos(a), sin(a)) * r / u_resolution));
+    count += 1.0;
+  }
+  acc /= count;
+
+  vec3 lit = acc.rgb * u_fx_bloom_amount;
+  vec4 s = unpremul(c);
+  // 안쪽은 스크린으로 밝힌다. 더하기로 하면 흰 부분이 곧바로 타 버린다.
+  s.rgb = 1.0 - (1.0 - s.rgb) * (1.0 - clamp(lit, 0.0, 1.0));
+  vec4 front = premul(vec4(clamp(s.rgb, 0.0, 1.0), c.a));
+
+  // 바깥으로 번지는 몫. 0 이면 실루엣 안에서만 밝아진다.
+  vec4 halo = acc * (u_fx_bloom_amount * clamp(u_fx_bloom_spread, 0.0, 1.0));
+  return front + halo * (1.0 - front.a);
+}
+`
+
+const bloom: EffectDef = {
+  id: 'fx.bloom',
+  label: '번지는 빛',
+  hint: '밝은 부분만 번지게 한다. 형태는 또렷한 채로 주위가 환해진다.',
+  stage: 'C',
+  cost: 'low',
+  preservesAlpha: false,
+  // 이웃 픽셀을 읽는다. 융합하면 조각 순서가 어긋난다 (파일 머리주석).
+  fusable: false,
+  fn: 'grade_fx_bloom',
+  chunk: BLOOM_CHUNK,
+  params: [
+    { key: 'radius', label: '번지는 반경', type: 'number', min: 0, max: 80, step: 0.5, unit: 'px', default: 14 },
+    { key: 'threshold', label: '문턱 밝기', type: 'number', min: 0, max: 0.99, step: 0.01, default: 0.6 },
+    { key: 'amount', label: '세기', type: 'number', min: 0, max: 2, step: 0.01, default: 0.9 },
+    { key: 'spread', label: '바깥으로 번지기', type: 'number', min: 0, max: 1, step: 0.01, default: 1 },
+    { key: 'taps', label: '표본 수', type: 'number', min: 8, max: 48, step: 1, default: 24 },
+  ],
+  uniforms: [
+    { name: 'u_fx_bloom_radius', type: 'float', value: (c) => pv(c, 'radius', 14) },
+    {
+      name: 'u_fx_bloom_taps',
+      type: 'int',
+      value: (c) => Math.min(48, Math.max(2, Math.round(pv(c, 'taps', 24)))),
+    },
+    { name: 'u_fx_bloom_threshold', type: 'float', value: (c) => pv(c, 'threshold', 0.6) },
+    { name: 'u_fx_bloom_amount', type: 'float', value: (c) => pv(c, 'amount', 0.9) },
+    { name: 'u_fx_bloom_spread', type: 'float', value: (c) => pv(c, 'spread', 1) },
+  ],
+}
+
 export const FINISH_EFFECTS: EffectDef[] = [
   grade,
   gradient,
   blur,
+  bloom,
+  shine,
+  trail,
   lensChroma,
   dirBlur,
   halftone,

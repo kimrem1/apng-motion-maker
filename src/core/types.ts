@@ -399,6 +399,21 @@ export type RevealMode =
   | 'clock'
   /** 가로 칸마다 따로 열린다. 블라인드다. */
   | 'blinds'
+  /**
+   * 얼룩이 번지듯 불규칙하게 열린다.
+   *
+   * 가운데에서 자라는 것은 iris 와 같고, 경계선이 매끈한 원이 아니라 노이즈로
+   * 들쭉날쭉하다는 점만 다르다. `slats` 가 얼룩의 잘기를 정한다.
+   */
+  | 'ink'
+  /**
+   * 아래 가운데를 축으로 부채가 펼쳐진다.
+   *
+   * clock 과 다르다. clock 은 **한가운데**를 돌고 한 바퀴(360도)를 채우지만,
+   * 이쪽은 **아래 변의 가운데**를 돌고 반 바퀴(180도)만 쓴다. 부채와 아치는
+   * 손잡이가 그림의 한가운데에 있지 않다.
+   */
+  | 'fan'
 
 export const REVEAL_MODE_LIST: RevealMode[] = [
   'none',
@@ -411,6 +426,8 @@ export const REVEAL_MODE_LIST: RevealMode[] = [
   'iris',
   'clock',
   'blinds',
+  'ink',
+  'fan',
 ]
 
 export const REVEAL_SLATS_MIN = 2
@@ -520,6 +537,16 @@ export type CharInMode =
   | 'typewriter'
   | 'fade'
   | 'wave'
+  /**
+   * 자리에 앉은 채 **다른 글자로 굴러가다** 제 글자로 확정된다.
+   *
+   * 굴릴 글자는 새로 굽지 않는다. **같은 글 상자 안의 다른 글자 칸을 빌려 그린다.**
+   * 그래서 아틀라스가 커지지 않고, 한글은 한글로 라틴은 라틴으로 굴러간다. 굴릴
+   * 후보를 따로 정해 두면 어느 언어에서는 맞고 어느 언어에서는 남의 글자가 섞인다.
+   *
+   * 글자가 한 개뿐이면 빌릴 칸이 없다. 그래서 오브제(이미지 / 도형)에서는 감춘다.
+   */
+  | 'scramble'
 
 /** u_charMode 로 넘기는 순서이자 UI 목록의 순서다. */
 export const CHAR_IN_MODE_LIST: readonly CharInMode[] = [
@@ -539,6 +566,7 @@ export const CHAR_IN_MODE_LIST: readonly CharInMode[] = [
   'typewriter',
   'fade',
   'wave',
+  'scramble',
 ]
 
 export type CharOrder = 'forward' | 'backward' | 'center' | 'edges' | 'random'
@@ -815,6 +843,15 @@ export interface PresetRef {
   ownsPerspective?: boolean
   /** 이 프리셋이 레이어의 글자 등장을 심었는가. ownsReveal 과 같은 자리다. */
   ownsCharAnim?: boolean
+  /**
+   * 이 프리셋이 레이어의 기준점을 옮겼는가. ownsReveal 과 같은 자리다.
+   *
+   * 경첩 프리셋만 쓴다. 문이 도는 축은 문 한복판이 아니라 경첩이 달린 변이라,
+   * 기준점을 옮기지 않고서는 표현할 방법이 없다. 회전에 이동을 더해 흉내내는
+   * 방법은 원근이 걸리면 성립하지 않는다. 원근 나눗셈 뒤의 자리는 평행이동으로
+   * 되돌릴 수 없기 때문이다.
+   */
+  ownsAnchor?: boolean
   /**
    * 속도 1 일 때의 재생 시간(초). 속도 노브의 기준선이다.
    *

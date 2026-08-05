@@ -23,15 +23,21 @@ import {
   revealIsActive,
 } from '@/core/reveal.ts'
 import { SHAPE_KIND_LABELS, createShapeSpec, normalizeShapeSpec } from '@/core/shape.ts'
-import { SHAPE_KIND_CODE } from '@/core/renderer/shaders/shape.ts'
+import { SHAPE_FS, SHAPE_KIND_CODE } from '@/core/renderer/shaders/shape.ts'
 import { REVEAL_GLSL } from '@/core/renderer/shaders/reveal.ts'
 import { LAYER_FS, LAYER_VS } from '@/core/renderer/shaders/layer.ts'
+import { TEXT_FS } from '@/core/renderer/shaders/text.ts'
 import { buildLayerMatrix, identityTransform, mat3Perspective, type Mat3 } from '@/core/transform.ts'
 import { createEmptyProject, createShapeLayer } from '@/core/factory.ts'
 import { requiredScaleAt } from '@/core/overscan.ts'
 import { migrateProject } from '@/project/migrate.ts'
 import { MOTION_PRESET_BY_ID, applyPreset } from '@/motions/registry.ts'
-import { mergePresetPerspective, mergePresetReveal, ownershipOf } from '@/motions/merge.ts'
+import {
+  mergePresetAnchor,
+  mergePresetPerspective,
+  mergePresetReveal,
+  ownershipOf,
+} from '@/motions/merge.ts'
 import { SHAPE_SCENES, buildShapeScene, createSceneContext } from '@/shapes/registry.ts'
 import { checkLoopSeam } from '@/core/loopSeam.ts'
 import type { EmitContext } from '@/motions/types.ts'
@@ -85,6 +91,33 @@ describe('가리기 값 규칙', () => {
     // 곱하는 자리를 놓치면 인스펙터에서는 값이 바뀌는데 화면은 그대로다.
     expect(LAYER_FS).toContain('mmRevealMask(v_uv)')
     expect(LAYER_FS).toContain('u_revealMode')
+  })
+
+  it('공유 조각이 남의 이름을 두 번 선언하지 않는다', () => {
+    /*
+     * REVEAL_GLSL 은 **세 셰이더에 통째로 삽입된다.** 그 안에서 선언한 이름이 받는
+     * 쪽에도 있으면 GLSL 은 재정의 오류로 컴파일을 거부하고, 그 레이어 종류가
+     * 통째로 안 그려진다. 화면이 비는 것 말고는 아무 신호가 없어 원인을 찾기 어렵다.
+     *
+     * 실제로 부채 모양을 넣으며 MM_PI 를 선언했다가 도형 셰이더와 부딪혔다.
+     * 타입 검사도 단위 테스트도 잡지 못하고 브라우저에서만 드러났다.
+     */
+    const declarations = (src: string): string[] => {
+      const out: string[] = []
+      // `const float NAME =` 와 `float NAME(` 두 형태만 본다. 유니폼은 접두사로 갈린다.
+      for (const m of src.matchAll(/^\s*const\s+\w+\s+(\w+)\s*=/gm)) out.push(m[1]!)
+      for (const m of src.matchAll(/^\s*\w+\s+(\w+)\s*\([^)]*\)\s*\{/gm)) out.push(m[1]!)
+      return out
+    }
+    for (const [name, src] of [
+      ['도형', SHAPE_FS],
+      ['이미지', LAYER_FS],
+      ['글자', TEXT_FS],
+    ] as const) {
+      const all = declarations(src)
+      const dupes = all.filter((id, i) => all.indexOf(id) !== i)
+      expect(dupes, `${name} 셰이더에서 이름이 겹친다`).toEqual([])
+    }
   })
 })
 
@@ -318,6 +351,99 @@ describe('프리셋이 내는 가리기와 원근', () => {
   it('정점 셰이더가 원근 나눗셈을 한다', () => {
     // 이 한 줄이 빠지면 호모그래피가 어파인처럼 그려져 사다리꼴이 안 나온다.
     expect(LAYER_VS).toContain('vec4(p.xy, 0.0, p.z)')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 경첩 (기준점 소유권)
+// ---------------------------------------------------------------------------
+
+describe('경첩 프리셋이 옮기는 기준점', () => {
+  const ctx = (params: Record<string, string | number> = {}): EmitContext => ({
+    durationFrames: 30,
+    fps: 25,
+    canvasW: 512,
+    canvasH: 512,
+    strength: 0.5,
+    speed: 1,
+    params,
+    seed: 1,
+  })
+
+  it('고정되는 변마다 기준점과 회전축이 짝지어진다', () => {
+    /*
+     * 축이 어긋나면 "위쪽이 고정" 을 골랐는데 문이 옆으로 돈다. 두 값은 반드시
+     * 함께 정해져야 한다. 위아래 경첩은 가로축(rotateX), 좌우 경첩은 세로축(rotateY)이다.
+     */
+    const table: [string, [number, number], 'rotateX' | 'rotateY'][] = [
+      ['top', [0.5, 0], 'rotateX'],
+      ['bottom', [0.5, 1], 'rotateX'],
+      ['left', [0, 0.5], 'rotateY'],
+      ['right', [1, 0.5], 'rotateY'],
+    ]
+    for (const [hinge, anchor, prop] of table) {
+      const e = applyPreset(MOTION_PRESET_BY_ID.get('flip3d.hingeIn')!, ctx({ hinge }))
+      expect(e.anchor, hinge).toEqual(anchor)
+      expect(e.tracks.some((t) => t.prop === prop), hinge).toBe(true)
+      // 다른 축은 건드리지 않는다. 둘 다 돌면 문이 아니라 종이비행기가 된다.
+      const other = prop === 'rotateX' ? 'rotateY' : 'rotateX'
+      expect(e.tracks.some((t) => t.prop === other), hinge).toBe(false)
+    }
+  })
+
+  it('회전은 언제나 0 으로 끝난다', () => {
+    // 끝값이 0 이 아니면 문이 반쯤 열린 채로 굳는다. 세기와 무관해야 한다.
+    for (const strength of [0, 0.5, 1]) {
+      const e = applyPreset(MOTION_PRESET_BY_ID.get('flip3d.hingeIn')!, { ...ctx(), strength })
+      const rot = e.tracks.find((t) => t.prop === 'rotateX' || t.prop === 'rotateY')!
+      expect(rot.keys[rot.keys.length - 1]!.v).toBe(0)
+      expect(Math.abs(rot.keys[0]!.v)).toBeGreaterThan(0)
+    }
+  })
+
+  it('기준점을 쓰지 않는 프리셋은 값을 내지 않는다', () => {
+    // 값이 없으면 호출부가 한가운데로 되돌린다. 여기서 내면 앞 프리셋의 축이 남는다.
+    for (const id of ['zoom.pop', 'flip3d.cardIn', 'reveal.wipeIn', 'reveal.inkIn']) {
+      expect(applyPreset(MOTION_PRESET_BY_ID.get(id)!, ctx()).anchor, id).toBeUndefined()
+    }
+  })
+
+  it('부채는 아래 가운데를 축으로 삼는다', () => {
+    // 한복판을 기준으로 커지면 펼쳐지는 동안 손잡이가 위아래로 흔들린다.
+    const e = applyPreset(MOTION_PRESET_BY_ID.get('reveal.fanIn')!, ctx())
+    expect(e.anchor).toEqual([0.5, 1])
+    expect(e.reveal!.mode).toBe('fan')
+  })
+
+  it('앞 프리셋이 옮긴 기준점만 한가운데로 되돌린다', () => {
+    const mine = ownershipOf({ id: 'x', macro: { speed: 1, strength: 0.5 }, dirty: false, ownsAnchor: true })
+    const users = ownershipOf({ id: 'x', macro: { speed: 1, strength: 0.5 }, dirty: false })
+
+    // 새 값이 있으면 언제나 그 값이다.
+    expect(mergePresetAnchor([0.2, 0.3], [0.5, 0], mine)).toEqual([0.5, 0])
+    expect(mergePresetAnchor([0.2, 0.3], [0.5, 0], users)).toEqual([0.5, 0])
+    // 값이 없을 때만 갈린다. 앞 프리셋 것은 지우고 사용자가 옮긴 것은 살린다.
+    expect(mergePresetAnchor([0, 0.5], undefined, mine)).toEqual([0.5, 0.5])
+    expect(mergePresetAnchor([0.2, 0.3], undefined, users)).toEqual([0.2, 0.3])
+  })
+
+  it('소유 표식이 저장 왕복에서 살아남는다', () => {
+    /*
+     * 이 표식이 사라지면 프리셋이 옮긴 기준점이 "사용자가 옮긴 것" 으로 승격되어
+     * 다음 프리셋을 눌러도 축이 그대로 남는다. 문이 엉뚱한 변을 축으로 돈다.
+     */
+    const before = createEmptyProject()
+    before.presetRef = {
+      id: 'flip3d.hingeIn',
+      macro: { speed: 1, strength: 0.5 },
+      dirty: false,
+      ownsAnchor: true,
+      ownsCharAnim: true,
+    }
+    const { doc, warnings } = migrateProject(JSON.parse(JSON.stringify(before)) as unknown)
+    expect(warnings).toEqual([])
+    expect(doc.presetRef?.ownsAnchor).toBe(true)
+    expect(doc.presetRef?.ownsCharAnim).toBe(true)
   })
 })
 

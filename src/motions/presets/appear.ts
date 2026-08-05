@@ -1,7 +1,10 @@
 /**
  * A. 등장.
  *
- * 6종 중 combo.popGlitchIn 은 블록 깨짐 이펙트가 있어야 성립해서 combo.ts 에 있다.
+ * combo.popGlitchIn 은 블록 깨짐 이펙트가 있어야 성립해서 combo.ts 에 있다. 반대로
+ * combo.shineIn 은 여기 있다. 부품을 조합해 만드는 것이 아니라 트랙과 이펙트를 직접
+ * 쓰기 때문이다. 두 파일의 경계는 카테고리가 아니라 **만드는 방식**이다.
+ *
  * 등장 프리셋은 loopSafe 'once' 다 (이음새가 닫히지 않는다). 그래도 기본 제안은
  * 반복이다 (shared.ts 의 loopFor 참조). 반복하면 매 사이클 등장이 되풀이되는데,
  * 스티커에서는 그것이 기대 동작이고 '한 번만' 은 반복 라디오에서 고를 수 있다.
@@ -14,11 +17,14 @@ import {
   buildKeys,
   clamp,
   directionVector,
+  effectSeed,
   emitDuration,
   gainOf,
   lastFrame,
   loopFor,
+  makeEffect,
   num,
+  paramTrack,
   resolveSpan,
   str,
   track,
@@ -187,4 +193,113 @@ const zoomDownIn: MotionPreset = {
   },
 }
 
-export const APPEAR_PRESETS: MotionPreset[] = [zoomPop, fadeIn, slideInFade, zoomUpIn, zoomDownIn]
+/**
+ * 광택 내며 등장.
+ *
+ * ---------------------------------------------------------------------------
+ * 왜 빛줄기를 도형으로 얹지 않는가
+ * ---------------------------------------------------------------------------
+ * 도형 한 장을 위에 올리면 실루엣 **밖으로 삐져나간다.** 부채, 배지, 글자처럼 네모가
+ * 아닌 것에서 곧바로 티가 난다. 잘라내려면 클리핑을 걸어야 하고 그러면 레이어가 두
+ * 장이 된다. 이펙트는 알파를 손대지 않으므로 그려진 자리에만 광택이 앉는다
+ * (effects/atoms/finish.ts 의 fx.shine).
+ *
+ * ---------------------------------------------------------------------------
+ * 왜 id 가 combo. 로 시작하는가
+ * ---------------------------------------------------------------------------
+ * 이 프리셋은 등장 트랙 **과** 이펙트를 함께 낸다. A~E 카테고리에서 이펙트까지 내는
+ * 프리셋은 combo.popGlitchIn 부터 이 이름 규칙을 쓴다. 카테고리는 사용자가 찾는
+ * 자리(등장)이고, id 접두사는 "본체가 트랙만이 아니다" 는 표식이다.
+ *
+ * 띠의 위치는 레이어 트랙으로 만들 수 없는 값이라 **이펙트 파라미터에** 건다.
+ * paramTrack 이 그 목적으로 있는 헬퍼다.
+ */
+const shineIn: MotionPreset = {
+  id: 'combo.shineIn',
+  label: '광택 내며 등장',
+  hint: '떠오르면서 밝은 띠가 사선으로 한 번 훑고 지나간다. 그려진 자리 안에서만 빛난다.',
+  category: 'appear',
+  tags: ['scale', 'fade', 'fx'],
+  loopSafe: 'once',
+  // 시작 배율이 1 아래다. 캔버스를 채우는 레이어에서는 솔버가 그 여유를 메워야 한다.
+  overscan: 'required',
+  easy: true,
+  size: 'light',
+  defaultDurationMs: 1100,
+  params: [
+    { key: 'angle', label: '기울기', type: 'number', min: 0, max: 360, step: 5, unit: '도', default: 20 },
+    { key: 'width', label: '띠 폭', type: 'number', min: 5, max: 100, step: 5, unit: '%', default: 28 },
+    {
+      key: 'color',
+      label: '빛 색',
+      type: 'select',
+      options: [
+        { value: 'white', label: '흰빛' },
+        { value: 'warm', label: '금빛' },
+        { value: 'cool', label: '푸른빛' },
+      ],
+      default: 'white',
+    },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 1100)
+    const end = lastFrame(span, 'once')
+    const gain = gainOf(ctx.strength)
+
+    // 등장은 얌전하게 둔다. 눈이 가야 할 곳은 지나가는 빛이다.
+    const from = clamp(1 - 0.12 * gain, 0.6, 0.99)
+    const fadeEnd = clamp(Math.round(end * 0.35), 1, end)
+    /*
+     * 광택은 등장이 거의 끝난 뒤에 지나간다. 같이 시작하면 아직 반투명한 그림 위를
+     * 훑어서 빛이 보이지 않는다.
+     */
+    const shineFrom = clamp(Math.round(end * 0.35), 1, Math.max(1, end - 1))
+
+    const tracks = [
+      track('scale', 'ratio', buildKeys([{ f: 0, v: from }, { f: end, v: 1 }], 'easeOutBack')),
+      track('opacity', 'ratio', buildKeys([{ f: 0, v: 0 }, { f: fadeEnd, v: 1 }], 'easeOutQuad')),
+    ]
+
+    const tint = str(ctx.params, 'color', 'white')
+    const color = tint === 'warm' ? 0xffe6a8 : tint === 'cool' ? 0xcfe8ff : 0xffffff
+
+    const effects = [
+      makeEffect({
+        id: 'shineIn',
+        type: 'fx.shine',
+        seed: effectSeed(ctx, 'combo.shineIn', 'band'),
+        params: {
+          color,
+          angle: clamp(num(ctx.params, 'angle', 20), 0, 360),
+          width: clamp(num(ctx.params, 'width', 28), 5, 100) / 100,
+          sharp: 2,
+          // 세기는 밝기에 건다. 위치를 세기로 줄이면 띠가 화면 밖에서 멈춘다.
+          amount: clamp(0.5 + 0.45 * gain, 0.1, 1),
+          pos: paramTrack(
+            'shinePos',
+            buildKeys(
+              [{ f: 0, v: 0 }, { f: shineFrom, v: 0 }, { f: end, v: 1 }],
+              'easeInOutSine',
+            ),
+          ),
+        },
+      }),
+    ]
+
+    return {
+      tracks,
+      effects,
+      durationFrames: emitDuration(span, tracks),
+      suggestedLoop: loopFor('once'),
+    }
+  },
+}
+
+export const APPEAR_PRESETS: MotionPreset[] = [
+  zoomPop,
+  fadeIn,
+  slideInFade,
+  zoomUpIn,
+  zoomDownIn,
+  shineIn,
+]

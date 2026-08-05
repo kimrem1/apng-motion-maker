@@ -301,6 +301,8 @@ export function applyPresetToDocument(presetId: string): PresetApplyReport {
     reveal: result.reveal,
     charAnim: result.charAnim,
     perspective: result.perspective,
+    // 기준점도 같은 규칙이다. 값이 없으면 "한가운데로 되돌리라" 는 뜻이다.
+    anchor: result.anchor,
     macro: { speed: presetUi.speed, strength: presetUi.strength },
   })
 

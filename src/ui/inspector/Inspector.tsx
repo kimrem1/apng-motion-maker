@@ -21,7 +21,7 @@ import {
   type LoopMode,
   type RevealMode,
 } from '@/core/types.ts'
-import { REVEAL_LIMITS, REVEAL_MODE_LABELS } from '@/core/reveal.ts'
+import { REVEAL_LIMITS, REVEAL_MODE_LABELS, REVEAL_SLATS_LABELS } from '@/core/reveal.ts'
 import { isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
 import { AnimateToggle } from '@/ui/inspector/AnimateToggle.tsx'
 import { EffectStack } from '@/ui/effects/EffectStack.tsx'
@@ -526,15 +526,21 @@ function RevealSection({ layer }: { layer: Layer }) {
               onChange={(v) => setLayerReveal(layer.id, { softness: clamp(v / 100, 0, 1) })}
             />
 
-            {mode === 'blinds' ? (
+            {/*
+              슬랫 값 하나가 모양에 따라 다른 뜻을 갖는다. 블라인드에서는 칸 수이고
+              잉크에서는 얼룩의 잘기다. 이름표만 갈아 끼우고 값은 한 벌로 둔다.
+              값을 나누면 모양을 갈아탈 때마다 한쪽이 기본값으로 되돌아간다.
+            */}
+            {REVEAL_SLATS_LABELS[mode] ? (
               <NumberField
-                label="칸 수"
+                label={REVEAL_SLATS_LABELS[mode]!}
                 value={spec?.slats ?? 8}
                 min={REVEAL_LIMITS.slats.min}
                 max={REVEAL_LIMITS.slats.max}
                 step={1}
-                suffix="칸"
-                ariaLabel="블라인드 칸 수"
+                suffix={mode === 'blinds' ? '칸' : ''}
+                hint={mode === 'ink' ? '클수록 얼룩이 잘게 갈라집니다.' : undefined}
+                ariaLabel={mode === 'blinds' ? '블라인드 칸 수' : '잉크 얼룩 잘기'}
                 onChange={(v) => setLayerReveal(layer.id, { slats: Math.round(v) })}
               />
             ) : null}

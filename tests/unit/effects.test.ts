@@ -539,3 +539,73 @@ describe('노이즈 아틀라스', () => {
     expect(neighbour).toBeLessThan(random * 0.5)
   })
 })
+
+// ---------------------------------------------------------------------------
+// 빛과 잔상 세 종
+// ---------------------------------------------------------------------------
+
+/**
+ * 셋 다 "밝기나 사본을 더하는" 일을 하는데, 알파를 대하는 태도가 셋 다 다르다.
+ * 그 차이가 곧 이 이펙트들의 정체라 여기서 못박는다.
+ *
+ *   광택   : 알파를 **건드리지 않는다.** 그려진 자리 안에서만 빛난다.
+ *   번지는 빛 / 잔상 : 알파를 **늘린다.** 실루엣 밖으로 나가는 것이 목적이다.
+ */
+describe('광택 / 번지는 빛 / 잔상', () => {
+  const def = (id: string): EffectDef => EFFECT_BY_ID.get(id)!
+
+  it('세 종이 카탈로그에 있다', () => {
+    for (const id of ['fx.shine', 'fx.bloom', 'fx.trail']) {
+      expect(def(id), id).toBeDefined()
+      expect(def(id).stage, id).toBe('C')
+    }
+  })
+
+  it('광택만 알파를 그대로 둔다', () => {
+    /*
+     * 광택을 도형으로 얹지 않고 이펙트로 만든 이유가 이 한 줄이다. 알파를 손대면
+     * 부채나 글자처럼 네모가 아닌 것 위에서 빛이 실루엣 밖으로 삐져나간다.
+     */
+    expect(def('fx.shine').preservesAlpha).toBe(true)
+    expect(def('fx.bloom').preservesAlpha).toBe(false)
+    expect(def('fx.trail').preservesAlpha).toBe(false)
+  })
+
+  it('이웃을 읽는 둘은 융합하지 않는다', () => {
+    // 융합하면 앞 조각의 결과가 아니라 스테이지 입력을 읽어 순서가 어긋난다.
+    expect(def('fx.bloom').fusable).toBe(false)
+    expect(def('fx.trail').fusable).toBe(false)
+    // 광택은 자기 픽셀만 본다. 융합해도 된다.
+    expect(def('fx.shine').fusable ?? true).toBe(true)
+  })
+
+  it('광택의 위치가 양끝에서 화면 밖이다', () => {
+    /*
+     * 0..1 을 그대로 중심에 쓰면 위치 0 에서 이미 띠의 절반이 들어와 있다.
+     * 이동 구간을 띠 폭만큼 양쪽으로 늘리는 이 한 줄이 "지나갔다" 를 만든다.
+     */
+    expect(def('fx.shine').chunk).toContain('mix(-half_w, 1.0 + half_w')
+  })
+
+  it('번지는 빛은 문턱을 넘은 밝기만 뽑는다', () => {
+    // 문턱이 없으면 그냥 전체가 흐려진다. 그것은 이미 부드러운 흐림이 한다.
+    expect(def('fx.bloom').chunk).toContain('u_fx_bloom_threshold')
+    expect(def('fx.bloom').chunk).toContain('max(lum - th, 0.0)')
+  })
+
+  it('잔상은 원본을 맨 앞에 둔다', () => {
+    // 사본을 위에 얹으면 원본이 자기 잔상에 가려 흐려진다.
+    expect(def('fx.trail').chunk).toContain('return c + acc * (1.0 - c.a)')
+  })
+
+  it('세 종이 모두 파라미터 기본값을 범위 안에 갖는다', () => {
+    for (const id of ['fx.shine', 'fx.bloom', 'fx.trail']) {
+      for (const p of def(id).params ?? []) {
+        if (p.type !== 'number') continue
+        if (typeof p.default !== 'number') continue
+        if (p.min !== undefined) expect(p.default, `${id}.${p.key}`).toBeGreaterThanOrEqual(p.min)
+        if (p.max !== undefined) expect(p.default, `${id}.${p.key}`).toBeLessThanOrEqual(p.max)
+      }
+    }
+  })
+})

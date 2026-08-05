@@ -45,7 +45,12 @@ export interface PresetOwnership {
   perspective: boolean
   /** 지금 레이어의 글자 등장을 앞 프리셋이 심었는가. */
   charAnim: boolean
+  /** 지금 레이어의 기준점을 앞 프리셋이 옮겼는가. */
+  anchor: boolean
 }
+
+/** 기준점의 기본값. 프리셋이 옮긴 것을 걷어낼 때 이 자리로 되돌린다. */
+export const ANCHOR_DEFAULT: readonly [number, number] = [0.5, 0.5]
 
 /** presetRef 가 없으면(프리셋을 한 번도 안 썼으면) 아무것도 소유하지 않는다. */
 export function ownershipOf(ref: PresetRef | undefined): PresetOwnership {
@@ -55,6 +60,7 @@ export function ownershipOf(ref: PresetRef | undefined): PresetOwnership {
     reveal: ref?.ownsReveal === true,
     perspective: ref?.ownsPerspective === true,
     charAnim: ref?.ownsCharAnim === true,
+    anchor: ref?.ownsAnchor === true,
   }
 }
 
@@ -97,6 +103,23 @@ export function mergePresetCharAnim(
 ): CharAnimSpec | undefined {
   if (emitted && emitted.mode !== 'none') return emitted
   return owned.charAnim ? undefined : existing
+}
+
+/**
+ * 기준점 병합.
+ *
+ * 가리기 / 원근과 같은 규칙인데 **되돌릴 자리가 undefined 가 아니라 한가운데**다.
+ * 기준점은 없을 수 있는 값이 아니라 언제나 두 숫자를 갖는 필드이기 때문이다.
+ * 앞 프리셋이 옮겨 둔 것을 걷어낼 때는 기본값으로 되돌린다.
+ */
+export function mergePresetAnchor(
+  existing: readonly [number, number],
+  emitted: readonly [number, number] | undefined,
+  owned: PresetOwnership,
+): [number, number] {
+  if (emitted) return [emitted[0], emitted[1]]
+  if (owned.anchor) return [ANCHOR_DEFAULT[0], ANCHOR_DEFAULT[1]]
+  return [existing[0], existing[1]]
 }
 
 /** 원근 거리도 같은 규칙이다. */

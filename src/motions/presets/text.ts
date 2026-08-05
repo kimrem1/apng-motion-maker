@@ -442,6 +442,33 @@ const wave = textPreset({
   textOnly: true,
 })
 
+/**
+ * 글자 굴리며 확정.
+ *
+ * 자리도 크기도 바뀌지 않는다. **그리는 글자만** 바뀐다. 굴릴 후보는 같은 글 상자
+ * 안의 다른 글자라, 한글은 한글로 라틴은 라틴으로 굴러간다 (core/charAnim.ts).
+ *
+ * 시간차가 크다. 굴리기는 왼쪽부터 한 글자씩 **확정되는** 것이 보여야 성립한다.
+ * 전부 동시에 멎으면 "굴렸다" 가 아니라 "한 번 깜빡였다" 로 읽힌다.
+ *
+ * 흔들림을 0 으로 둔다. 확정 순서가 앞뒤로 뒤바뀌면 눈이 한 글자를 놓친다.
+ */
+const scramble = textPreset({
+  id: 'text.scramble',
+  label: '글자 굴리며 확정',
+  hint: '다른 글자로 빠르게 굴러가다 제 글자로 하나씩 멎는다. 글자가 두 개 이상이어야 한다.',
+  mode: 'scramble',
+  // 등속이어야 굴러가는 리듬이 일정하다. 확정되는 순간은 시간차가 만든다.
+  ease: 'linear',
+  jitter: 0,
+  durationMs: 1100,
+  distance: 0,
+  stagger: 0.7,
+  fade: false,
+  // 오브제는 빌릴 칸이 자기 하나뿐이라 아무 일도 일어나지 않는다.
+  textOnly: true,
+})
+
 export const TEXT_PRESETS: MotionPreset[] = [
   slideLeft,
   slideRight,
@@ -461,4 +488,5 @@ export const TEXT_PRESETS: MotionPreset[] = [
   spin,
   flip,
   wave,
+  scramble,
 ]

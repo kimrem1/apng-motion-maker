@@ -752,13 +752,192 @@ const blindsBlink: MotionPreset = {
   },
 }
 
+/**
+ * 잉크 번지며 등장.
+ *
+ * 원이 커지는 것(irisIn)과 뼈대가 같고 경계만 들쭉날쭉하다. 그래서 별도 트랙 규칙이
+ * 필요 없다. 얼룩 잘기는 `slats` 자리에 실린다 (core/reveal.ts REVEAL_SLATS_LABELS).
+ *
+ * 경계 흐림 기본값이 다른 걷어내기보다 크다. 잉크는 종이에 스며드는 것이라 칼로
+ * 그은 경계가 나오면 얼룩이 아니라 조각난 도형으로 보인다.
+ */
+const inkIn: MotionPreset = {
+  id: 'reveal.inkIn',
+  label: '잉크 번지며 등장',
+  hint: '가운데에서 얼룩이 번지듯 불규칙하게 드러난다.',
+  category: 'appear',
+  tags: ['reveal'],
+  loopSafe: 'once',
+  overscan: 'auto',
+  easy: true,
+  size: 'light',
+  defaultDurationMs: 900,
+  params: [
+    { key: 'grain', label: '얼룩 잘기', type: 'number', min: 2, max: 40, step: 1, default: 12 },
+    { key: 'edge', label: '경계 흐림', type: 'number', min: 0, max: 80, step: 1, unit: '%', default: 22 },
+    { key: 'fade', label: '함께 또렷해지기', type: 'boolean', default: false },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 900)
+    const end = lastFrame(span, 'once')
+    const slats = Math.round(clamp(num(ctx.params, 'grain', 12), 2, 40))
+    const softness = edgeSoftness(ctx.strength, num(ctx.params, 'edge', 22) / 100)
+    const tracks = revealTracks(end, ctx.strength, bool(ctx.params, 'fade', false), false)
+    return {
+      tracks,
+      reveal: createRevealSpec('ink', { slats, softness }),
+      durationFrames: emitDuration(span, tracks),
+      suggestedLoop: loopFor('once'),
+    }
+  },
+}
+
+/**
+ * 부채 펼치며 등장.
+ *
+ * 아래 변의 가운데를 축으로 왼쪽에서 오른쪽으로 열린다. 부채, 아치, 무지개처럼
+ * **손잡이가 아래에 있는** 그림이 이 모양이다 (core/reveal.ts 의 fan 주석).
+ *
+ * 함께 걸리는 배율의 기준점을 아래 가운데로 옮긴다. 한복판을 기준으로 커지면
+ * 펼쳐지는 동안 손잡이가 위아래로 흔들려서, 부채를 쥔 손이 떨리는 것처럼 보인다.
+ */
+const fanIn: MotionPreset = {
+  id: 'reveal.fanIn',
+  label: '부채 펼치며 등장',
+  hint: '아래 가운데를 축으로 한쪽에서 반대쪽으로 펼쳐진다. 부채와 아치에 어울린다.',
+  category: 'appear',
+  tags: ['reveal'],
+  loopSafe: 'once',
+  overscan: 'auto',
+  easy: true,
+  size: 'light',
+  defaultDurationMs: 850,
+  params: [
+    { key: 'edge', label: '경계 흐림', type: 'number', min: 0, max: 60, step: 1, unit: '%', default: 4 },
+    { key: 'reverse', label: '반대쪽부터', type: 'boolean', default: false },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 850)
+    const end = lastFrame(span, 'once')
+    const softness = edgeSoftness(ctx.strength, num(ctx.params, 'edge', 4) / 100)
+    const tracks = revealTracks(end, ctx.strength, false, false)
+    return {
+      tracks,
+      reveal: createRevealSpec('fan', {
+        softness,
+        invert: bool(ctx.params, 'reverse', false),
+      }),
+      anchor: [0.5, 1],
+      durationFrames: emitDuration(span, tracks),
+      suggestedLoop: loopFor('once'),
+    }
+  },
+}
+
+/** 경첩이 달린 변. 값 이름은 "어디가 고정되는가" 다. */
+const HINGE_OPTIONS = [
+  { value: 'top', label: '위쪽' },
+  { value: 'bottom', label: '아래쪽' },
+  { value: 'left', label: '왼쪽' },
+  { value: 'right', label: '오른쪽' },
+]
+
+/**
+ * 경첩이 달린 변에서 기준점과 회전축을 뽑는다.
+ *
+ * rotateX 는 **가로축**을 중심으로 돌므로 위아래 경첩이 쓰고, rotateY 는 세로축이라
+ * 좌우 경첩이 쓴다. 부호는 "열리는 쪽이 앞으로 나온다" 로 맞춘다.
+ */
+function hingeOf(raw: string): {
+  anchor: [number, number]
+  prop: 'rotateX' | 'rotateY'
+  sign: number
+} {
+  switch (raw) {
+    case 'bottom':
+      return { anchor: [0.5, 1], prop: 'rotateX', sign: -1 }
+    case 'left':
+      return { anchor: [0, 0.5], prop: 'rotateY', sign: -1 }
+    case 'right':
+      return { anchor: [1, 0.5], prop: 'rotateY', sign: 1 }
+    case 'top':
+    default:
+      return { anchor: [0.5, 0], prop: 'rotateX', sign: 1 }
+  }
+}
+
+/**
+ * 경첩 열기.
+ *
+ * ---------------------------------------------------------------------------
+ * '종이 펼치며 등장' 과 무엇이 다른가
+ * ---------------------------------------------------------------------------
+ * 저쪽은 **한복판**을 축으로 눕혔다 세우고, 어긋나는 자리를 세로 이동으로 어림해
+ * 메운다. 이쪽은 기준점을 경첩이 달린 변으로 옮겨 **그 변이 한 픽셀도 움직이지
+ * 않는다.** 봉투 뚜껑, 여닫이문, 병풍처럼 경첩이 눈에 보이는 그림에서는 이 차이가
+ * 곧바로 드러난다. 원근이 걸리면 이동으로는 메울 수 없다. 각 점의 w 가 달라서
+ * 원근 나눗셈 뒤에 어긋난 자리를 평행이동 하나로 되돌릴 수 없기 때문이다.
+ *
+ * 기준점을 프리셋이 옮긴다. 걷어낼 때 한가운데로 되돌아가는 규칙은
+ * motions/merge.ts 의 mergePresetAnchor 가 정한다.
+ */
+const hingeIn: MotionPreset = {
+  id: 'flip3d.hingeIn',
+  label: '경첩 열리며 등장',
+  hint: '한쪽 변이 고정된 채 문처럼 젖혀져 열린다. 봉투 뚜껑과 여닫이문이 이 모양이다.',
+  category: 'appear',
+  tags: ['rotate3d'],
+  loopSafe: 'once',
+  overscan: 'allowEmpty',
+  easy: true,
+  size: 'normal',
+  defaultDurationMs: 900,
+  params: [
+    { key: 'hinge', label: '고정되는 변', type: 'select', options: HINGE_OPTIONS, default: 'top' },
+    { key: 'angle', label: '젖혀지는 각도', type: 'number', min: 30, max: 120, step: 5, unit: '도', default: 100 },
+    { key: 'depth', label: '원근 세기', type: 'number', min: 1, max: 8, step: 0.5, default: 3.5 },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 900)
+    const end = lastFrame(span, 'once')
+    const hinge = hingeOf(str(ctx.params, 'hinge', 'top'))
+    /*
+     * 90 도를 넘겨 둔다. 정확히 90 도에서 시작하면 첫 프레임이 완전히 사라져
+     * "안 나온다" 로 읽히고, 90 도에서 멈추면 문이 반쯤 열린 채 굳는다.
+     * 넘긴 만큼 뒷면이 보이는 구간이 생기는데, 문이 젖혀지는 그림에서는 그것이 맞다.
+     */
+    const angle = clamp(num(ctx.params, 'angle', 100) * gainOf(ctx.strength), 20, 130)
+    const fadeEnd = clamp(Math.round(end * 0.35), 1, end)
+
+    const tracks = [
+      track(
+        hinge.prop,
+        'deg',
+        buildKeys([{ f: 0, v: hinge.sign * angle }, { f: end, v: 0 }], 'easeOutQuint'),
+      ),
+      track('opacity', 'ratio', buildKeys([{ f: 0, v: 0 }, { f: fadeEnd, v: 1 }], 'easeOutCirc')),
+    ]
+    return {
+      tracks,
+      anchor: hinge.anchor,
+      // 값이 작을수록 원근이 세다. 노브는 반대로 읽히는 편이 자연스러우므로 뒤집는다.
+      perspective: clamp(9.5 - num(ctx.params, 'depth', 3.5), 1.5, 8.5),
+      durationFrames: emitDuration(span, tracks),
+      suggestedLoop: loopFor('once'),
+    }
+  },
+}
+
 export const REVEAL_PRESETS: MotionPreset[] = [
   wipeIn,
   doorIn,
   irisIn,
   blindsIn,
+  inkIn,
+  fanIn,
   cardIn,
   unfoldIn,
+  hingeIn,
   wipeOut,
   doorOut,
   irisOut,

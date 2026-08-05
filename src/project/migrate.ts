@@ -855,6 +855,10 @@ function normalizePresetRef(raw: unknown): MotionProject['presetRef'] | undefine
   else delete ref.ownsReveal
   if (raw.ownsPerspective === true) ref.ownsPerspective = true
   else delete ref.ownsPerspective
+  if (raw.ownsCharAnim === true) ref.ownsCharAnim = true
+  else delete ref.ownsCharAnim
+  if (raw.ownsAnchor === true) ref.ownsAnchor = true
+  else delete ref.ownsAnchor
 
   if (Array.isArray(raw.props)) {
     ref.props = raw.props.filter(

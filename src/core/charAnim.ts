@@ -37,6 +37,7 @@ export const CHAR_IN_LABELS: Record<CharInMode, string> = {
   typewriter: '타자기',
   fade: '차례로 밝아지기',
   wave: '물결치듯',
+  scramble: '글자 굴리며 확정',
 }
 
 /**
@@ -65,9 +66,12 @@ export function charInLabel(mode: CharInMode, forText: boolean): string {
  * 'sides' / 'updown' / 'wave' 는 **글자 순번이 홀수냐 짝수냐로** 방향을 가른다.
  * 오브제는 언제나 0 번이라 셋 다 한쪽 방향으로 고정되어, 이미 있는 항목과
  * 똑같이 움직이면서 이름만 다른 유령 선택지가 된다. 그래서 목록에서 뺀다.
+ *
+ * 'scramble' 은 다른 이유로 뺀다. 굴릴 글자를 **같은 글 상자에서 빌려 오는데**
+ * 오브제는 칸이 하나뿐이라 언제나 자기 자신을 빌린다. 아무 일도 일어나지 않는다.
  */
 export const CHAR_IN_OBJECT_MODES: readonly CharInMode[] = CHAR_IN_MODE_LIST.filter(
-  (mode) => mode !== 'sides' && mode !== 'updown' && mode !== 'wave',
+  (mode) => mode !== 'sides' && mode !== 'updown' && mode !== 'wave' && mode !== 'scramble',
 )
 
 export const CHAR_ORDER_LABELS: Record<CharOrder, string> = {
@@ -430,6 +434,18 @@ export function charTransformAt(
       // 이쪽만 위치와 같은 속도로 옅어진다. 그것이 이 모양의 전부다.
       opacity = rawT
       break
+    case 'scramble':
+      /*
+       * 움직이지 않는다. 자리에 앉은 채 **그리는 칸만** 바뀐다(charScrambleSlot).
+       * 여기서 위치까지 흔들면 두 가지가 한꺼번에 일어나 글자가 읽히지 않는다.
+       *
+       * 투명도도 건드리지 않는다. **처음부터 온 줄이 보이는 것이 이 모양의 전부다.**
+       * 다른 등장은 글자가 차례로 나타나지만, 굴리기는 처음부터 줄 전체가 아무 글자로
+       * 채워져 있다가 왼쪽부터 하나씩 제 글자로 확정된다. 시간차가 옅어짐에도 걸리면
+       * 줄이 왼쪽부터 자라나는 것으로 보여서, 굴리는 그림이 통째로 사라진다.
+       */
+      opacity = 1
+      break
     default:
       break
   }
@@ -447,6 +463,57 @@ export function charTransformAt(
     scaleX,
     opacity: clamp(opacity, 0, 1),
   }
+}
+
+/**
+ * 굴러가는 동안 몇 번 글자가 바뀌는가.
+ *
+ * 프레임이 아니라 **진행률을** 나눈다. 프레임 수로 세면 fps 를 바꾸거나 속도를
+ * 조절했을 때 내보낸 파일과 미리보기가 서로 다른 글자를 그린다. 진행률로 나누면
+ * 어떤 길이에서도 같은 순서로 굴러간다.
+ *
+ * 10 이면 25fps 0.4초 구간에서 한 글자가 한 컷씩 잡힌다. 더 잘게 나누면 사람 눈에는
+ * 그냥 뭉개진 얼룩이고, 더 성기면 굴러간다기보다 몇 번 깜빡인 것으로 보인다.
+ */
+const SCRAMBLE_STEPS = 10
+
+/**
+ * 이 글자가 지금 **몇 번 칸을 빌려** 그려야 하는가.
+ *
+ * -1 은 "빌리지 않는다" 는 뜻이다. 자기 칸을 그린다. 굴리기가 아닌 모든 모양과,
+ * 굴리기라도 이미 확정된 글자가 -1 이다.
+ *
+ * @param raw 곡선을 **안 먹인** 글자 진행률. 곡선을 먹이면 back / elastic 이 1 을
+ *            넘나들며 확정된 글자가 다시 굴러간다.
+ */
+export function charScrambleSlot(
+  spec: CharAnimSpec,
+  index: number,
+  count: number,
+  raw: number,
+): number {
+  if (spec.mode !== 'scramble') return -1
+  // 빌릴 칸이 자기 하나뿐이면 굴릴 것이 없다.
+  const n = Math.max(1, count)
+  if (n < 2) return -1
+  /*
+   * 진행률 0 도 굴린다. 0 은 "아직 시작 안 함" 이 아니라 **"아직 확정 안 됨"** 이다.
+   * 여기서 빼면 시간차 때문에 아직 차례가 안 온 뒷글자들이 처음부터 정답을 보여 준다.
+   * 굴리기의 값어치는 답이 마지막에 드러나는 데 있다.
+   */
+  if (raw >= 1) return -1
+
+  const step = Math.min(SCRAMBLE_STEPS - 1, Math.floor(raw * SCRAMBLE_STEPS))
+  // 글자마다 다른 순서로 굴러야 한다. 안 그러면 온 줄이 한 몸처럼 같이 바뀐다.
+  const h = hash01(spec.seed ^ 0x5bd1, index * 131 + step * 7919)
+  const pick = Math.min(n - 1, Math.floor(h * n))
+  /*
+   * 자기 자신은 빌리지 않는다.
+   *
+   * 빌리면 확정되기 전에 정답이 잠깐 보인다. 그 한 컷 때문에 "굴리다 맞췄다" 가
+   * 아니라 "깜빡였다" 로 읽힌다.
+   */
+  return pick === index ? (pick + 1) % n : pick
 }
 
 /**
