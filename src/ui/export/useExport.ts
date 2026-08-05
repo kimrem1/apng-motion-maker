@@ -3,7 +3,7 @@
  *
  * 렌더러 인스턴스는 여기서 만들지 않는다. WebGL2 컨텍스트가 두 개 생기면 에셋이
  * 두 배로 올라가고 브라우저 컨텍스트 상한에도 걸린다. 프리뷰가 등록해 둔 인스턴스를
- * rendererHandle 에서 **읽기만** 한다.
+ * rendererHandle 에서 읽기만 한다.
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -65,7 +65,7 @@ export interface StartOptions {
    * 내보내기 직전에 타임라인을 이 값으로 바꾼다 (목표 용량 계획, fps 낮추기).
    *
    * 왜 여기서 바꾸는가. 문서를 먼저 고치고 따로 start 를 부르면 두 동작 사이에
-   * 리렌더가 끼어들어 어떤 문서로 만든 결과인지가 흐려진다. 바꾸고 **바로 읽는**
+   * 리렌더가 끼어들어 어떤 문서로 만든 결과인지가 흐려진다. 바꾸고 바로 읽는
    * 순서를 한곳에 묶어야 sourceDoc 이 결과와 정확히 일치한다.
    */
   applyTimeline?: { fps: number; durationFrames: number }

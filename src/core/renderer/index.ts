@@ -55,7 +55,7 @@ const PROJECT_SEED = 0x4d4d
 /**
  * 가리기 유니폼. 이미지 경로와 도형 경로가 같은 함수를 부른다.
  *
- * 가리기가 없는 레이어에서도 `u_revealMode` 를 0 으로 **반드시 써야 한다.** 프로그램은
+ * 가리기가 없는 레이어에서도 `u_revealMode` 를 0 으로 반드시 써야 한다. 프로그램은
  * 캐시되고 유니폼은 프로그램에 남으므로, 앞 레이어가 켜 둔 값이 그대로 남아 다음
  * 레이어까지 잘려 나간다.
  */
@@ -188,7 +188,7 @@ export class Renderer {
     const subtreeEnd = subtreeEnds(layers)
     const groupByBase = new Map(groups.map((g) => [g.base, g]))
     /*
-     * 덩어리가 이미 그린 번호들. 폴더가 붙는 쪽이면 **그 안쪽까지** 전부 들어간다.
+     * 덩어리가 이미 그린 번호들. 폴더가 붙는 쪽이면 그 안쪽까지 전부 들어간다.
      * 빠뜨리면 폴더 식구가 잘린 그림 위에 한 번 더 그려져 마스크가 무의미해진다.
      */
     const clippedIndexes = new Set<number>()
@@ -314,7 +314,7 @@ export class Renderer {
       }
 
       /**
-       * from..to 를 한 장에 담는다. **폴더 하나를 통째로 그릴 때** 쓴다.
+       * from..to 를 한 장에 담는다. 폴더 하나를 통째로 그릴 때 쓴다.
        *
        * 안에서는 노멀 합성이다. 폴더 식구의 혼합 모드를 살리려면 배경 버퍼를 한 장
        * 더 떠야 하는데, 자르기에 들어간 폴더 안에서 그 조합은 거의 나오지 않는다.
@@ -371,11 +371,11 @@ export class Renderer {
            *   3. 위에 붙는 레이어를 하나씩 그려 마스크로 깎아 덩어리에 얹는다.
            *   4. 덩어리를 밑판의 혼합 모드로 누산기에 얹는다.
            *
-           * 밑판도 붙는 쪽도 **폴더일 수 있다.** 그때는 폴더 안쪽 전체가 한 장으로
+           * 밑판도 붙는 쪽도 폴더일 수 있다. 그때는 폴더 안쪽 전체가 한 장으로
            * 그려진 뒤 그 한 장이 마스크가 되거나 잘린다. 도형 여러 장으로 만든
            * 모양 안에만 사진을 채우는 것이 이 경로다.
            *
-           * 밑판을 **먼저 복사해 두고** 식구를 그린다. 폴더 경로가 subBuf 를
+           * 밑판을 먼저 복사해 두고 식구를 그린다. 폴더 경로가 subBuf 를
            * 공유하므로, 복사 전에 식구를 그리면 마스크가 덮인다.
            */
           const baseSource = renderUnit(group.base, group.baseEnd)
@@ -598,7 +598,7 @@ export class Renderer {
   /**
    * 도형 레이어.
    *
-   * 이미지 경로와 **같은 매트릭스**를 쓴다. 도형의 자연 크기(ShapeSpec.width/height)가
+   * 이미지 경로와 같은 매트릭스를 쓴다. 도형의 자연 크기(ShapeSpec.width/height)가
    * 원본 픽셀 크기 자리에 그대로 들어가므로, 맞춤 / 기준점 / 캔버스 배율 규칙이
    * 이미지와 한 글자도 다르지 않다. 여기서 크기 계산을 새로 하면 오버스캔 솔버와
    * 어긋나 담기를 켠 도형이 엉뚱한 배율로 앉는다.
@@ -672,7 +672,7 @@ export class Renderer {
    * 글자 상자 전체가 이미지 한 장인 것처럼 매트릭스를 만들고(그래야 맞춤 / 기준점 /
    * 캔버스 배율 규칙이 이미지와 같다), 그 안에서 글자 하나하나를 따로 그린다.
    *
-   * 글자별 변형은 **상자 로컬 좌표**에서 일어난다. 레이어를 45도 기울이면 글자가
+   * 글자별 변형은 상자 로컬 좌표에서 일어난다. 레이어를 45도 기울이면 글자가
    * 들어오는 방향도 함께 기운다. 가리기가 레이어를 따라 도는 것과 같은 규칙이다.
    */
   private drawTextLayer(doc: CompositionSnapshot, layer: ResolvedLayer): void {
@@ -739,7 +739,7 @@ export class Renderer {
     for (const glyph of layout.glyphs) {
       if (glyph.order < 0) continue
       /*
-       * 아틀라스 칸 번호는 **glyph.order 와 같다.** 굽는 쪽(textAtlas.bakeText)이
+       * 아틀라스 칸 번호는 glyph.order 와 같다. 굽는 쪽(textAtlas.bakeText)이
        * order >= 0 인 글리프만 같은 순서로 격자에 넣기 때문이다.
        */
       let slot = drawn
@@ -768,7 +768,7 @@ export class Renderer {
         alpha = ct.opacity
 
         /*
-         * 굴리기는 **그리는 칸만** 바꾼다. 자리도 크기도 그대로다.
+         * 굴리기는 그리는 칸만 바꾼다. 자리도 크기도 그대로다.
          *
          * 격자가 균일해서 어느 칸을 빌려도 쿼드 크기가 같다. 글자마다 다른 전진폭
          * (glyph.w)은 자리를 정할 때 이미 쓰였고 그리는 데는 quadW 를 쓰므로, 빌린
@@ -820,7 +820,7 @@ export class Renderer {
 
       if (uMatrix) gl.uniformMatrix3fv(uMatrix, false, this.finalMatrix)
       if (uAtlas) gl.uniform4f(uAtlas, col * du, row * dv, du, dv)
-      // 가리기는 글자가 움직이기 **전** 자리로 잰다. 경계선이 글자를 따라다니면 안 된다.
+      // 가리기는 글자가 움직이기 전 자리로 잰다. 경계선이 글자를 따라다니면 안 된다.
       if (uBox) {
         gl.uniform4f(
           uBox,

@@ -1,7 +1,7 @@
 /**
  * 내보내기 파이프라인.
  *
- * 이 파일의 존재 이유는 하나다. **프리뷰와 같은 renderer.renderFrame 을 부른다.**
+ * 이 파일의 존재 이유는 하나다. 프리뷰와 같은 renderer.renderFrame 을 부른다.
  * 내보내기 전용 렌더 경로를 만드는 순간 "프리뷰 = 결과물" 이라는 제품의 핵심 약속이
  * 깨진다. 여기서 하는 일은 프레임 인덱스를 정하고, 리드백한 픽셀을 포맷이 기대하는
  * 표현으로 바꾸고, 인코더에 넘기는 것뿐이다.
@@ -44,7 +44,7 @@ export interface ExportSettings {
   /** 0 = 디더 없음, 1 = 최대. Bayer 8x8 오디널 디더 강도. */
   dither: number
   /**
-   * WebP 전용. **0~1 이다.** 0~100 이 아니다.
+   * WebP 전용. 0~1 이다. 0~100 이 아니다.
    * 스케일을 섞으면 82 를 넣은 쪽이 최고 품질 파일을 받고도 눈치채지 못한다.
    * 인코더가 범위 밖이면 던지도록 되어 있다.
    */
@@ -56,7 +56,7 @@ export interface ExportSettings {
 export interface ExportProgress {
   phase: 'render' | 'encode' | 'done'
   /**
-   * done / total 은 프레임 수가 아니라 **가중 백분율**이다. total 은 항상 100 이다.
+   * done / total 은 프레임 수가 아니라 가중 백분율이다. total 은 항상 100 이다.
    * 가중치는 경로마다 다르다. 통짜 경로는 렌더 40 + 인코딩 60, 스트리밍 경로는
    * 렌더+인코딩 인터리브 95 (phase 'render' 로 보고) + 마무리 5 다. phase 로
    * 백분율 구간을 역산하면 안 되고, 프레임 단위 숫자는 message 에 담는다.
@@ -83,11 +83,11 @@ export interface EncodedBuffer {
 }
 
 /**
- * 내보내기 최종 결과. **Uint8Array 가 아니라 Blob 이다.**
+ * 내보내기 최종 결과. Uint8Array 가 아니라 Blob 이다.
  *
- * 큰 파일에서 이 차이가 성공과 실패를 가른다. 예전에는 완성 바이트를 이어붙이고
- * (사본 1), 호출자가 slice 로 뷰를 떼어내고(사본 2), Blob 을 만들면서 또 한 번
- * 복사했다(사본 3). 1GB 파일이 JS 힙에서 3~4GB 를 요구하니 탭이 그냥 죽는다.
+ * 큰 파일에서 이 차이가 성공과 실패를 가른다. 완성 바이트를 이어붙이고(사본 1),
+ * 호출자가 slice 로 뷰를 떼어내고(사본 2), Blob 을 만들며 또 복사하면(사본 3)
+ * 1GB 파일이 JS 힙에서 3~4GB 를 요구해 탭이 그냥 죽는다.
  *
  * Blob 의 데이터는 JS 힙이 아니라 브라우저가 관리하는 저장소에 있고 필요하면
  * 디스크로 내려간다. 스트리밍 경로는 조각을 만들자마자 Blob 으로 흘려보내므로
@@ -111,8 +111,7 @@ export const ENCODE_WEIGHT = 60
  * 방식은 2048px x 왕복 238프레임에서 약 4GB 를 한 번에 할당해 탭이 죽거나
  * 시스템이 스와핑에 빠진다. 4000px 에서는 프레임 11장이면 이 예산을 채운다.
  *
- * 예전에는 여기서 ExportTooLargeError 로 내보내기 자체를 막았다. 지금은 이 값을
- * 넘으면 **스트리밍 경로**로 간다 (runExport 참조). 프레임을 렌더하는 즉시
+ * 이 값을 넘으면 막지 않고 스트리밍 경로로 간다 (runExport 참조). 프레임을 렌더하는 즉시
  * 인코딩하고 원시 RGBA 를 버리므로 상주 메모리가 프레임 두어 장 + 압축 결과로
  * 떨어진다. 통짜 경로를 남겨 두는 이유는 APNG 무손실 팔레트화(전 프레임을
  * 미리 훑어야 한다) 때문이다.
@@ -152,11 +151,11 @@ export type Rgb255 = readonly [number, number, number]
 /**
  * readPixels 결과를 파일 포맷이 기대하는 표현으로 바꾼다. 두 가지를 한 번에 한다.
  *
- * 1. **un-premultiply.** 엔진 내부 합성은 premultiplied alpha 다(gl.ts 의
+ * 1. un-premultiply. 엔진 내부 합성은 premultiplied alpha 다(gl.ts 의
  *    setPremultipliedBlend). PNG 와 GIF 는 straight alpha 를 기대한다. 되돌리지 않으면
  *    반투명 픽셀이 검은색과 섞인 것처럼 보여 가장자리에 어두운 테두리가 생긴다.
  *    a > 0 이면 c = min(255, round(c * 255 / a)), a == 0 이면 rgb 는 의미가 없으므로 0.
- * 2. **세로 뒤집기.** readPixels 의 원점은 좌하단이다. 그대로 쓰면 결과가 상하 반전된다.
+ * 2. 세로 뒤집기. readPixels 의 원점은 좌하단이다. 그대로 쓰면 결과가 상하 반전된다.
  *
  * matte 가 있으면 (불투명 포맷) un-premultiply 대신 그 색 위에 합성한다.
  * premultiplied 상태에서는 out = src + matte * (1 - a) 라 나눗셈이 아예 필요 없다.
@@ -257,7 +256,7 @@ export interface LoopMapping {
   /** APNG acTL num_plays. 0 = 무한, n = n회 재생 */
   apngNumPlays: number
   /**
-   * encodeGif 의 loopCount 입력. **재생 횟수**다.
+   * encodeGif 의 loopCount 입력. 재생 횟수다.
    * 0 = 무한, 1 = 1회(NETSCAPE 확장 생략), n = n회.
    * -1 을 넣으면 안 된다. encodeGif 는 음수를 무한으로 해석한다.
    */
@@ -272,15 +271,15 @@ export interface LoopMapping {
  * pingPong 도 count 를 그대로 쓴다. exportFrameIndices 가 이미 2N-2 프레임으로
  * 왕복 한 번을 만들어 두었으므로 파일 1회 재생 = 왕복 1회이고, count 가 곧 왕복 횟수다.
  *
- * **포맷마다 숫자의 의미가 다르다.** 명세만으로는 갈리는 부분이라
+ * 포맷마다 숫자의 의미가 다르다. 명세만으로는 갈리는 부분이라
  * Chrome ImageDecoder 로 실측해 확정했다 (같은 문서를 세 포맷으로 내보내 repetitionCount 비교).
  *
  *   APNG acTL num_plays = N   -> 총 N회 재생   (N=3 이면 repetitionCount 2)
  *   WebP ANIM loop_count = N  -> 총 N회 재생   (N=3 이면 repetitionCount 2)
- *   GIF  NETSCAPE2.0 = N      -> **추가 반복 N회** = 총 N+1회 재생 (N=3 이면 repetitionCount 3)
+ *   GIF  NETSCAPE2.0 = N      -> 추가 반복 N회 = 총 N+1회 재생 (N=3 이면 repetitionCount 3)
  *
  * 그래서 GIF 만 1 을 빼야 세 포맷의 재생 횟수가 같아진다. 안 그러면 "3회 반복" 으로
- * 내보낸 GIF 가 혼자 4번 재생된다. **그 뺄셈은 loopCountToRepeat 한 곳에서만 한다.**
+ * 내보낸 GIF 가 혼자 4번 재생된다. 그 뺄셈은 loopCountToRepeat 한 곳에서만 한다.
  * 여기서 미리 빼면 값 1 이 "1회 재생" 과 "2회 재생" 두 뜻을 갖게 되어 반복 2회가
  * GIF 에서만 조용히 1회로 깎인다.
  */
@@ -519,9 +518,8 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
   const matte = resolveMatte(doc, settings)
 
   /*
-   * 통짜 버퍼가 예산을 넘으면 스트리밍으로 간다. 예전에는 여기서
-   * ExportTooLargeError 로 막고 "크기를 줄여 달라" 고 했지만, 1080px 왕복
-   * 238프레임(약 1.1GB) 같은 정상 설정까지 걸려서 상한 자체를 없앴다.
+   * 통짜 버퍼가 예산을 넘으면 스트리밍으로 간다. 여기서 막고 "크기를 줄여 달라" 고
+   * 하면 1080px 왕복 238프레임(약 1.1GB) 같은 정상 설정까지 걸린다.
    */
   if (needsStreamingExport(frames.length, width, height)) {
     return runExportStreaming({

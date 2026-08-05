@@ -9,7 +9,7 @@
  *   - WebP 애니메이션을 이 브라우저가 재생하는지
  *
  * 이 셋은 문서로 확인할 수 없다. 명세가 모호하거나 구현이 갈리기 때문이다.
- * 그래서 **이 파일이 직접 잰다.** 8x8 짜리 진단용 파일 세 개를 그 자리에서 인코딩해
+ * 그래서 이 파일이 직접 잰다. 8x8 짜리 진단용 파일 세 개를 그 자리에서 인코딩해
  * 이 브라우저의 디코더에 먹이고, 돌아온 숫자를 화면에 남긴다.
  *
  * 콘솔이 아니라 화면에 남기는 것이 핵심이다. 사용자가 "내 브라우저에서 3번 반복이
@@ -68,7 +68,7 @@ const FRAME_B = solidFrame(0, 0, 255)
 interface DecoderTrackLike {
   animated: boolean
   frameCount: number
-  /** WebCodecs 정의상 **첫 재생을 제외한 반복 횟수**다. 무한이면 Infinity. */
+  /** WebCodecs 정의상 첫 재생을 제외한 반복 횟수다. 무한이면 Infinity. */
   repetitionCount: number
 }
 interface DecoderTrackListLike {
@@ -132,7 +132,7 @@ async function readTrack(bytes: Uint8Array, mime: string): Promise<TrackReading 
 /**
  * 화면에 실제로 붙어 있는 img 를 두 시각에 캔버스로 떠서 픽셀을 비교한다.
  *
- * **화면에 붙어 있어야 한다.** 떼어 낸 img 는 브라우저가 애니메이션을 진행시키지
+ * 화면에 붙어 있어야 한다. 떼어 낸 img 는 브라우저가 애니메이션을 진행시키지
  * 않아 언제 그려도 1프레임만 나온다. 그래서 이 패널은 진단 이미지를 숨기지 않고
  * 그대로 보여 준다. 사용자도 같은 것을 눈으로 본다.
  */

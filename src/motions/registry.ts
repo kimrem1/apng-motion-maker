@@ -1,11 +1,12 @@
 /**
  * 모션 프리셋 레지스트리.
  *
- * 카탈로그는 아홉 카테고리 56종이다.
- *   A 등장 6 / B 사라짐 4 / C 계속 움직이기 10 / D 시선 끌기 10 / E 사진 훑기 4
- *   F 흔들기 6 / G 자글자글 4 / H 지지직 8 / I 조합 4
- * A 와 B 의 마지막 한 종씩(combo.popGlitchIn, combo.slideFadeGlitch)은 만드는 방식이
- * 조합이라 presets/combo.ts 에 있지만 카테고리는 표대로 등장 / 사라짐이다.
+ * 카탈로그는 열 카테고리다.
+ *   A 등장 / B 사라짐 / C 계속 움직이기 / D 시선 끌기 / E 사진 훑기
+ *   F 흔들기 / G 자글자글 / H 지지직 / I 조합 / 글자
+ * 파일이 갈린 기준은 카테고리가 아니라 만드는 방식이다. combo.popGlitchIn 과
+ * combo.slideFadeGlitch 는 조합으로 만들어 presets/combo.ts 에 있지만 카테고리는
+ * 각각 등장과 사라짐이다.
  *
  * 이 파일이 UI 와 만나는 유일한 면이다. UI 는 여기 있는 label / hint / params 만 읽고
  * 내부 id 와 loopSafe 값은 어떤 형태로도 화면에 내보내지 않는다.

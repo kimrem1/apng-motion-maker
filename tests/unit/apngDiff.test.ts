@@ -746,7 +746,7 @@ function toFrames(images: Uint8Array[]): ApngFrame[] {
   return images.map((rgba) => ({ rgba, delayNum: DELAY.num, delayDen: DELAY.den }))
 }
 
-/** 투명 배경 위를 움직이는 반투명 사각형. 스티커(14.A1) 를 흉내낸다. */
+/** 투명 배경 위를 움직이는 반투명 사각형. 스티커를 흉내낸다. */
 function movingSticker(width: number, height: number, count: number): Uint8Array[] {
   const out: Uint8Array[] = []
   for (let i = 0; i < count; i++) {

@@ -1,7 +1,7 @@
 /**
  * 애니메이션 WebP 인코더.
  *
- * **wasm 인코더(wasm-webp 0.1.0, 482,273바이트)를 쓰지 않는다.**
+ * wasm 인코더(wasm-webp 0.1.0, 482,273바이트)를 쓰지 않는다.
  *
  * 이유: 브라우저가 이미 WebP 인코더를 들고 있다. `OffscreenCanvas.convertToBlob(
  * {type:'image/webp'})` 가 정지 WebP 를 만들어 준다. 애니메이션 WebP 는 그 정지 WebP
@@ -70,7 +70,7 @@ export interface WebpOptions {
   /** 0 = 무한 */
   loopCount: number
   /**
-   * **0~1 이다. 0~100 이 아니다.**
+   * 0~1 이다. 0~100 이 아니다.
    * 두 스케일이 섞이면 82 를 넣은 쪽은 최고 품질 파일을 받고 원인을 못 찾는다.
    * 그래서 1 을 넘는 값은 조용히 자르지 않고 던진다.
    */

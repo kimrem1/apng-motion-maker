@@ -1,7 +1,7 @@
 /**
  * 인코딩 워커 프로토콜.
  *
- * 메인 스레드와 워커가 **같은 이 파일**을 읽는다. 여기에 요청 타입과 실제 인코딩
+ * 메인 스레드와 워커가 같은 이 파일을 읽는다. 여기에 요청 타입과 실제 인코딩
  * 함수를 함께 둔 이유는 하나다. 워커 생성이 실패해 메인 스레드로 폴백할 때
  * 다른 코드 경로를 타면 "워커에서는 되는데 폴백에서는 색이 다르다" 같은 버그가
  * 생긴다. runEncodeJob 하나만 존재한다.
@@ -10,10 +10,10 @@
  *
  * ## 소유권 계약 (중요)
  *
- * EncodeJobRequest.frames 의 ArrayBuffer 는 **transfer 로 넘어간다.**
+ * EncodeJobRequest.frames 의 ArrayBuffer 는 transfer 로 넘어간다.
  * postMessage 가 끝나는 순간 보낸 쪽의 버퍼는 detached 되어 byteLength 가 0 이 된다.
- * 넘긴 뒤에 읽으면 예외가 아니라 **빈 데이터**를 보게 되므로 조용히 깨진다.
- * 그래서 규칙은 하나다. **encode 를 부른 뒤에는 frames 를 절대 읽지 마라.**
+ * 넘긴 뒤에 읽으면 예외가 아니라 빈 데이터를 보게 되므로 조용히 깨진다.
+ * 그래서 규칙은 하나다. encode 를 부른 뒤에는 frames 를 절대 읽지 마라.
  * 미리보기 등으로 프레임이 더 필요하면 넘기기 전에 복사해 두어야 한다.
  *
  * 반환되는 결과 바이트도 같은 방식으로 워커 -> 메인으로 transfer 된다.
@@ -82,7 +82,7 @@ export interface EncodeJobRequest {
     durationMs: number
     /** ANIM loop_count. 0 = 무한. 0..65535 */
     loopCount: number
-    /** **0~1 이다. 0~100 이 아니다.** encodeWebp 가 1 초과를 던진다. */
+    /** 0~1 이다. 0~100 이 아니다. encodeWebp 가 1 초과를 던진다. */
     quality: number
     lossless: boolean
   }

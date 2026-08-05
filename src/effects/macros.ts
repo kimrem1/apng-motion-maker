@@ -1,7 +1,7 @@
 /**
  * 이펙트 매크로.
  *
- * 매크로는 **새 셰이더가 아니다**. 원자 이펙트 id 와 파라미터 오버라이드 목록일 뿐이다.
+ * 매크로는 새 셰이더가 아니다. 원자 이펙트 id 와 파라미터 오버라이드 목록일 뿐이다.
  *
  * VHS 를 하나의 모놀리식 셰이더로 만들면 "스캔라인만 남기고 나머지는 빼줘" 를
  * 영원히 못 맞춘다. 원자로 펼쳐 두면 사용자가 스택에서 한 줄만 지우면 된다.
@@ -26,10 +26,7 @@ export interface EffectMacroStep {
   type: string
   /** 기본값을 덮어쓸 파라미터 */
   params: Record<string, number>
-  /**
-   * 이 원자가 레지스트리에 없으면 조용히 건너뛴다.
-   * 다른 스테이지 담당이 아직 안 넣은 원자를 참조할 때 쓴다.
-   */
+  /** 이 원자가 레지스트리에 없으면 조용히 건너뛴다. */
   optional?: boolean
   holdFrames?: number
   /** 같은 매크로 안에서 스텝마다 다른 난수를 쓰게 한다. 생략하면 스텝 순번을 쓴다. */
@@ -45,7 +42,7 @@ export interface EffectMacro {
   hint: string
   cost: EffectCost
   /**
-   * 투명 배경이 오염되는가 (14.A1).
+   * 투명 배경이 오염되는가.
    * 원자 하나하나는 알파를 지켜도, 겹쳐 놓으면 실루엣 밖에 색이 남는 조합이 있다.
    * 이 값은 개별 원자의 값을 AND 한 것이 아니라 조합 결과를 보고 정한다.
    */
@@ -62,8 +59,7 @@ export interface MacroExpandOptions {
   baseSeed?: number
   /**
    * 레지스트리에 그 원자가 있는지 검사한다.
-   * 생략하면 전부 통과시킨다. 통합 담당이 실제 레지스트리 검사를 넘겨야
-   * optional 스텝(A 스테이지 배럴 등)이 제대로 걸러진다.
+   * 생략하면 전부 통과시킨다. 실제 검사를 넘겨야 optional 스텝이 걸러진다.
    */
   has?: (type: string) => boolean
 }
@@ -206,7 +202,7 @@ const crt: EffectMacro = {
   preservesAlpha: false,
   steps: [
     {
-      // A 스테이지 담당의 렌즈/배럴 왜곡 원자. id 가 다르면 통합 담당이 이 한 줄만 고친다.
+      // 렌즈 배럴 왜곡 원자. 레지스트리에서 id 가 바뀌면 이 한 줄만 고치면 된다.
       type: 'warp.barrel',
       params: { k: 0.12 },
       scaled: ['k'],

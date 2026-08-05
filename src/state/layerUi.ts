@@ -4,9 +4,9 @@
  * 문서가 아니다. 저장되지 않고 undo 대상도 아니다. useUiStore 와 분리한 이유는
  * useUiStore.selectedLayerId 가 단수라서 Ctrl/Shift 다중 선택을 담을 수 없기 때문이다.
  *
- * **정본과 미러의 관계 (확정)**
- *   - 이 스토어의 selectedLayerIds 가 **정본**이다.
- *   - useUiStore.selectedLayerId 는 "마지막으로 고른 레이어 하나"를 **미러링**한다.
+ * 정본과 미러의 관계 (확정)
+ *   - 이 스토어의 selectedLayerIds 가 정본이다.
+ *   - useUiStore.selectedLayerId 는 "마지막으로 고른 레이어 하나"를 미러링한다.
  *     인스펙터와 타임라인이 이미 그 필드를 읽고 있어서 끊으면 전부 고쳐야 한다.
  *   - 그래서 이 파일의 모든 액션은 상태를 바꾼 뒤 반드시 mirror() 를 부른다.
  *   - 반대 방향(useUiStore -> layerUi)은 자동으로 흐르지 않는다. 양방향 동기화는
@@ -49,7 +49,7 @@ interface LayerUiState {
 
   /**
    * 한 레이어를 고른다.
-   * orderedIds 는 **화면에 보이는 순서**(위가 앞)여야 한다. 범위 선택이 사용자가 본
+   * orderedIds 는 화면에 보이는 순서(위가 앞)여야 한다. 범위 선택이 사용자가 본
    * 순서대로 잡혀야 하기 때문이다.
    */
   select(id: string, mode: LayerSelectMode, orderedIds: readonly string[]): void

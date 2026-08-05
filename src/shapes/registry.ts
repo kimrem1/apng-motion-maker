@@ -117,7 +117,7 @@ function sanitizeLayer(layer: SceneLayer): SceneLayer {
 
 /**
  * 세트 하나를 실제로 심을 모양으로 계산한다. 문서를 건드리지 않는다.
- * 미리보기와 확정 삽입이 **같은 함수**를 쓰므로 카드에서 본 것과 다른 결과가 나올 수 없다.
+ * 미리보기와 확정 삽입이 같은 함수를 쓰므로 카드에서 본 것과 다른 결과가 나올 수 없다.
  */
 export function buildShapeScene(sceneId: string, ctx: SceneContext): SceneEmission | null {
   const scene = SHAPE_SCENE_BY_ID.get(sceneId)

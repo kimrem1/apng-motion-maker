@@ -10,7 +10,7 @@
  * clientWaitSync(timeout=0) 로 물어본다. 그래서 프레임 N 이 DMA 로 내려오는 동안
  * 프레임 N+1 을 렌더할 수 있다.
  *
- * **clientWaitSync 를 블로킹으로 부르면 안 된다.** 애초에 WebGL2 는
+ * clientWaitSync 를 블로킹으로 부르면 안 된다. 애초에 WebGL2 는
  * MAX_CLIENT_WAIT_TIMEOUT_WEBGL 이 0 이라 0 이외의 타임아웃을 허용하지 않는다.
  * 여기서는 항상 0 을 넘기고, 준비가 안 됐으면 false 를 돌려 호출자가 다른 일을 하게 한다.
  *
@@ -78,7 +78,7 @@ export interface PboReader {
 
   /**
    * 남은 요청을 전부 끝낼 때까지 기다린다.
-   * onFrame 에 넘어가는 배열은 **내부 스크래치라 다음 호출에서 덮어쓴다.**
+   * onFrame 에 넘어가는 배열은 내부 스크래치라 다음 호출에서 덮어쓴다.
    * 보관하려면 콜백 안에서 복사해라.
    */
   flush(gl: WebGL2RenderingContext, onFrame: (data: Uint8Array) => void): Promise<void>

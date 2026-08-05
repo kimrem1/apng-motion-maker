@@ -134,7 +134,7 @@ describe('레지스트리 무결성', () => {
   })
 
   it('알파를 오염시키는 이펙트가 표시되어 있다', () => {
-    // 투명 스티커가 주 용도라(14.A1) 이 플래그가 UI 경고 배지의 근거다.
+    // 투명 스티커가 주 용도라 이 플래그가 UI 경고 배지의 근거다.
     for (const def of EFFECT_DEFS) {
       expect(typeof def.preservesAlpha, `${def.id}`).toBe('boolean')
     }

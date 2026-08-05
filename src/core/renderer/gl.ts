@@ -1,7 +1,7 @@
 /**
  * WebGL2 컨텍스트 생성과 색 정책.
  *
- * 알파 정책이 이 프로젝트의 핵심이다 (14.A1: 주 용도가 투명 배경 스티커).
+ * 알파 정책이 이 프로젝트의 핵심이다. 주 용도가 투명 배경 스티커다.
  *
  *   - 텍스처 업로드는 straight alpha 로 한다.
  *     UNPACK_PREMULTIPLY_ALPHA_WEBGL = false, colorSpaceConversion = none.

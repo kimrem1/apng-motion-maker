@@ -19,7 +19,7 @@
  *
  * ## 소유권 (반복해서 적는다)
  *
- * encodeFramesOffThread 에 넘긴 frames 는 **호출 후 읽을 수 없다.** 워커로 transfer
+ * encodeFramesOffThread 에 넘긴 frames 는 호출 후 읽을 수 없다. 워커로 transfer
  * 되면서 detached 되기 때문이다. 압축 전 미리보기처럼 프레임이 더
  * 필요하면 넘기기 전에 복사해 두어라.
  */

@@ -5,7 +5,7 @@
  * 각자 독립 프래그먼트 셰이더 전체를 가진다.
  *
  * 공통 계약
- *   - 입력 u_image 와 출력 fragColor 는 **모두 premultiplied** 다.
+ *   - 입력 u_image 와 출력 fragColor 는 모두 premultiplied 다.
  *   - 색을 만질 때만 unpremul 하고 끝에 premul 로 되돌린다.
  *   - premultiplied 불변식 rgb <= a 를 절대 깨지 않는다. 깨면 블렌드가 발산한다.
  *   - 난수는 정수 비트 해시(PCG)만 쓴다. fract(sin(x)) 는 GPU 마다 결과가 달라
@@ -13,7 +13,7 @@
  *   - 프레임 간 캐리오버가 없다. 시드는 매 프레임 effFrame 으로 재생성된다.
  *
  * 셰이더에서 캔버스 밖을 샘플할 때 기본값은 투명이다. 이 제품의 주 용도가
- * 투명 배경 스티커라(14.A1) 가장자리 색이 늘어나면 실루엣이 오염된다.
+ * 투명 배경 스티커라 가장자리 색이 늘어나면 실루엣이 오염된다.
  */
 
 import { COMMON_GLSL } from '@/effects/glsl/common.ts'

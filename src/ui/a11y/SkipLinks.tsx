@@ -8,15 +8,12 @@
  * 아무도 안 간다. 스킵 링크가 그 세 지점을 한 번에 잇는다.
  *
  * 화면에서는 숨어 있다가 포커스를 받으면 왼쪽 위에 뜬다 (a11y.css).
- * 그래서 반드시 **앱 루트의 맨 처음** 에 놓아야 한다. Tab 을 처음 눌렀을 때
+ * 그래서 반드시 앱 루트의 맨 처음 에 놓아야 한다. Tab 을 처음 눌렀을 때
  * 가장 먼저 닿아야 뜻이 있다.
  *
- * 목적지를 id 가 아니라 후보 선택자 목록으로 잡는 이유:
- * 지금 App.tsx / Toolbar.tsx / PresetGallery.tsx 에는 이 링크가 겨냥할 id 가
- * 하나도 없다. 그 파일들은 이 작업의 담당이 아니다. 그래서 현재 마크업에
- * 이미 있는 것(main 요소, .mm-preset-grid, 툴바의 기본 버튼)으로 먼저 찾고,
- * 나중에 통합 담당이 정식 id 를 붙이면 그쪽이 먼저 잡히게 순서를 두었다.
- * 마크업이 바뀌어도 링크가 조용히 죽지 않는다.
+ * 목적지를 id 하나로 잡지 않고 후보 선택자 목록으로 잡는다. 정식 id 를 맨 앞에
+ * 두고 뒤에 현재 마크업의 특징(main 요소, .mm-preset-grid 등)을 늘어놓는다.
+ * 그러면 목적지 컴포넌트가 바뀌어 id 가 사라져도 링크가 조용히 죽지 않는다.
  */
 
 import { useCallback, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
@@ -25,10 +22,7 @@ import { announce } from './announce.ts'
 
 import './a11y.css'
 
-/**
- * 통합 담당이 붙여 주면 가장 먼저 잡히는 id.
- * 이 값들을 각 컴포넌트의 컨테이너에 그대로 달면 된다.
- */
+/** 목적지 컴포넌트가 다는 id. 후보 목록에서 가장 먼저 잡힌다. */
 export const SKIP_TARGET_IDS = {
   main: 'mm-main',
   presets: 'mm-preset-list',

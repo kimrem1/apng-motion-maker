@@ -16,7 +16,7 @@ export const PARALLAX_MAX = 3
 /**
  * 프레임 처리 선택지. EASY 와 PRO 가 같은 문구를 써야 해서 여기 둔다.
  *
- * 문구는 원리가 아니라 **결과**를 말한다. "오버스캔 솔버" 를 설명하면 아무도 못 고른다.
+ * 문구는 원리가 아니라 결과를 말한다. "오버스캔 솔버" 를 설명하면 아무도 못 고른다.
  * 각 항목의 hint 는 "무엇이 잘리고 무엇이 남는가" 한 가지만 말한다.
  */
 export const FRAME_FIT_OPTIONS: readonly { value: FrameFit; label: string; hint: string }[] = [

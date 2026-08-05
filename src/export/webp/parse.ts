@@ -3,10 +3,10 @@
  *
  * 두 가지 일을 한다.
  *
- * 1. **정지 WebP 해체.** `convertToBlob({type:'image/webp'})` 가 돌려준 파일에서
+ * 1. 정지 WebP 해체. `convertToBlob({type:'image/webp'})` 가 돌려준 파일에서
  *    VP8 / VP8L 비트스트림과 ALPH 청크를 꺼낸다. 인코더가 ANMF 로 감쌀 재료다.
  *    이 경로만 프로덕션에서 쓴다.
- * 2. **애니메이션 WebP 검사.** VP8X / ANIM / ANMF 를 읽어 루프 카운트와 프레임 지연을
+ * 2. 애니메이션 WebP 검사. VP8X / ANIM / ANMF 를 읽어 루프 카운트와 프레임 지연을
  *    되돌려 준다. 테스트의 왕복 검증용이며 픽셀을 디코딩하지 않는다.
  *
  * DOM 을 참조하지 않는다. 순수 함수뿐이라 Node 에서 그대로 돈다.
@@ -45,7 +45,7 @@ export const VP8X_FLAG_ANIMATION = 0x02
 
 /**
  * ANMF flags 바이트. 하위 2비트만 쓴다.
- * bit 1 (B) = 블렌딩 방법. 1 이면 **블렌딩하지 않고 사각형을 덮어쓴다**.
+ * bit 1 (B) = 블렌딩 방법. 1 이면 블렌딩하지 않고 사각형을 덮어쓴다.
  * bit 0 (D) = 폐기 방법. 1 이면 표시 후 사각형을 배경색으로 지운다.
  */
 export const ANMF_FLAG_BLEND_NONE = 0x02

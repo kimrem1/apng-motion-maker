@@ -197,7 +197,7 @@ function bezierOf(x1: number, y1: number, x2: number, y2: number): EasingFn {
 
 /**
  * 무한 루프에서 쓰면 안 되는 프리셋.
- * 매 사이클 시작마다 급가속이 반복되어 싸구려로 보인다.
+ * 매 사이클 시작마다 급가속이 반복되어 눈에 거슬린다.
  */
 export function isLoopSafe(presetId: string, loopMode: string): boolean {
   if (loopMode !== 'loop') return true

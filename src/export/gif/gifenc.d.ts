@@ -9,7 +9,7 @@ declare module 'gifenc' {
   export interface GifencWriteFrameOptions {
     /**
      * 첫 프레임에 넘기면 글로벌 컬러 테이블이 된다.
-     * 두 번째 이후 프레임에 넘기면 **로컬** 컬러 테이블이 추가로 기록되므로
+     * 두 번째 이후 프레임에 넘기면 로컬 컬러 테이블이 추가로 기록되므로
      * 글로벌 팔레트만 쓰려면 첫 프레임에서만 넘겨야 한다.
      */
     palette?: GifencPalette | null

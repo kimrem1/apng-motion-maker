@@ -19,8 +19,8 @@ const LIVE_MS = 140
 /**
  * 문서가 통째로 갈리면 세션 기억을 버린다.
  *
- * mutateDoc 은 반드시 past 에 한 칸을 쌓으므로, **문서가 바뀌었는데 past 와 future 가
- * 둘 다 비어 있는 경우는 replaceDocument 하나뿐이다.** 파일 열기와 자동복구가 그
+ * mutateDoc 은 반드시 past 에 한 칸을 쌓으므로, 문서가 바뀌었는데 past 와 future 가
+ * 둘 다 비어 있는 경우는 replaceDocument 하나뿐이다. 파일 열기와 자동복구가 그
  * 경로를 탄다. 문서 스토어가 도형 패널을 알 필요는 없으므로 구독으로 붙인다.
  */
 let watchedDoc: MotionProject | null = null

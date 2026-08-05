@@ -1,7 +1,7 @@
 /**
  * B. 사라짐.
  *
- * 4종 중 combo.slideFadeGlitch 는 화면 밀림 이펙트가 있어야 성립해서 combo.ts 에 있다.
+ * combo.slideFadeGlitch 는 화면 밀림 이펙트가 있어야 성립해서 combo.ts 에 있다.
  * 사라지는 모션은 끝에서 확 빠져나가는 easeInExpo 계열이 기본이다.
  */
 
