@@ -14,11 +14,17 @@ import { useId, useMemo, useState } from 'react'
 
 import type { Layer } from '@/core/types.ts'
 import { resolveLayerTransformWithParents } from '@/core/evaluate.ts'
+import { clipBaseIndexes } from '@/core/clip.ts'
 import { folderChain } from '@/core/group.ts'
 import { diagnose, isContainTarget, solveLayerContain, solveLayerOverscan } from '@/core/overscan.ts'
 import { layerIntrinsicSize } from '@/core/shape.ts'
 import { useDocumentStore } from '@/state/document.ts'
-import { formatNumber, SelectField, type SelectOption } from '@/ui/widgets/Field.tsx'
+import {
+  formatNumber,
+  SelectField,
+  ToggleField,
+  type SelectOption,
+} from '@/ui/widgets/Field.tsx'
 import {
   BLEND_OPTIONS,
   FRAME_FIT_OPTIONS,
@@ -29,6 +35,7 @@ import {
   setFrameFit,
   setLayerBlend,
   setLayerParallax,
+  setLayerClip,
   setLayerFolder,
   setLayerParent,
 } from './layerDocActions.ts'
@@ -141,6 +148,23 @@ export function LayerProperties({ layer }: LayerPropertiesProps) {
     return false
   }, [doc, layer])
 
+  /**
+   * 자르기의 밑판이 될 레이어. 없으면 자르기를 켜도 아무 일도 일어나지 않는다.
+   * 판정 규칙은 core/clip.ts 한 곳에만 있다. 여기서 다시 짜면 화면과 그림이 어긋난다.
+   */
+  const clipBase = useMemo(() => {
+    const ordered = [...doc.layers].sort((a, b) => a.z - b.z)
+    const index = ordered.findIndex((l) => l.id === layer.id)
+    if (index < 0) return null
+    const probe = ordered.map((l) => ({
+      clipToBelow: index === ordered.indexOf(l) ? true : l.clipToBelow,
+      folderId: l.folderId,
+      visible: l.visible,
+    }))
+    const base = clipBaseIndexes(probe)[index] ?? -1
+    return base >= 0 ? (ordered[base] ?? null) : null
+  }, [doc.layers, layer.id])
+
   const frameFit = frameFitOf(layer)
   const hasParent = layer.parentId !== null
   // fillsCanvas 를 켜도 맞춤이 contain/none 이면 솔버가 돌지 않는다 (overscan.isSolverTarget).
@@ -172,6 +196,25 @@ export function LayerProperties({ layer }: LayerPropertiesProps) {
             onChange={(v) => setLayerFolder([layer.id], v === NO_FOLDER ? null : v)}
           />
         ) : null}
+        {/* ------------------------------------------------------------- */}
+        {/* 아래 레이어 모양으로 자르기. 폴더는 자를 그림이 없다.          */}
+        {/* ------------------------------------------------------------- */}
+        {layer.type === 'group' ? null : (
+          <>
+            <ToggleField
+              label="아래 모양으로 자르기"
+              checked={layer.clipToBelow === true}
+              ariaLabel="아래 레이어 모양으로 자르기"
+              onChange={(v) => setLayerClip([layer.id], v)}
+            />
+            <p className="mm-lyr-note">
+              {clipBase
+                ? `바로 아래 「${clipBase.name}」 이 그린 자리에만 보입니다.`
+                : '바로 아래에 기준이 될 레이어가 없습니다. 순서를 바꾸거나 아래에 한 장을 놓으세요.'}
+            </p>
+          </>
+        )}
+
         {insideMovingFolder ? (
           <p className="mm-lyr-note">
             움직이는 폴더 안에서는 채우기가 동작하지 않습니다. 폴더가 그룹째로 움직이면

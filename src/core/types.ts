@@ -700,6 +700,15 @@ export interface Layer {
    */
   folderId?: string
   /**
+   * 바로 아래 레이어가 그린 자리에만 보인다. 값 규칙은 core/clip.ts 한 곳에만 있다.
+   *
+   * 사진을 글자 모양으로 자르거나 무늬를 도형 안에만 채울 때 쓴다. 기준은 아래
+   * 레이어의 **알파**라서 반투명한 가장자리는 반투명하게 잘린다.
+   *
+   * 거짓이면 키를 만들지 않는다. shape 과 같은 이유다 (JSON 왕복 결정론).
+   */
+  clipToBelow?: boolean
+  /**
    * 이 레이어가 보이는 구간. 없으면 처음부터 끝까지다.
    *
    * 컷 편집의 토대다. 컷은 별도의 문서가 아니라 **한 타임라인 위의 구간**이고,
@@ -935,6 +944,8 @@ export interface ResolvedLayer {
   isFolder?: boolean
   /** 담고 있는 폴더의 id. 렌더러가 이 사슬을 따라 매트릭스를 곱한다. */
   folderId?: string
+  /** 바로 아래 레이어 모양으로 자른다. 밑판을 찾는 규칙은 core/clip.ts 다. */
+  clipToBelow?: boolean
   /**
    * 도형 레이어의 모양. 렌더러가 에셋 대신 이걸 그린다.
    *

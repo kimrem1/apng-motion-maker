@@ -644,9 +644,11 @@ export function LayerPanel() {
               const isActive = activeRowId === layer.id
               const isEditing = editingId === layer.id
               const isFolder = layer.type === 'group'
+              const isClipped = layer.clipToBelow === true
               const rowClass = [
                 'mm-lyr-row',
                 isFolder ? 'is-folder' : '',
+                isClipped ? 'is-clipped' : '',
                 selected ? 'is-selected' : '',
                 layer.visible ? '' : 'is-hidden',
                 layer.locked ? 'is-locked' : '',
@@ -670,7 +672,7 @@ export function LayerPanel() {
                   role="option"
                   data-depth={Math.min(4, depthById.get(layer.id) ?? 0)}
                   aria-selected={selected}
-                  aria-label={`${isFolder ? '폴더 ' : ''}${layer.name}${layer.visible ? '' : ', 숨김'}${layer.locked ? ', 잠김' : ''}`}
+                  aria-label={`${isFolder ? '폴더 ' : ''}${layer.name}${isClipped ? ', 아래 모양으로 잘림' : ''}${layer.visible ? '' : ', 숨김'}${layer.locked ? ', 잠김' : ''}`}
                   tabIndex={isActive ? 0 : -1}
                   onFocus={() => setActiveId(layer.id)}
                   onKeyDown={(e) => onRowKeyDown(e, layer, di)}

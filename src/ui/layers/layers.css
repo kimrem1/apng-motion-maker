@@ -382,3 +382,22 @@
   height: 32px;
   color: var(--text-muted);
 }
+
+/*
+ * 아래 모양으로 잘리는 레이어.
+ *
+ * 목록만 봐서는 "왜 이 그림이 반만 보이지" 를 알 수 없다. 왼쪽에 갈고리를 그려
+ * **아래 줄에 매달려 있다**는 것을 보인다. 포토샵의 클리핑 마스크 표시와 같은 뜻이다.
+ */
+.mm-lyr-row.is-clipped::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 50%;
+  width: 6px;
+  height: 8px;
+  border-left: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  border-bottom-left-radius: 2px;
+  pointer-events: none;
+}

@@ -22,6 +22,8 @@ import { resolveComposition } from '../evaluate.ts'
 import { solveOverscan, type OverscanMap } from '../overscan.ts'
 import { buildLayerMatrix, canvasToClip, mat3Multiply, type Mat3 } from '../transform.ts'
 import { applyFolderMatrix, buildFolderMatrices } from '../group.ts'
+import { clipGroups } from '../clip.ts'
+import { CLIP_FS } from './shaders/clip.ts'
 import { secToFrame } from '../time.ts'
 import { setPremultipliedBlend, type GlCapabilities } from './gl.ts'
 import { ProgramCache, type ProgramInfo } from './programCache.ts'
@@ -171,6 +173,16 @@ export class Renderer {
      */
     this.folderMatrices = buildFolderMatrices(layers, doc.canvas.w, doc.canvas.h)
 
+    /*
+     * 자르기 덩어리. 밑판 하나와 그 위에 붙는 레이어들이다.
+     *
+     * 덩어리는 반드시 오프스크린을 거친다. 밑판의 알파를 마스크로 읽어야 하는데,
+     * 누산기에 이미 섞인 뒤에는 밑판만의 알파를 되찾을 방법이 없기 때문이다.
+     */
+    const groups = clipGroups(layers)
+    const membersByBase = new Map(groups.map((g) => [g.base, g.members]))
+    const clippedIndexes = new Set(groups.flatMap((g) => g.members))
+
     // 레이어별 이펙트가 있으면 그 레이어를 따로 그려 체인을 태워야 하고,
     // 혼합 모드가 있으면 배경을 읽어야 한다. 둘 다 오프스크린을 요구한다.
     const layerNeedsPass = layers.map(
@@ -179,7 +191,7 @@ export class Renderer {
         l.visible &&
         (l.blend !== 'normal' || hasActiveEffects(l.effects, frame)),
     )
-    const needsOffscreen = layerNeedsPass.some(Boolean)
+    const needsOffscreen = layerNeedsPass.some(Boolean) || groups.length > 0
 
     gl.bindVertexArray(this.emptyVao)
 
@@ -227,8 +239,96 @@ export class Renderer {
       gl.viewport(0, 0, w, h)
       this.clearBackground(doc)
 
+      // 자르기가 있을 때만 빌린다. 옛 문서에서는 버퍼 두 장을 만들지 않는다.
+      const maskBuf = groups.length > 0 ? borrow() : null
+      const groupBuf = groups.length > 0 ? borrow() : null
+
+      /** 레이어 한 장을 layerBuf 에 그리고 이펙트까지 태운 결과. */
+      const renderLayerAlone = (layer: ResolvedLayer): PooledTarget => {
+        // 레이어만 따로 그린다. 배경과 섞이면 이펙트가 배경까지 망가뜨린다.
+        gl.bindFramebuffer(gl.FRAMEBUFFER, layerBuf.fbo)
+        gl.viewport(0, 0, w, h)
+        gl.clearColor(0, 0, 0, 0)
+        gl.clear(gl.COLOR_BUFFER_BIT)
+        setPremultipliedBlend(gl)
+        this.drawLayer(doc, layer, assets)
+
+        if (!hasActiveEffects(layer.effects, frame)) return layerBuf
+
+        const ran = runEffectChain(
+          { gl, programs: this.programs, targets: this.targets },
+          {
+            source: layerBuf,
+            output: { fbo: fxBuf.fbo, width: w, height: h },
+            effects: layer.effects,
+            ctxBase: {
+              frame,
+              durationFrames: doc.timeline.durationFrames,
+              fps: doc.timeline.fps,
+              width: w,
+              height: h,
+              pass: 0,
+              passCount: 1,
+              seedStatic: 0,
+              instanceSeed: 0,
+            },
+            projectSeed: PROJECT_SEED,
+            nodeId: layer.layerId,
+          },
+        )
+        // 체인은 자기 VAO 를 바인딩하고 블렌딩을 꺼 둔 채 돌아온다. 되돌린다.
+        gl.bindVertexArray(this.emptyVao)
+        return ran ? fxBuf : layerBuf
+      }
+
+      /** 다 만들어진 한 장을 누산기에 얹는다. 혼합 모드가 있으면 누산기를 바꿔 낀다. */
+      const compose = (source: PooledTarget, blend: BlendMode): void => {
+        if (blend === 'normal') {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fbo)
+          gl.viewport(0, 0, w, h)
+          setPremultipliedBlend(gl)
+          this.composePass(source)
+          return
+        }
+        this.blendPass(acc, source, spare, blend)
+        const swap = acc
+        acc = spare
+        spare = swap
+      }
+
       for (let i = 0; i < layers.length; i += 1) {
         const layer = layers[i]!
+
+        // 덩어리에 속한 레이어는 밑판 차례에 이미 그렸다.
+        if (clippedIndexes.has(i)) continue
+
+        const members = membersByBase.get(i)
+
+        if (members && maskBuf && groupBuf) {
+          /*
+           * 자르기 덩어리.
+           *
+           *   1. 밑판을 혼자 그린다. 그 알파가 곧 마스크다.
+           *   2. 같은 그림을 덩어리 버퍼에도 깔아 둔다.
+           *   3. 위에 붙는 레이어를 하나씩 그려 마스크로 깎아 덩어리에 얹는다.
+           *   4. 덩어리를 밑판의 혼합 모드로 누산기에 얹는다.
+           *
+           * 덩어리 **안에서는** 노멀 합성이다. 붙는 레이어의 혼합 모드를 여기서
+           * 쓰려면 덩어리 버퍼를 매번 한 장 더 떠야 하는데, 자르기의 쓰임(사진을
+           * 글자 모양으로 자르기)에서 그 조합은 거의 나오지 않는다.
+           */
+          const baseSource = renderLayerAlone(layer)
+          this.copyPass(baseSource, { gl, width: w, height: h, fbo: maskBuf.fbo })
+          this.copyPass(baseSource, { gl, width: w, height: h, fbo: groupBuf.fbo })
+
+          for (const m of members) {
+            const source = renderLayerAlone(layers[m]!)
+            this.clipPass(groupBuf, source, maskBuf)
+          }
+
+          compose(groupBuf, layer.blend)
+          continue
+        }
 
         if (!layerNeedsPass[i]) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fbo)
@@ -238,53 +338,7 @@ export class Renderer {
           continue
         }
 
-        // 레이어만 따로 그린다. 배경과 섞이면 이펙트가 배경까지 망가뜨린다.
-        gl.bindFramebuffer(gl.FRAMEBUFFER, layerBuf.fbo)
-        gl.viewport(0, 0, w, h)
-        gl.clearColor(0, 0, 0, 0)
-        gl.clear(gl.COLOR_BUFFER_BIT)
-        setPremultipliedBlend(gl)
-        this.drawLayer(doc, layer, assets)
-
-        let source = layerBuf
-        if (hasActiveEffects(layer.effects, frame)) {
-          const ran = runEffectChain(
-            { gl, programs: this.programs, targets: this.targets },
-            {
-              source: layerBuf,
-              output: { fbo: fxBuf.fbo, width: w, height: h },
-              effects: layer.effects,
-              ctxBase: {
-                frame,
-                durationFrames: doc.timeline.durationFrames,
-                fps: doc.timeline.fps,
-                width: w,
-                height: h,
-                pass: 0,
-                passCount: 1,
-                seedStatic: 0,
-                instanceSeed: 0,
-              },
-              projectSeed: PROJECT_SEED,
-              nodeId: layer.layerId,
-            },
-          )
-          if (ran) source = fxBuf
-          // 체인은 자기 VAO 를 바인딩하고 블렌딩을 꺼 둔 채 돌아온다. 되돌린다.
-          gl.bindVertexArray(this.emptyVao)
-        }
-
-        if (layer.blend === 'normal') {
-          gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fbo)
-          gl.viewport(0, 0, w, h)
-          setPremultipliedBlend(gl)
-          this.composePass(source)
-        } else {
-          this.blendPass(acc, source, spare, layer.blend)
-          const swap = acc
-          acc = spare
-          spare = swap
-        }
+        compose(renderLayerAlone(layer), layer.blend)
       }
 
       // 최종 결과를 요청받은 타깃에 옮긴다.
@@ -315,6 +369,39 @@ export class Renderer {
       gl.uniform1i(uImage, 0)
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3)
+  }
+
+  /**
+   * 자를 레이어를 밑판의 알파로 깎아 덩어리 위에 얹는다.
+   *
+   * 색이 아니라 알파만 본다 (shaders/clip.ts). 블렌딩을 켜 둔 채로 그리므로
+   * 결과가 덩어리에 노멀 합성된다.
+   */
+  private clipPass(dest: PooledTarget, source: PooledTarget, mask: PooledTarget): void {
+    const gl = this.gl
+    const info = this.programs.get(FULLSCREEN_VS, CLIP_FS)
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
+    gl.viewport(0, 0, dest.width, dest.height)
+    setPremultipliedBlend(gl)
+    gl.useProgram(info.program)
+
+    const uImage = info.uniforms.get('u_image')
+    if (uImage) {
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D, source.texture)
+      gl.uniform1i(uImage, 0)
+    }
+    const uMask = info.uniforms.get('u_mask')
+    if (uMask) {
+      gl.activeTexture(gl.TEXTURE1)
+      gl.bindTexture(gl.TEXTURE_2D, mask.texture)
+      gl.uniform1i(uMask, 1)
+    }
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3)
+    // 다음 패스가 0번 유닛을 쓴다고 가정한다. blendPass 와 같은 관례다.
+    gl.activeTexture(gl.TEXTURE0)
   }
 
   /** 전체화면 패스 공통 준비. 빅 트라이앵글 하나로 화면을 덮는다. */

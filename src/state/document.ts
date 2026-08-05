@@ -221,6 +221,12 @@ interface DocumentState {
    * 순환은 만들지 않는다. 폴더를 자기 자손 안으로 넣으려 하면 아무 일도 하지 않는다.
    */
   setLayerFolder(layerIds: string[], folderId: string | null): void
+  /**
+   * 바로 아래 레이어 모양으로 자를지. 값 규칙은 core/clip.ts 한 곳에만 있다.
+   *
+   * 끄면 필드를 지운다. 거짓을 남겨 두면 저장 JSON 이 왕복에서 달라진다.
+   */
+  setLayerClip(layerIds: string[], on: boolean): void
 
   /**
    * 이미지 다듬기(배경 제거 / 크롭) 결과를 문서에 반영한다.
@@ -1124,6 +1130,22 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           layer.folderId = folderId
         }
         normalizeFolderOrder(d)
+      })
+    },
+
+    setLayerClip(layerIds, on) {
+      mutateDoc('자르기 변경', (d) => {
+        for (const id of layerIds) {
+          const layer = findLayer(d, id)
+          if (!layer) continue
+          /*
+           * 폴더는 자를 그림이 없다. 폴더에 켜 두면 아무 일도 안 하는 값이 문서에
+           * 남고, 나중에 폴더가 그림을 갖게 되면 그때 갑자기 동작한다.
+           */
+          if (layer.type === 'group') continue
+          if (on) layer.clipToBelow = true
+          else delete layer.clipToBelow
+        }
       })
     },
 
