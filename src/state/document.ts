@@ -49,7 +49,7 @@ import {
   createStaticTrack,
   nextId,
 } from '@/core/factory.ts'
-import { MAX_FOLDER_DEPTH } from '@/core/group.ts'
+import { MAX_FOLDER_DEPTH, folderChain } from '@/core/group.ts'
 import { normalizeShapeSpec } from '@/core/shape.ts'
 import { normalizeTextSpec } from '@/core/text.ts'
 import { createCharAnimSpec, normalizeCharAnimSpec } from '@/core/charAnim.ts'
@@ -207,9 +207,13 @@ interface DocumentState {
   setLayerReveal(layerId: string, patch: Partial<RevealSpec>): void
   /** 3D 회전에 쓰는 카메라 거리. 기본값과 같으면 필드를 지운다. */
   setLayerPerspective(layerId: string, value: number): void
+  /**
+   * 레이어 한 장을 지운다. 폴더면 **안에 든 것도 함께** 사라진다
+   * (몇 겹이든, withFolderContents 주석 참조).
+   */
   removeLayer(layerId: string): void
   /**
-   * 여러 장을 한 번에 지운다. 실행취소 한 칸이다.
+   * 여러 장을 한 번에 지운다. 실행취소 한 칸이다. 폴더 규칙은 removeLayer 와 같다.
    *
    * removeLayer 를 반복해서 부르면 안 된다. 도형 세트 하나가 스무 장까지 만드는데,
    * 그것을 취소하는 데 Ctrl+Z 를 스무 번 눌러야 하면 취소가 아니다.
@@ -603,6 +607,68 @@ function writeCharInSpan(layer: Layer, start: number, end: number): void {
     { f: start, v: 0, interp: 'linear' },
     { f: end, v: 1, interp: 'linear' },
   ]
+}
+
+/**
+ * 지울 목록을 폴더 안까지 넓힌다. 몇 겹이든 따라 들어간다.
+ *
+ * 폴더를 지우면 안에 든 것도 함께 사라진다. 목록에서 폴더 한 줄로 보이는 것이
+ * 화면에서도 한 덩어리이므로, 그 한 줄을 지웠는데 식구가 최상위로 흩어져 나오면
+ * 지운 것보다 늘어난 것처럼 보인다. 상자만 없애고 안은 남기고 싶으면 지우기 전에
+ * 꺼내면 된다(목록에서 밖으로 끌어내기).
+ *
+ * 잃을 걱정은 실행취소가 받는다. 삭제 한 번이 실행취소 한 칸이라 폴더 안에 스무
+ * 장이 있어도 Ctrl+Z 하나로 전부 돌아온다.
+ */
+function withFolderContents(layers: readonly Layer[], ids: Iterable<string>): Set<string> {
+  const drop = new Set(ids)
+  const folders = new Set<string>()
+  for (const layer of layers) {
+    if (layer.type === 'group' && drop.has(layer.id)) folders.add(layer.id)
+  }
+  if (folders.size === 0) return drop
+
+  for (const layer of layers) {
+    if (drop.has(layer.id)) continue
+    // 사슬을 타고 올라가므로 몇 겹으로 중첩된 폴더도 한 번에 잡힌다.
+    if (folderChain(layers, layer).some((f) => folders.has(f.id))) drop.add(layer.id)
+  }
+  return drop
+}
+
+/**
+ * 레이어를 지우는 유일한 경로. 한 장을 지우든 여러 장을 지우든 같은 함수를 탄다.
+ *
+ * 갈라 두면 "한 장 지우기" 와 "골라서 지우기" 가 서로 다른 규칙을 갖게 된다.
+ * 실제로 폴더 처리와 에셋 정리가 두 곳에 따로 적혀 있었다.
+ */
+function dropLayers(d: MotionProject, ids: readonly string[]): void {
+  const drop = withFolderContents(d.layers, ids)
+  if (drop.size === 0) return
+
+  for (let i = d.layers.length - 1; i >= 0; i -= 1) {
+    const layer = d.layers[i]
+    if (!layer || !drop.has(layer.id)) continue
+    d.layers.splice(i, 1)
+  }
+
+  /*
+   * 아무 레이어도 안 쓰는 에셋을 걷어낸다.
+   *
+   * filter 로 배열을 재대입하면 immer 가 ['assets'] 전체 스냅샷 패치를 기록한다.
+   * 그 undo 가 다른 에셋의 나중 갱신(updateAssetPrep)까지 통째로 되돌리므로
+   * 반드시 지운 항목만 splice 한다.
+   *
+   * 비트맵 해제는 하지 않는다. 실행취소로 되돌릴 때 픽셀이 살아 있어야 한다.
+   */
+  for (let i = d.assets.length - 1; i >= 0; i -= 1) {
+    const asset = d.assets[i]
+    if (!asset) continue
+    if (d.layers.some((l) => l.assetId === asset.id)) continue
+    d.assets.splice(i, 1)
+  }
+
+  normalizeFolderOrder(d)
 }
 
 /**
@@ -1055,75 +1121,12 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
     },
 
     removeLayer(layerId) {
-      let orphanAssetId: string | null = null
-      mutateDoc('레이어 삭제', (d) => {
-        const index = d.layers.findIndex((l) => l.id === layerId)
-        if (index < 0) return
-        const [removed] = d.layers.splice(index, 1)
-        if (!removed) return
-
-        /*
-         * 폴더를 지우면 **안의 레이어는 한 겹 밖으로 나온다.** 함께 지우지 않는다.
-         * 정리하려고 만든 상자를 지웠다고 안에 든 것까지 사라지면, 되돌리기를 모르는
-         * 사람은 그림을 잃는다. 안까지 지우고 싶으면 레이어를 골라 지우면 된다.
-         */
-        if (removed.type === 'group') {
-          for (const l of d.layers) {
-            if (l.folderId !== removed.id) continue
-            if (removed.folderId) l.folderId = removed.folderId
-            else delete l.folderId
-          }
-        }
-
-        if (removed.assetId) {
-          const stillUsed = d.layers.some((l) => l.assetId === removed.assetId)
-          if (!stillUsed) {
-            // filter 로 배열을 재대입하면 immer 가 ['assets'] 전체 스냅샷 패치를
-            // 기록한다. 그 undo 가 다른 에셋의 나중 갱신(updateAssetPrep)까지
-            // 통째로 되돌리므로 반드시 지운 항목만 splice 한다.
-            const ai = d.assets.findIndex((a) => a.id === removed.assetId)
-            if (ai >= 0) d.assets.splice(ai, 1)
-            orphanAssetId = removed.assetId
-          }
-        }
-        normalizeFolderOrder(d)
-      })
-      // 비트맵 해제는 문서 변경 밖에서 한다. undo 로 되돌릴 때 픽셀이 살아 있어야 한다.
-      // 지금은 세션 동안 비트맵을 붙잡고 있다. 정리는 영속화와 함께 다룬다.
-      void orphanAssetId
+      mutateDoc('레이어 삭제', (d) => dropLayers(d, [layerId]))
     },
 
     removeLayers(layerIds) {
-      const drop = new Set(layerIds)
-      if (drop.size === 0) return
-      mutateDoc('레이어 삭제', (d) => {
-        /*
-         * 지운 폴더의 식구는 한 겹 밖으로 나온다. removeLayer 와 같은 규칙이다.
-         * 함께 지우는 목록에 이미 들어 있으면 어차피 사라지므로 이 처리는 무해하다.
-         */
-        for (let i = d.layers.length - 1; i >= 0; i -= 1) {
-          const layer = d.layers[i]
-          if (!layer || !drop.has(layer.id)) continue
-          if (layer.type === 'group') {
-            for (const l of d.layers) {
-              if (l.folderId !== layer.id) continue
-              if (layer.folderId) l.folderId = layer.folderId
-              else delete l.folderId
-            }
-          }
-          d.layers.splice(i, 1)
-        }
-
-        // 아무 레이어도 안 쓰는 에셋을 걷어낸다. 지운 항목만 splice 한다(removeLayer 와 같은 이유).
-        for (let i = d.assets.length - 1; i >= 0; i -= 1) {
-          const asset = d.assets[i]
-          if (!asset) continue
-          if (d.layers.some((l) => l.assetId === asset.id)) continue
-          d.assets.splice(i, 1)
-        }
-
-        normalizeFolderOrder(d)
-      })
+      if (layerIds.length === 0) return
+      mutateDoc('레이어 삭제', (d) => dropLayers(d, layerIds))
     },
 
     clearPreset() {

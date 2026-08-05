@@ -807,8 +807,17 @@ export function LayerPanel() {
                       type="button"
                       className="mm-icon-btn is-danger"
                       tabIndex={-1}
-                      title="삭제"
-                      aria-label={`${layer.name} 삭제`}
+                      /*
+                       * 폴더는 안에 든 것까지 사라진다. 몇 장이 함께 지워지는지
+                       * 누르기 전에 알려야 한다. 접혀 있으면 목록에 그 식구가
+                       * 보이지도 않아서, 이 문구가 유일한 경고다.
+                       */
+                      title={isFolder && row.childCount > 0 ? `삭제 (안에 든 ${row.childCount}장도 함께)` : '삭제'}
+                      aria-label={
+                        isFolder && row.childCount > 0
+                          ? `폴더 ${layer.name} 삭제, 안에 든 ${row.childCount}장도 함께 지워집니다`
+                          : `${layer.name} 삭제`
+                      }
                       onClick={(e) => {
                         e.stopPropagation()
                         removeLayer(layer.id)

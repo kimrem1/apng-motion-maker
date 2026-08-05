@@ -5,7 +5,7 @@
  *   1. 폴더가 없는 문서의 그림은 한 점도 바뀌지 않는다.
  *   2. 폴더의 움직임과 안쪽 레이어의 움직임이 **함께** 보인다.
  *   3. 목록에서 폴더 식구는 폴더 바로 뒤에 붙어 있는다. 순서가 곧 그리는 순서다.
- *   4. 폴더를 지워도 안에 든 것은 사라지지 않는다.
+ *   4. 폴더를 지우면 안에 든 것도 함께 지워지고, 실행취소 한 칸으로 전부 돌아온다.
  *   5. 순환은 어떤 경로로도 만들어지지 않는다.
  */
 
@@ -283,16 +283,70 @@ describe('폴더 스토어', () => {
     expect(s().doc.layers.map((l) => l.z)).toEqual([0, 1, 2, 3])
   })
 
-  it('폴더를 지워도 안에 든 것은 남는다', () => {
-    const ids = s().doc.layers.slice(0, 2).map((l) => l.id)
-    const { folderId } = s().addFolder({ layerIds: ids })
+  it('폴더를 지우면 안에 든 것도 함께 지워진다', () => {
+    /*
+     * 목록에서 한 줄로 보이는 것이 화면에서도 한 덩어리다. 그 한 줄을 지웠는데
+     * 식구가 최상위로 흩어져 나오면 지운 것보다 늘어난 것처럼 보인다.
+     * 접힌 폴더에서는 그 식구가 목록에 보이지도 않는다.
+     */
+    const all = s().doc.layers.map((l) => l.id)
+    const { folderId } = s().addFolder({ layerIds: all.slice(0, 2) })
     s().removeLayer(folderId)
 
-    const doc = s().doc
-    expect(doc.layers).toHaveLength(3)
+    // 폴더에 담지 않은 한 장만 남는다.
+    expect(s().doc.layers.map((l) => l.id)).toEqual([all[2]])
+  })
+
+  it('몇 겹으로 중첩돼 있어도 따라 들어간다', () => {
+    const ids = s().doc.layers.map((l) => l.id)
+    const inner = s().addFolder({ layerIds: ids }).folderId
+    const outer = s().addFolder({ layerIds: [inner] }).folderId
+
+    s().removeLayer(outer)
+    expect(s().doc.layers).toHaveLength(0)
+  })
+
+  it('폴더 밖의 레이어는 남는다', () => {
+    const all = s().doc.layers.map((l) => l.id)
+    const { folderId } = s().addFolder({ layerIds: [all[0]!] })
+
+    s().removeLayer(folderId)
+    expect(s().doc.layers.map((l) => l.id).sort()).toEqual([all[1]!, all[2]!].sort())
+  })
+
+  it('안에 든 그림의 에셋도 함께 걷힌다', () => {
+    const ids = s().doc.layers.map((l) => l.id)
+    const { folderId } = s().addFolder({ layerIds: ids })
+    expect(s().doc.assets).toHaveLength(1)
+
+    s().removeLayer(folderId)
+    // 아무 레이어도 안 쓰는 에셋이 남으면 저장 파일에 쓰지 않는 픽셀이 딸려 간다.
+    expect(s().doc.assets).toHaveLength(0)
+  })
+
+  it('폴더 삭제가 실행취소 한 칸이고 전부 돌아온다', () => {
+    // 되돌릴 수 있다는 것이 "함께 지운다" 를 안전하게 만드는 근거다.
+    const ids = s().doc.layers.map((l) => l.id)
+    const { folderId } = s().addFolder({ layerIds: ids })
+    const before = s().past.length
+
+    s().removeLayer(folderId)
+    expect(s().past.length).toBe(before + 1)
+
+    s().undo()
+    expect(s().doc.layers.map((l) => l.id).sort()).toEqual([folderId, ...ids].sort())
+    expect(s().doc.assets).toHaveLength(1)
     for (const id of ids) {
-      expect(doc.layers.find((l) => l.id === id)!.folderId).toBeUndefined()
+      expect(s().doc.layers.find((l) => l.id === id)!.folderId).toBe(folderId)
     }
+  })
+
+  it('여러 장을 골라 지울 때도 폴더는 안까지 지운다', () => {
+    const all = s().doc.layers.map((l) => l.id)
+    const { folderId } = s().addFolder({ layerIds: [all[0]!] })
+
+    s().removeLayers([folderId, all[1]!])
+    expect(s().doc.layers.map((l) => l.id)).toEqual([all[2]])
   })
 
   it('자기 자손 안으로는 못 들어간다', () => {
