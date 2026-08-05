@@ -118,8 +118,13 @@ summary:focus-visible,
   font-weight: 700;
 }
 
-/* PreviewCanvas.tsx PREVIEW_CSS: 배율 버튼 3개가 밝기만으로 현재 값을 표시한다. */
-:root .preview__zoom .mm-btn[aria-pressed='true'] {
+/*
+ * PreviewCanvas.tsx PREVIEW_CSS: 배율 버튼 3개와 격자 토글이 밝기만으로 상태를
+ * 표시한다. 격자는 켜면 화면에 선이 생기지만, 그림이 없는 문서에서는 그 신호가
+ * 없으므로 버튼 자체가 상태를 말해야 한다.
+ */
+:root .preview__zoom .mm-btn[aria-pressed='true'],
+:root .preview__grid-ctl .mm-btn[aria-pressed='true'] {
   border-width: 2px;
   padding: 0 calc(var(--sp-3) - 1px);
   font-weight: 700;

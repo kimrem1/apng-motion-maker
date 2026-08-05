@@ -11,7 +11,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { useDocumentStore } from '@/state/document.ts'
-import { useUiStore } from '@/state/ui.ts'
+import { GRID_SIZES, useUiStore } from '@/state/ui.ts'
+import { StageOverlay } from './StageOverlay.tsx'
 import { useRenderer } from './useRenderer.ts'
 
 const PREVIEW_CSS = `
@@ -34,6 +35,7 @@ const PREVIEW_CSS = `
 
 /* margin auto 로 가운데를 잡는다. align-items:center 는 넘칠 때 위쪽이 잘린다. */
 .preview__frame {
+  position: relative;
   flex: none;
   margin: auto;
   box-shadow: var(--shadow-2);
@@ -43,6 +45,19 @@ const PREVIEW_CSS = `
     var(--checker-a) 0% 50%
   );
   background-size: 16px 16px;
+}
+
+/*
+ * WebGL 캔버스가 들어앉는 자리. 프레임과 크기가 같다.
+ *
+ * 프레임에 직접 붙이지 않는 이유는 useRenderer 가 canvas element 를 직접 만들어
+ * 넣기 때문이다. React 가 관리하는 부모에 DOM 노드를 손으로 끼우면 형제 순서가
+ * 바뀔 때 React 의 참조와 어긋난다. 호스트를 따로 두면 그 부모에는 React 자식이
+ * 하나도 없어서 그런 일이 아예 생기지 않는다.
+ */
+.preview__gl {
+  position: absolute;
+  inset: 0;
 }
 
 .preview__notice {
@@ -103,13 +118,27 @@ const PREVIEW_CSS = `
   margin-left: auto;
 }
 
-.preview__zoom .mm-btn {
+.preview__grid-ctl {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.preview__grid-ctl .mm-select {
+  min-height: 24px;
+  padding: 0 var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.preview__zoom .mm-btn,
+.preview__grid-ctl .mm-btn {
   min-height: 24px;
   padding: 0 var(--sp-3);
   font-size: var(--fs-xs);
 }
 
-.preview__zoom .mm-btn[aria-pressed='true'] {
+.preview__zoom .mm-btn[aria-pressed='true'],
+.preview__grid-ctl .mm-btn[aria-pressed='true'] {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--text);
@@ -128,6 +157,10 @@ export function PreviewCanvas({ emptyState }: PreviewCanvasProps): ReactNode {
 
   const zoom = useUiStore((s) => s.zoom)
   const setZoom = useUiStore((s) => s.setZoom)
+  const gridOn = useUiStore((s) => s.gridOn)
+  const gridSize = useUiStore((s) => s.gridSize)
+  const toggleGrid = useUiStore((s) => s.toggleGrid)
+  const setGridSize = useUiStore((s) => s.setGridSize)
   const rendererError = useUiStore((s) => s.rendererError)
 
   const { hostRef } = useRenderer()
@@ -183,11 +216,10 @@ export function PreviewCanvas({ emptyState }: PreviewCanvasProps): ReactNode {
     )
   } else {
     content = (
-      <div
-        ref={hostRef}
-        className="preview__frame"
-        style={{ width: `${dispW}px`, height: `${dispH}px` }}
-      />
+      <div className="preview__frame" style={{ width: `${dispW}px`, height: `${dispH}px` }}>
+        <div ref={hostRef} className="preview__gl" />
+        <StageOverlay scale={scale} />
+      </div>
     )
   }
 
@@ -206,6 +238,36 @@ export function PreviewCanvas({ emptyState }: PreviewCanvasProps): ReactNode {
           {canvasW} x {canvasH}
         </span>
         <span className="preview__scale">{Math.round(scale * 100)}%</span>
+
+        {/*
+          격자는 배치를 돕는 보조선이라 배율 옆에 둔다. 둘 다 "지금 어떻게 보고
+          있는가" 이지 그림 자체가 아니다.
+        */}
+        <div className="preview__grid-ctl">
+          <button
+            type="button"
+            className="mm-btn"
+            aria-pressed={gridOn}
+            onClick={toggleGrid}
+            title="격자 보기. 켜면 끌어 옮길 때 격자에 맞춰 붙습니다 (Ctrl+')"
+          >
+            격자
+          </button>
+          <select
+            className="mm-select"
+            value={gridSize}
+            disabled={!gridOn}
+            aria-label="격자 칸 크기"
+            title="격자 한 칸의 크기"
+            onChange={(e) => setGridSize(Number(e.target.value))}
+          >
+            {GRID_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}px
+              </option>
+            ))}
+          </select>
+        </div>
 
         <div className="preview__zoom" role="group" aria-label="화면 배율">
           <button

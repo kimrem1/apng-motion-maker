@@ -25,7 +25,22 @@ import {
   type ModifierType,
 } from '@/core/types.ts'
 import type { MotionPreset, PresetEmission } from '@/motions/types.ts'
-import { buildKeys, clamp, clamp01, emitDuration, gainOf, lastFrame, loopFor, num, resolveSpan } from './shared.ts'
+import { springPeak } from '@/motions/generators.ts'
+import {
+  DIRECTION_OPTIONS,
+  buildKeys,
+  clamp,
+  clamp01,
+  directionVector,
+  emitDuration,
+  gainOf,
+  lastFrame,
+  limitCycles,
+  loopFor,
+  num,
+  resolveSpan,
+  str,
+} from './shared.ts'
 
 // ---------------------------------------------------------------------------
 // 공용 헬퍼 (G, H, I 카테고리도 그대로 쓴다)
@@ -390,6 +405,384 @@ const shakeBreathe: MotionPreset = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// 타격 (F7~F12)
+// ---------------------------------------------------------------------------
+
+/**
+ * 타격감은 무엇으로 만들어지는가.
+ *
+ * F1~F6 은 전부 "떨림" 이다. 값이 0 에서 부드럽게 자라 부드럽게 잦아든다.
+ * 맞은 느낌은 그 반대다. 세 가지가 동시에 있어야 한다.
+ *
+ *   1. 공격이 즉발이어야 한다. 최댓값이 한두 프레임 안에 온다. 세 프레임을
+ *      넘어가는 순간 "맞았다" 가 "밀렸다" 로 읽힌다.
+ *   2. 감쇠가 공격보다 훨씬 길어야 한다. 대칭이면 그냥 왕복 운동이다.
+ *   3. 이동만으로는 부족하다. 맞는 순간 배율이 눌리고 살짝 기울어야 몸이 있는
+ *      물체로 보인다.
+ *
+ * 그래서 이 여섯은 `spring` 모디파이어를 쓴다. sin(2πp)·e^(-d·p) 라 공격은
+ * 가파르고 꼬리는 길며, 사이클마다 위상이 0 으로 되감기므로 여러 번 때려도
+ * 한 주기가 그대로 닫힌다. 값이 0 에서 시작해 0 으로 끝나는 것은 sine 과 같고,
+ * 기울기만 이음새에서 끊긴다. 그 기울기 불연속이 정확히 "때리는 순간" 이다.
+ *
+ * 키프레임을 쓰지 않는 이유는 F1~F6 과 같다. 사용자가 잡아 둔 위치를 덮지 않고,
+ * 그래프 에디터가 감당할 수 없는 수의 키를 만들지 않는다.
+ */
+
+/**
+ * 공격이 몇 프레임 만에 최고에 닿는가를 정하는 값.
+ *
+ * 봉우리는 phase = atan(2π/d)/2π 에 온다. d=10 이면 0.089 이고, 한 사이클이
+ * 12프레임일 때 1.1프레임이다. 즉 다음 프레임에서 이미 최대치다.
+ * 이보다 낮추면 공격이 눈에 보이게 물러진다.
+ */
+const PUNCH_DECAY = 10
+/** 착지 뒤에 남는 울림. 공격보다 한참 느리게 잦아들어야 여운으로 읽힌다. */
+const RING_DECAY = 3.5
+
+/**
+ * 화면에서 px 만큼 움직이게 하는 진폭.
+ *
+ * spring 의 봉우리는 진폭보다 한참 낮다 (generators.ts springPeak). 파라미터에
+ * 적힌 28px 이 화면에서 28px 이어야 하므로 여기서 되돌린다. 담기 솔버도 같은
+ * 함수를 보고 있어서 배율이 어긋나지 않는다.
+ */
+function impactAmp(px: number, decay: number): number {
+  return px / Math.max(0.05, springPeak(decay))
+}
+
+/**
+ * 값이 1 로 고정된 포락선.
+ *
+ * 타격은 spring 이 사이클마다 스스로 감쇠한다. 여기에 부풀었다 잦아드는 포락선을
+ * 또 걸면 가운데 한 방만 세고 나머지는 들리지 않는다. 그래도 포락선 자체는 둔다.
+ * 시작과 끝이 같은 값이라 이음새가 닫히고, 흔들기 전체가 "모디파이어에는 포락선이
+ * 있다" 는 한 가지 규칙으로 남는다.
+ */
+function flatEnvelope(span: number): Keyframe[] {
+  return buildKeys([{ f: 0, v: 1 }, { f: Math.max(1, span), v: 1 }], 'linear')
+}
+
+/** 이동 축의 짝. 주 타격축이 정해지면 반대 축은 자동으로 정해진다. */
+function crossAxis(prop: ModifierTarget): ModifierTarget {
+  return prop === 'translateX' ? 'translateY' : 'translateX'
+}
+
+/** 타격 한 번이 차지해야 하는 최소 프레임 수. */
+const MIN_HIT_FRAMES = 3
+
+/**
+ * 프레임 예산에 맞춰 때리는 횟수를 자른다.
+ *
+ * 타격은 봉우리가 첫 프레임 뒤에 오고 꼬리가 그 뒤에 붙는 파형이다. 한 번이
+ * 세 프레임보다 짧아지면 정수 격자가 봉우리를 통째로 건너뛰어, 타격이 아니라
+ * 값이 두 자리를 오가는 깜빡임으로 보인다. 속도를 2 로 올리면 예산이 절반이
+ * 되므로 사용자가 고른 횟수를 그대로 쓸 수 없는 구간이 반드시 생긴다.
+ */
+function hitsFor(span: number, hits: number): number {
+  return limitCycles(span, hits, 1, MIN_HIT_FRAMES)
+}
+
+// ---------------------------------------------------------------------------
+// F7. 강펀치
+// ---------------------------------------------------------------------------
+
+/**
+ * 한 방 맞고 튕겨 나갔다 돌아온다.
+ *
+ * 주 타격축 하나에 몰아넣고, 반대 축에는 5분의 1만 준다. 정확히 한 축으로만
+ * 움직이면 화면이 미끄러진 것처럼 보이고, 두 축이 같으면 대각선으로만 튄다.
+ * 배율은 음수 진폭이라 맞는 순간 눌렸다가 제자리로 부푼다.
+ */
+const shakePunch: MotionPreset = {
+  id: 'shake.punch',
+  label: '강펀치',
+  hint: '한 방 얻어맞은 것처럼 훅 튕겼다가 제자리로 돌아온다.',
+  category: 'shake',
+  tags: ['move', 'scale', 'rotate', 'shake', 'impact'],
+  loopSafe: 'seamless',
+  overscan: 'required',
+  easy: true,
+  size: 'light',
+  defaultDurationMs: 700,
+  params: [
+    { key: 'amount', label: '때리는 세기', type: 'number', min: 4, max: 90, step: 1, unit: 'px', default: 28 },
+    { key: 'dir', label: '밀리는 쪽', type: 'select', options: DIRECTION_OPTIONS, default: 'right' },
+    { key: 'hits', label: '때리는 횟수', type: 'number', min: 1, max: 4, step: 1, unit: '회', default: 1 },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 700)
+    const gain = gainOf(ctx.strength)
+    const amount = clamp(num(ctx.params, 'amount', 28) * gain, 1, 180)
+    const hits = hitsFor(span, clamp(Math.round(num(ctx.params, 'hits', 1)), 1, 4))
+    const { prop, sign } = directionVector(str(ctx.params, 'dir', 'right'))
+    const main = prop as ModifierTarget
+    const tilt = Math.min(7, amount * 0.09)
+    const envelope = flatEnvelope(span)
+
+    const modifiers: Modifier[] = [
+      makeModifier({ id: 'mo.pun.m', type: 'spring', target: main, amplitude: impactAmp(amount, PUNCH_DECAY) * sign, cycles: hits, decay: PUNCH_DECAY, envelope }),
+      makeModifier({ id: 'mo.pun.c', type: 'spring', target: crossAxis(main), amplitude: impactAmp(amount * 0.2, PUNCH_DECAY + 4) * sign, cycles: hits, decay: PUNCH_DECAY + 4, envelope }),
+      makeModifier({ id: 'mo.pun.s', type: 'spring', target: 'scale', amplitude: -impactAmp(0.07 * gain, PUNCH_DECAY), cycles: hits, decay: PUNCH_DECAY, envelope }),
+      makeModifier({ id: 'mo.pun.r', type: 'spring', target: 'rotate', amplitude: impactAmp(tilt, PUNCH_DECAY) * sign, cycles: hits, decay: PUNCH_DECAY, envelope }),
+    ]
+
+    return { tracks: [], modifiers, durationFrames: emitDuration(span, []), suggestedLoop: loopFor('seamless') }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// F8. 내려찍기
+// ---------------------------------------------------------------------------
+
+/**
+ * 위에서 내리꽂혀 바닥에 박히고, 그 자리가 한참 울린다.
+ *
+ * 같은 축에 감쇠가 다른 spring 두 개를 겹치는 것이 전부다. 빠른 쪽이 박히는
+ * 순간이고 느린 쪽이 여운이다. 하나로는 둘 다 못 만든다. 감쇠를 올리면 여운이
+ * 사라지고 내리면 박히는 맛이 사라진다.
+ */
+const shakeSlam: MotionPreset = {
+  id: 'shake.slam',
+  label: '내려찍기',
+  hint: '위에서 쿵 하고 박힌 뒤 그 자리가 울린다.',
+  category: 'shake',
+  tags: ['move', 'scale', 'shake', 'impact'],
+  loopSafe: 'seamless',
+  overscan: 'required',
+  easy: false,
+  size: 'light',
+  defaultDurationMs: 900,
+  params: [
+    { key: 'amount', label: '내리찍는 세기', type: 'number', min: 4, max: 90, step: 1, unit: 'px', default: 30 },
+    { key: 'ring', label: '울리는 정도', type: 'number', min: 0, max: 40, step: 1, unit: 'px', default: 10 },
+    { key: 'hits', label: '찍는 횟수', type: 'number', min: 1, max: 4, step: 1, unit: '회', default: 1 },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 900)
+    const gain = gainOf(ctx.strength)
+    const amount = clamp(num(ctx.params, 'amount', 30) * gain, 1, 180)
+    const ring = clamp(num(ctx.params, 'ring', 10) * gain, 0, 80)
+    const hits = hitsFor(span, clamp(Math.round(num(ctx.params, 'hits', 1)), 1, 4))
+    const envelope = flatEnvelope(span)
+
+    const modifiers: Modifier[] = [
+      makeModifier({ id: 'mo.slm.hit', type: 'spring', target: 'translateY', amplitude: impactAmp(amount, PUNCH_DECAY + 4), cycles: hits, decay: PUNCH_DECAY + 4, envelope }),
+      makeModifier({ id: 'mo.slm.ring', type: 'spring', target: 'translateY', amplitude: impactAmp(ring, RING_DECAY), cycles: hits, decay: RING_DECAY, envelope }),
+      makeModifier({ id: 'mo.slm.x', type: 'spring', target: 'translateX', amplitude: impactAmp(ring * 0.45, RING_DECAY + 2), cycles: hits, decay: RING_DECAY + 2, envelope }),
+      makeModifier({ id: 'mo.slm.s', type: 'spring', target: 'scale', amplitude: -impactAmp(0.08 * gain, PUNCH_DECAY + 4), cycles: hits, decay: PUNCH_DECAY + 4, envelope }),
+    ]
+
+    return { tracks: [], modifiers, durationFrames: emitDuration(span, []), suggestedLoop: loopFor('seamless') }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// F9. 반동
+// ---------------------------------------------------------------------------
+
+/**
+ * 총을 쏜 것처럼 뒤로 크게 밀렸다 천천히 돌아온다.
+ *
+ * 강펀치와 파형이 같고 감쇠만 다르다. 감쇠를 낮추면 봉우리가 뒤로 밀리면서
+ * 넓어지고, 되돌아오는 길에 한 번 지나쳤다 잡힌다. 그 한 번의 오버슈트가
+ * "튕겨 나간 것" 과 "반동" 을 가른다. 기울림을 크게 주는 것도 같은 이유다.
+ * 총구가 들리는 것은 이동이 아니라 회전이다.
+ */
+const shakeRecoil: MotionPreset = {
+  id: 'shake.recoil',
+  label: '반동',
+  hint: '뒤로 크게 밀렸다가 천천히 제자리를 찾는다.',
+  category: 'shake',
+  tags: ['move', 'rotate', 'shake', 'impact'],
+  loopSafe: 'seamless',
+  overscan: 'required',
+  easy: false,
+  size: 'light',
+  defaultDurationMs: 1000,
+  params: [
+    { key: 'amount', label: '밀리는 거리', type: 'number', min: 4, max: 120, step: 1, unit: 'px', default: 36 },
+    { key: 'dir', label: '밀리는 쪽', type: 'select', options: DIRECTION_OPTIONS, default: 'left' },
+    { key: 'tilt', label: '들리는 각도', type: 'number', min: 0, max: 20, step: 0.5, unit: '도', default: 5 },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 1000)
+    const gain = gainOf(ctx.strength)
+    const amount = clamp(num(ctx.params, 'amount', 36) * gain, 1, 220)
+    const tilt = clamp(num(ctx.params, 'tilt', 5) * gain, 0, 40)
+    const { prop, sign } = directionVector(str(ctx.params, 'dir', 'left'))
+    const main = prop as ModifierTarget
+    const envelope = flatEnvelope(span)
+
+    const modifiers: Modifier[] = [
+      makeModifier({ id: 'mo.rcl.m', type: 'spring', target: main, amplitude: impactAmp(amount, RING_DECAY) * sign, cycles: 1, decay: RING_DECAY, envelope }),
+      makeModifier({ id: 'mo.rcl.r', type: 'spring', target: 'rotate', amplitude: impactAmp(tilt, RING_DECAY + 0.5) * sign, cycles: 1, decay: RING_DECAY + 0.5, envelope }),
+      makeModifier({ id: 'mo.rcl.s', type: 'spring', target: 'scale', amplitude: -impactAmp(0.05 * gain, RING_DECAY), cycles: 1, decay: RING_DECAY, envelope }),
+    ]
+
+    return { tracks: [], modifiers, durationFrames: emitDuration(span, []), suggestedLoop: loopFor('seamless') }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// F10. 쿵쿵 울림
+// ---------------------------------------------------------------------------
+
+/**
+ * 무거운 것이 규칙적으로 바닥을 때린다.
+ *
+ * 내려찍기와 같은 두 겹 구조인데 횟수가 많고 좌우 흔들림이 크다. 발소리는
+ * 위아래만으로 만들어지지 않는다. 무게 중심이 좌우로 실려야 걷는 것으로 읽힌다.
+ */
+const shakeStomp: MotionPreset = {
+  id: 'shake.stomp',
+  label: '쿵쿵 울림',
+  hint: '무거운 발소리처럼 규칙적으로 바닥이 울린다.',
+  category: 'shake',
+  tags: ['move', 'scale', 'shake', 'impact'],
+  loopSafe: 'seamless',
+  overscan: 'required',
+  easy: false,
+  size: 'light',
+  defaultDurationMs: 1400,
+  params: [
+    { key: 'amount', label: '울리는 세기', type: 'number', min: 2, max: 60, step: 1, unit: 'px', default: 16 },
+    { key: 'hits', label: '울리는 횟수', type: 'number', min: 2, max: 8, step: 1, unit: '회', default: 3 },
+    { key: 'sway', label: '좌우 흔들림', type: 'number', min: 0, max: 30, step: 1, unit: 'px', default: 7 },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 1400)
+    const gain = gainOf(ctx.strength)
+    const amount = clamp(num(ctx.params, 'amount', 16) * gain, 0.5, 120)
+    const sway = clamp(num(ctx.params, 'sway', 7) * gain, 0, 60)
+    const hits = hitsFor(span, clamp(Math.round(num(ctx.params, 'hits', 3)), 2, 8))
+    const envelope = flatEnvelope(span)
+
+    const modifiers: Modifier[] = [
+      makeModifier({ id: 'mo.stp.hit', type: 'spring', target: 'translateY', amplitude: impactAmp(amount, PUNCH_DECAY - 2), cycles: hits, decay: PUNCH_DECAY - 2, envelope }),
+      makeModifier({ id: 'mo.stp.ring', type: 'spring', target: 'translateY', amplitude: impactAmp(amount * 0.4, RING_DECAY), cycles: hits, decay: RING_DECAY, envelope }),
+      makeModifier({ id: 'mo.stp.x', type: 'spring', target: 'translateX', amplitude: impactAmp(sway, RING_DECAY + 1) * -1, cycles: hits, decay: RING_DECAY + 1, envelope }),
+      makeModifier({ id: 'mo.stp.s', type: 'spring', target: 'scale', amplitude: -impactAmp(0.04 * gain, PUNCH_DECAY - 2), cycles: hits, decay: PUNCH_DECAY - 2, envelope }),
+    ]
+
+    return { tracks: [], modifiers, durationFrames: emitDuration(span, []), suggestedLoop: loopFor('seamless') }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// F11. 연타
+// ---------------------------------------------------------------------------
+
+/**
+ * 짧고 빠르게 여러 번 두들긴다.
+ *
+ * 두 축의 횟수를 1 만큼 어긋나게 둔다. 같은 횟수면 매번 같은 방향으로 맞아
+ * 대각선 왕복이 되고, 그 순간 연타가 아니라 진동으로 읽힌다. 둘 다 정수라
+ * 한 주기는 그대로 닫힌다.
+ */
+const shakeRapid: MotionPreset = {
+  id: 'shake.rapid',
+  label: '연타',
+  hint: '짧고 빠르게 여러 번, 매번 다른 쪽에서 때린다.',
+  category: 'shake',
+  tags: ['move', 'rotate', 'shake', 'impact'],
+  loopSafe: 'seamless',
+  overscan: 'required',
+  easy: false,
+  size: 'light',
+  defaultDurationMs: 900,
+  params: [
+    { key: 'amount', label: '때리는 세기', type: 'number', min: 2, max: 60, step: 1, unit: 'px', default: 14 },
+    { key: 'hits', label: '때리는 횟수', type: 'number', min: 3, max: 12, step: 1, unit: '회', default: 6 },
+    { key: 'tilt', label: '기울림', type: 'number', min: 0, max: 10, step: 0.5, unit: '도', default: 2 },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 900)
+    const gain = gainOf(ctx.strength)
+    const amount = clamp(num(ctx.params, 'amount', 14) * gain, 0.5, 120)
+    const tilt = clamp(num(ctx.params, 'tilt', 2) * gain, 0, 24)
+    const envelope = flatEnvelope(span)
+    const decay = PUNCH_DECAY + 2
+    /*
+     * 예산은 많은 쪽(세로)에 맞춰 자르고 가로는 거기서 하나를 뺀다. 두 축을 따로
+     * 자르면 예산이 빠듯할 때 둘이 같은 값으로 눌려, 어긋나게 둔 이유가 사라진다.
+     */
+    const hitsY = hitsFor(span, clamp(Math.round(num(ctx.params, 'hits', 6)), 3, 12) + 1)
+    const hitsX = Math.max(1, hitsY - 1)
+
+    const modifiers: Modifier[] = [
+      makeModifier({ id: 'mo.rpd.x', type: 'spring', target: 'translateX', amplitude: impactAmp(amount, decay), cycles: hitsX, decay, envelope }),
+      makeModifier({ id: 'mo.rpd.y', type: 'spring', target: 'translateY', amplitude: impactAmp(amount * 0.8, decay) * -1, cycles: hitsY, decay, envelope }),
+      makeModifier({ id: 'mo.rpd.r', type: 'spring', target: 'rotate', amplitude: impactAmp(tilt, decay), cycles: hitsX, decay, envelope }),
+    ]
+
+    return { tracks: [], modifiers, durationFrames: emitDuration(span, []), suggestedLoop: loopFor('seamless') }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// F12. 부르르 진동
+// ---------------------------------------------------------------------------
+
+/**
+ * 휴대전화 진동처럼 아주 잘고 빠르게 떤다.
+ *
+ * 자글자글 떨림(F2)과 다르다. 그쪽은 노이즈에 홀드 클럭을 물려 툭툭 끊기고,
+ * 이쪽은 매 프레임 이어지는 규칙적인 사인이다. 규칙적이어야 기계로 읽힌다.
+ * 두 축의 주기를 1 만큼 어긋나게 두어 한 방향으로만 떠는 것을 막는다.
+ *
+ * 포락선은 부풀었다 잦아드는 쪽을 쓴다. 진동은 타격과 달리 시작과 끝이 있는
+ * 사건이 아니라 상태라서, 세기가 완전히 일정하면 기계 소음처럼 지겨워진다.
+ */
+const shakeBuzz: MotionPreset = {
+  id: 'shake.buzz',
+  label: '부르르 진동',
+  hint: '전화기가 울리듯 아주 잘고 빠르게 떤다.',
+  category: 'shake',
+  tags: ['move', 'shake', 'impact'],
+  loopSafe: 'seamless',
+  overscan: 'required',
+  easy: false,
+  size: 'light',
+  defaultDurationMs: 700,
+  params: [
+    { key: 'amount', label: '떨리는 정도', type: 'number', min: 0.5, max: 20, step: 0.5, unit: 'px', default: 3 },
+    { key: 'period', label: '몇 프레임에 한 번', type: 'number', min: 3, max: 8, step: 1, unit: '프레임', default: 3 },
+    { key: 'tilt', label: '기울림', type: 'number', min: 0, max: 4, step: 0.1, unit: '도', default: 0.5 },
+  ],
+  emit(ctx): PresetEmission {
+    const span = resolveSpan(ctx, 700)
+    const gain = gainOf(ctx.strength)
+    const amp = clamp(num(ctx.params, 'amount', 3) * gain, 0.2, 40)
+    const tilt = clamp(num(ctx.params, 'tilt', 0.5) * gain, 0, 10)
+    /*
+     * 빠르기를 주기 수가 아니라 "몇 프레임에 한 번" 으로 받는다.
+     *
+     * 주기 수로 받으면 프레임 예산이 그 값을 거의 언제나 이겨서 노브가 죽는다.
+     * 25fps 700ms 는 18프레임이고, 한 왕복에 최소 세 프레임이 필요하므로 주기는
+     * 여섯 번을 넘을 수 없다. 6~30 짜리 노브를 달아 두면 그중 25칸이 전부 같은
+     * 그림을 낸다. 프레임으로 받으면 노브의 범위가 곧 표현 가능한 범위다.
+     *
+     * 세 프레임 아래로는 내려가지 않는다. 주기가 정확히 두 프레임이면
+     * sin(2π·(span/2)·f/span) = sin(πf) 이라 모든 정수 프레임에서 값이 정확히 0 이다.
+     * 화면이 한 픽셀도 움직이지 않는데 진폭도 카드도 멀쩡하다.
+     */
+    const period = clamp(Math.round(num(ctx.params, 'period', 3)), 3, 8)
+    const cyclesY = Math.max(1, Math.floor(span / period))
+    const cyclesX = Math.max(1, cyclesY - 1)
+    const envelope = swellEnvelope(span, 0.35)
+
+    const modifiers: Modifier[] = [
+      makeModifier({ id: 'mo.buz.x', type: 'sine', target: 'translateX', amplitude: amp, cycles: cyclesX, envelope }),
+      makeModifier({ id: 'mo.buz.y', type: 'sine', target: 'translateY', amplitude: amp * 0.75, cycles: cyclesY, envelope }),
+      makeModifier({ id: 'mo.buz.r', type: 'sine', target: 'rotate', amplitude: tilt, cycles: cyclesX, envelope }),
+    ]
+
+    return { tracks: [], modifiers, durationFrames: emitDuration(span, []), suggestedLoop: loopFor('seamless') }
+  },
+}
+
 export const SHAKE_PRESETS: MotionPreset[] = [
   shakeCamera,
   shakeJitter,
@@ -397,4 +790,10 @@ export const SHAKE_PRESETS: MotionPreset[] = [
   shakeHandheld,
   shakeImpact,
   shakeBreathe,
+  shakePunch,
+  shakeSlam,
+  shakeRecoil,
+  shakeStomp,
+  shakeRapid,
+  shakeBuzz,
 ]

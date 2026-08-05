@@ -693,6 +693,15 @@ const CANVAS_COMMANDS: Command[] = [
     keywords: ['zoom', '100', 'actual', '원본'],
     run: () => uiStore().setZoom(1),
   },
+  {
+    id: 'canvas.grid',
+    label: '격자 보기 켜기 / 끄기',
+    category: '캔버스',
+    keys: ["$mod+'"],
+    hint: '켜면 캔버스에서 끌어 옮길 때 격자에 맞춰 붙는다',
+    keywords: ['grid', 'snap', '격자', '눈금', '맞춰'],
+    run: () => uiStore().toggleGrid(),
+  },
 ]
 
 const PRESET_COMMANDS: Command[] = [

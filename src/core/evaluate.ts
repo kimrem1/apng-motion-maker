@@ -50,6 +50,28 @@ export function defaultCompositeFor(prop: TrackProp): CompositeOp {
 /** 프레임 위치에서 트랙 값을 뽑는다. 키가 하나면 상수다. */
 export const evalTrackAt = evalTrack
 
+/**
+ * 트랙 단위 1 이 렌더러 단위(px, deg, 배율) 몇에 해당하는가.
+ *
+ * 값 변환과 따로 두는 이유는 되돌릴 일이 있기 때문이다. 캔버스에서 끌어 옮긴
+ * 거리는 언제나 픽셀인데, 그 레이어의 이동 트랙이 percentOfCanvas 로 되어 있으면
+ * (사진 훑기 프리셋이 그렇게 낸다) 픽셀을 그대로 쓸 수 없다. 나눗셈에 쓸 배율을
+ * 여기 한 곳에서만 정의해 두면 두 방향이 어긋날 수 없다.
+ */
+export function unitScale(prop: TrackProp, unit: TrackUnit, canvas: CanvasConfig): number {
+  switch (unit) {
+    case 'percentOfCanvas':
+      return (prop === 'translateY' ? canvas.h : canvas.w) / 100
+    case 'norm':
+      return prop === 'translateY' ? canvas.h : canvas.w
+    case 'px':
+    case 'deg':
+    case 'ratio':
+    default:
+      return 1
+  }
+}
+
 /** 단위를 렌더러가 쓰는 단위(px, deg, 배율)로 바꾼다. */
 function convertUnit(
   value: number,
@@ -57,21 +79,7 @@ function convertUnit(
   unit: TrackUnit,
   canvas: CanvasConfig,
 ): number {
-  switch (unit) {
-    case 'percentOfCanvas': {
-      const base = prop === 'translateY' ? canvas.h : canvas.w
-      return (value / 100) * base
-    }
-    case 'norm': {
-      const base = prop === 'translateY' ? canvas.h : canvas.w
-      return value * base
-    }
-    case 'px':
-    case 'deg':
-    case 'ratio':
-    default:
-      return value
-  }
+  return value * unitScale(prop, unit, canvas)
 }
 
 function applyOp(current: number, incoming: number, op: CompositeOp): number {

@@ -83,6 +83,24 @@ export function fbmLoop(
   return norm > 0 ? sum / norm : 0
 }
 
+/**
+ * spring 임펄스가 실제로 내는 최대 절댓값. 진폭 1 기준이다.
+ *
+ * 파형은 sin(2πp)·e^(-d·p) 이고 봉우리는 도함수가 0 인 곳,
+ * 즉 tan(2πp) = 2π/d 를 푼 p* 에 있다. 감쇠가 셀수록 봉우리가 앞으로 당겨지면서
+ * 낮아진다. d=10 이면 0.22 까지 내려간다.
+ *
+ * 이 값이 필요한 데는 두 곳이고 둘 다 같은 이유다. 타격 프리셋은 "28px 만큼
+ * 밀린다" 를 약속하므로 진폭을 이 값으로 나눠 심어야 하고, 담기 솔버는 그렇게
+ * 심은 진폭이 실제로는 그만큼 움직이지 않는다는 것을 알아야 한다. 한쪽만 알면
+ * 화면이 약속보다 덜 움직이거나 그림이 이유 없이 작아진다.
+ */
+export function springPeak(decay: number): number {
+  const d = Math.max(0.001, decay || 4)
+  const p = Math.atan((Math.PI * 2) / d) / (Math.PI * 2)
+  return Math.sin(p * Math.PI * 2) * Math.exp(-d * p)
+}
+
 export interface GeneratorContext {
   /** 정수 프레임 인덱스 */
   frame: number
@@ -175,12 +193,16 @@ export function modifierPeak(m: Modifier): number {
   if (m.type === 'audioEnvelope') return 0
 
   // fbmLoop 은 가중 평균을 정규화하므로 옥타브 수와 무관하게 [-1,1] 을 넘지 않는다.
-  // sine 과 spring 도 마찬가지다. eventBurst 만 사건이 겹쳐 1 을 넘을 수 있다.
+  // sine 도 마찬가지다. eventBurst 만 사건이 겹쳐 1 을 넘을 수 있다.
   //
   // 흔히 쓰는 amplitude * Σoctave 는 정규화하지 않는 fBm 을 전제한 식이다.
   // 여기 구현은 정규화하므로 그 식을 쓰면 필요 이상으로 크게 잡힌다.
   // 오버스캔을 과하게 잡으면 원본을 더 확대해 화질이 손해다.
-  const shape = m.type === 'eventBurst' ? 1.5 : 1
+  //
+  // spring 은 반대로 1 에 한참 못 미친다. 감쇠가 봉우리를 깎기 때문이다. 1 로 잡으면
+  // 타격 프리셋을 건 그림이 실제 필요보다 다섯 배쯤 작아진다 (springPeak 주석).
+  const shape =
+    m.type === 'eventBurst' ? 1.5 : m.type === 'spring' ? springPeak(m.decay) : 1
 
   // 엔벨로프가 1 을 넘으면 그만큼 더 커진다.
   let envPeak = 1

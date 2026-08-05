@@ -231,16 +231,16 @@ describe('카탈로그 구성', () => {
     expect(byCategory('move')).toHaveLength(14)
     expect(byCategory('attention')).toHaveLength(14)
     expect(byCategory('kenburns')).toHaveLength(4)
-    expect(byCategory('shake')).toHaveLength(6)
+    expect(byCategory('shake')).toHaveLength(12)
     expect(byCategory('boil')).toHaveLength(5)
     expect(byCategory('glitch')).toHaveLength(8)
     expect(byCategory('combo')).toHaveLength(4)
   })
 
-  it('전부 합쳐 99종이다 (A16 + B9 + C14 + D14 + E4 + F6 + G5 + H8 + I4 + J19)', () => {
+  it('전부 합쳐 105종이다 (A16 + B9 + C14 + D14 + E4 + F12 + G5 + H8 + I4 + J19)', () => {
     const total = CATEGORY_IDS.map((c) => byCategory(c).length).reduce((a, b) => a + b, 0)
-    expect(total).toBe(99)
-    expect(MOTION_PRESETS).toHaveLength(99)
+    expect(total).toBe(105)
+    expect(MOTION_PRESETS).toHaveLength(105)
   })
 
   it('조합 프리셋이 들어와 있다', () => {

@@ -92,6 +92,52 @@ export function degToRad(deg: number): number {
 }
 
 /**
+ * 점 하나를 옮긴다. 원근이 걸려 있으면 w 로 나눈 뒤의 화면 좌표다.
+ *
+ * w 가 0 이하면 그 점은 카메라 뒤로 넘어갔다. 화면에 자리가 없으므로 undefined 다.
+ * 나눗셈을 호출부마다 다시 적으면 한 곳만 빠뜨렸을 때 3D 회전이 걸린 레이어에서만
+ * 좌표가 어긋난다. 그 종류의 버그는 눈으로 못 잡는다.
+ */
+export function mat3ProjectPoint(
+  m: Mat3,
+  x: number,
+  y: number,
+): { x: number; y: number } | undefined {
+  const w = m[2]! * x + m[5]! * y + m[8]!
+  if (!(w > 1e-9)) return undefined
+  return {
+    x: (m[0]! * x + m[3]! * y + m[6]!) / w,
+    y: (m[1]! * x + m[4]! * y + m[7]!) / w,
+  }
+}
+
+/**
+ * 어파인 매트릭스의 역행렬. 마지막 행이 [0,0,1] 인 것을 전제한다.
+ *
+ * 캔버스에서 잰 자리를 폴더 안쪽 좌표로 되돌릴 때 쓴다. 폴더가 돌아가 있거나
+ * 확대되어 있으면 화면에서 오른쪽으로 10px 끈 것이 안쪽 레이어에게는 10px 이
+ * 아니다. 되돌리지 않으면 폴더에 모션을 건 순간 드래그가 손을 따라오지 않는다.
+ *
+ * 폴더 매트릭스는 언제나 어파인이다 (buildGroupMatrix). 그래서 마지막 행 가정이
+ * 성립하고, 배율이 0 인 특이 행렬만 undefined 로 돌려보내면 된다.
+ */
+export function mat3InvertAffine(m: Mat3, out?: Mat3): Mat3 | undefined {
+  const a = m[0]!, b = m[1]!, c = m[3]!, d = m[4]!
+  const tx = m[6]!, ty = m[7]!
+  const det = a * d - c * b
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return undefined
+
+  const r = mat3Identity(out)
+  r[0] = d / det
+  r[1] = -b / det
+  r[3] = -c / det
+  r[4] = a / det
+  r[6] = -(r[0]! * tx + r[3]! * ty)
+  r[7] = -(r[1]! * tx + r[4]! * ty)
+  return r
+}
+
+/**
  * 3D 회전 + 원근을 mat3 하나로 접는다.
  *
  * 왜 mat4 가 아닌가

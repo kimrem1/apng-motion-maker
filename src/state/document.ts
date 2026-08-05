@@ -54,6 +54,7 @@ import { normalizeShapeSpec } from '@/core/shape.ts'
 import { normalizeTextSpec } from '@/core/text.ts'
 import { createCharAnimSpec, normalizeCharAnimSpec } from '@/core/charAnim.ts'
 import { createRevealSpec, normalizeRevealSpec } from '@/core/reveal.ts'
+import { unitScale } from '@/core/evaluate.ts'
 import { evalTrack, insertKeyframe } from '@/easing/curve.ts'
 import { EASING_PRESET_BY_ID } from '@/easing/presets.ts'
 import {
@@ -353,6 +354,24 @@ interface DocumentState {
 
   /** 애니메이션되지 않은 속성의 값을 바꾼다. 키가 하나뿐일 때 쓴다. */
   setStaticValue(layerId: string, prop: TrackProp, value: number): void
+  /**
+   * 캔버스에서 끌어 옮긴 자리를 쓴다. 값은 캔버스 픽셀이다.
+   *
+   * 여러 장을 한 번에 받는 이유는 setLayerRange 와 같다. 드래그 한 번이 실행취소
+   * 한 칸이어야 하는데, 레이어마다 따로 쓰면 coalesceKey 가 번갈아 들어와 합쳐지지
+   * 않는다. 두 장을 함께 끌면 히스토리가 드래그 스텝 수만큼 쌓인다.
+   *
+   * 픽셀로 받는 이유는 트랙 단위가 레이어마다 다르기 때문이다. 사진 훑기 프리셋은
+   * 이동 트랙을 percentOfCanvas 로 낸다. 화면에서 10px 끈 것을 그 트랙에 10 으로
+   * 쓰면 캔버스의 10% 만큼 날아간다. 변환은 evaluate.ts 의 unitScale 한 곳에서만 한다.
+   *
+   * 애니메이션 중인 위치는 재생헤드에 키를 찍는다. 첫 키만 고치면 나머지 키가 그대로라
+   * 손을 떼는 순간 그림이 원래 자리로 돌아간다.
+   */
+  setLayerTranslate(
+    moves: readonly { layerId: string; x: number; y: number }[],
+    frame: number,
+  ): void
   /** 지정 프레임에 키프레임을 만들거나 갱신한다. */
   setValueAtFrame(layerId: string, prop: TrackProp, frame: number, value: number): void
 
@@ -473,6 +492,48 @@ export function isAnimated(layer: Layer, prop: TrackProp): boolean {
 
 export function getTrack(layer: Layer, prop: TrackProp): Track | undefined {
   return findTrack(layer, prop)
+}
+
+/**
+ * 이동 트랙에 캔버스 픽셀 값을 쓴다. setLayerTranslate 전용이다.
+ *
+ * 트랙이 이미 있으면 그 단위를 지킨다. px 로 갈아끼우면 사진 훑기 프리셋이 낸
+ * percentOfCanvas 트랙이 드래그 한 번에 단위째 바뀌어, 캔버스 크기를 바꿨을 때
+ * 따라가던 성질이 조용히 사라진다.
+ */
+function writeTranslatePx(
+  doc: MotionProject,
+  layer: Layer,
+  prop: 'translateX' | 'translateY',
+  px: number,
+  frame: number,
+): void {
+  const track = findTrack(layer, prop)
+  const unit = track?.unit ?? TRACK_DEFAULTS[prop].unit
+  const scale = unitScale(prop, unit, doc.canvas)
+  const value = scale !== 0 ? px / scale : px
+
+  if (!track) {
+    layer.tracks.push(createStaticTrack(prop, unit, value))
+    return
+  }
+
+  // 애니메이션이 아니면 상수 키 하나를 고친다. 인스펙터의 위치 입력과 같은 경로다.
+  if (track.animated !== true && track.keys.length <= 1) {
+    const key = track.keys[0]
+    if (key) key.v = value
+    else track.keys.push({ f: 0, v: value, interp: 'bezier' })
+    return
+  }
+
+  const at = track.keys.find((k) => k.f === frame)
+  if (at) at.v = value
+  else {
+    track.keys.push({ f: frame, v: value, interp: 'bezier' })
+    sortKeys(track)
+  }
+  // 키를 만지는 것은 PRO 편집이다. EASY 의 세기 슬라이더가 이 값을 덮지 않게 막는다.
+  markPresetDirty(doc)
 }
 
 /** 키를 프레임 오름차순으로 유지한다. 평가기가 정렬을 전제한다. */
@@ -1475,6 +1536,20 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         }
         layer.tracks.push(createStaticTrack(prop, TRACK_DEFAULTS[prop].unit, value))
       }, `static:${layerId}:${prop}`)
+    },
+
+    setLayerTranslate(moves, frame) {
+      if (moves.length === 0) return
+      mutateDoc('위치 이동', (d) => {
+        const at = clamp(Math.round(frame), 0, FRAMES_MAX)
+        for (const move of moves) {
+          const layer = findLayer(d, move.layerId)
+          // 잠긴 레이어는 손이 미끄러져도 움직이지 않는다. 잠금의 뜻이 그것이다.
+          if (!layer || layer.locked) continue
+          writeTranslatePx(d, layer, 'translateX', move.x, at)
+          writeTranslatePx(d, layer, 'translateY', move.y, at)
+        }
+      }, 'drag:translate')
     },
 
     setValueAtFrame(layerId, prop, frame, value) {

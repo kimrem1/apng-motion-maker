@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest'
 
 import { FRAMES_MAX, type EffectInstance, type Modifier } from '@/core/types.ts'
 import { EFFECT_BY_ID } from '@/effects/registry.ts'
-import { evalModifier } from '@/motions/generators.ts'
+import { evalModifier, modifierPeak, springPeak } from '@/motions/generators.ts'
 import {
   CATEGORY_LABELS,
   CATEGORY_ORDER,
@@ -67,6 +67,24 @@ function effectsOf(preset: MotionPreset): EffectInstance[] {
   return emit(preset).effects ?? []
 }
 
+/** 담기 솔버가 보는 값을 재는 데 쓰는 최소 모디파이어. */
+function makeSpring(amplitude: number, decay: number): Modifier {
+  return {
+    id: 'mo.probe',
+    type: 'spring',
+    target: 'translateX',
+    blendOp: 'add',
+    seed: 1,
+    amplitude,
+    cycles: 1,
+    octaves: 2,
+    persistence: 0.5,
+    lacunarity: 2,
+    holdFrames: 1,
+    decay,
+  }
+}
+
 function maxStep(values: number[]): number {
   let out = 0
   for (let i = 1; i < values.length; i += 1) {
@@ -80,9 +98,9 @@ function maxStep(values: number[]): number {
 // ---------------------------------------------------------------------------
 
 describe('카탈로그 구성', () => {
-  it('열 카테고리 99종이다', () => {
-    expect(MOTION_PRESETS).toHaveLength(99)
-    expect(byCategory('shake')).toHaveLength(6)
+  it('열 카테고리 105종이다', () => {
+    expect(MOTION_PRESETS).toHaveLength(105)
+    expect(byCategory('shake')).toHaveLength(12)
     expect(byCategory('boil')).toHaveLength(5)
     expect(byCategory('glitch')).toHaveLength(8)
     expect(byCategory('combo')).toHaveLength(4)
@@ -409,10 +427,21 @@ describe('프리셋이 내는 이펙트', () => {
 // ---------------------------------------------------------------------------
 
 describe('F. 흔들기', () => {
-  it('여섯 종 전부 있다', () => {
-    expect(SHAKE_PRESETS.map((p) => p.id).sort()).toEqual(
-      ['shake.breathe', 'shake.camera', 'shake.handheld', 'shake.impact', 'shake.jitter', 'shake.wobble'],
-    )
+  it('열두 종 전부 있다', () => {
+    expect(SHAKE_PRESETS.map((p) => p.id).sort()).toEqual([
+      'shake.breathe',
+      'shake.buzz',
+      'shake.camera',
+      'shake.handheld',
+      'shake.impact',
+      'shake.jitter',
+      'shake.punch',
+      'shake.rapid',
+      'shake.recoil',
+      'shake.slam',
+      'shake.stomp',
+      'shake.wobble',
+    ])
   })
 
   for (const preset of SHAKE_PRESETS) {
@@ -498,6 +527,137 @@ describe('F. 흔들기', () => {
     const e = emit(preset)
     for (const m of e.modifiers ?? []) expect(m.holdFrames).toBe(2)
     expect(e.durationFrames % 2).toBe(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// F 타격
+// ---------------------------------------------------------------------------
+
+/**
+ * 타격 여섯 종.
+ *
+ * 떨림과 감시 대상이 다르다. 떨림은 "이음새가 닫히는가" 가 전부지만, 타격은
+ * 그 위에 세 가지가 더 있고 셋 다 화면에서는 "밋밋하다" 는 한 가지 증상으로만 보인다.
+ *
+ *   1. 공격이 즉발인가. 최댓값이 두어 프레임 안에 오지 않으면 맞은 것이 아니라
+ *      밀린 것이다.
+ *   2. 파라미터에 적힌 px 가 실제로 그만큼 움직이는가. spring 의 봉우리는 진폭보다
+ *      한참 낮아서 보정을 빠뜨리면 28px 이라고 적어 두고 6px 만 움직인다.
+ *   3. 프레임 예산 안에서 사라지지 않는가. 속도를 2 로 올리면 예산이 절반이 되고,
+ *      한 번이 두 프레임 아래로 내려가면 봉우리가 통째로 건너뛰어진다.
+ */
+describe('F 타격', () => {
+  const IMPACT_IDS = ['shake.punch', 'shake.slam', 'shake.recoil', 'shake.stomp', 'shake.rapid']
+  const impacts = IMPACT_IDS.map((id) => MOTION_PRESET_BY_ID.get(id)!)
+
+  it('여섯 종이 흔들기에 들어와 있다', () => {
+    for (const id of [...IMPACT_IDS, 'shake.buzz']) {
+      expect(MOTION_PRESET_BY_ID.get(id)?.category, id).toBe('shake')
+    }
+  })
+
+  it('spring 임펄스의 봉우리 값이 감쇠를 따른다', () => {
+    // 감쇠가 셀수록 낮아진다. 이 관계가 뒤집히면 보정이 반대로 걸린다.
+    expect(springPeak(3)).toBeGreaterThan(springPeak(10))
+    expect(springPeak(10)).toBeGreaterThan(springPeak(20))
+    expect(springPeak(10)).toBeGreaterThan(0)
+    expect(springPeak(10)).toBeLessThan(1)
+  })
+
+  it('담기 솔버가 spring 의 실제 봉우리를 본다', () => {
+    /*
+     * modifierPeak 가 1 을 그대로 쓰면 타격을 건 그림이 필요보다 다섯 배쯤 작아진다.
+     * 진폭이 아니라 실제 변위를 봐야 한다.
+     */
+    const m = makeSpring(100, 10)
+    expect(modifierPeak(m)).toBeCloseTo(100 * springPeak(10), 6)
+    expect(modifierPeak(m)).toBeLessThan(Math.abs(m.amplitude))
+  })
+
+  for (const preset of impacts) {
+    it(`${preset.id} 는 즉발로 때린다`, () => {
+      const e = emit(preset)
+      const mods = e.modifiers ?? []
+      expect(mods.length).toBeGreaterThan(0)
+      for (const m of mods) {
+        expect(m.type, `${m.id} 가 spring 이 아니다`).toBe('spring')
+        const values = series(m, e.durationFrames)
+        const peak = Math.max(...values.map(Math.abs))
+        const peakAt = values.findIndex((v) => Math.abs(v) === peak)
+        // 한 번의 길이 안에서 앞쪽 3분의 1 안에 최댓값이 온다.
+        const cycleFrames = e.durationFrames / m.cycles
+        expect(peakAt % cycleFrames, `${m.id} 의 공격이 늦다`).toBeLessThanOrEqual(
+          Math.max(1, cycleFrames / 3),
+        )
+      }
+    })
+
+    it(`${preset.id} 의 파라미터 px 가 화면 변위와 같다`, () => {
+      const e = emit(preset, { strength: 0.5 })
+      const declared = Number(preset.params.find((p) => p.unit === 'px')?.default ?? 0)
+      expect(declared).toBeGreaterThan(0)
+
+      // 세기 0.5 에서 gain 이 정확히 1 이므로 기본값이 그대로 화면 변위여야 한다.
+      const peaks = (e.modifiers ?? [])
+        .filter((m) => m.target === 'translateX' || m.target === 'translateY')
+        .map((m) => Math.max(...series(m, e.durationFrames).map(Math.abs)))
+      const biggest = Math.max(...peaks)
+      // 정수 프레임에서만 뽑으므로 봉우리를 살짝 놓칠 수 있다. 10% 안이면 같다고 본다.
+      expect(Math.abs(biggest - declared) / declared, preset.id).toBeLessThan(0.1)
+    })
+
+    it(`${preset.id} 는 어떤 속도에서도 봉우리가 살아 있다`, () => {
+      for (const speed of [0.5, 1, 2]) {
+        const e = emit(preset, { speed })
+        for (const m of e.modifiers ?? []) {
+          // 한 번이 최소 두 프레임은 되어야 정수 격자가 봉우리를 건너뛰지 않는다.
+          expect(e.durationFrames / m.cycles, `${preset.id} ${m.id} s=${speed}`).toBeGreaterThanOrEqual(2)
+          const peak = Math.max(...series(m, e.durationFrames).map(Math.abs))
+          expect(peak, `${preset.id} ${m.id} s=${speed} 가 아무 값도 내지 않는다`).toBeGreaterThan(0)
+        }
+      }
+    })
+  }
+
+  it('부르르 진동은 규칙적인 사인이고 값이 사라지지 않는다', () => {
+    /*
+     * 주기가 정확히 두 프레임이면 sin(πf) 라 모든 정수 프레임에서 값이 0 이다.
+     * 진폭도 카드도 멀쩡한데 화면만 안 움직인다. 실측으로 18프레임 9주기에서 났다.
+     */
+    const preset = MOTION_PRESET_BY_ID.get('shake.buzz')!
+    for (const speed of [0.5, 1, 2]) {
+      for (const period of [3, 5, 8]) {
+        const e = emit(preset, { speed, params: { period } })
+        for (const m of e.modifiers ?? []) {
+          expect(m.type).toBe('sine')
+          expect(Number.isInteger(m.cycles)).toBe(true)
+          expect(e.durationFrames / m.cycles).toBeGreaterThan(2)
+          const peak = Math.max(...series(m, e.durationFrames).map(Math.abs))
+          expect(peak, `${m.id} p=${period} s=${speed}`).toBeGreaterThan(0)
+        }
+      }
+    }
+  })
+
+  it('연타는 두 축의 횟수가 어긋나 있다', () => {
+    // 같으면 매번 같은 방향으로 맞아 연타가 아니라 대각선 왕복으로 보인다.
+    const e = emit(MOTION_PRESET_BY_ID.get('shake.rapid')!)
+    const x = (e.modifiers ?? []).find((m) => m.id === 'mo.rpd.x')!
+    const y = (e.modifiers ?? []).find((m) => m.id === 'mo.rpd.y')!
+    expect(x.cycles).not.toBe(y.cycles)
+  })
+
+  it('내려찍기와 쿵쿵 울림은 빠른 타격과 느린 울림을 겹친다', () => {
+    // 하나로는 둘 다 못 만든다. 감쇠를 올리면 여운이 없고 내리면 박히는 맛이 없다.
+    for (const id of ['shake.slam', 'shake.stomp']) {
+      const mods = emit(MOTION_PRESET_BY_ID.get(id)!).modifiers ?? []
+      const onY = mods.filter((m) => m.target === 'translateY')
+      expect(onY.length, id).toBe(2)
+      expect(Math.max(...onY.map((m) => m.decay))).toBeGreaterThan(
+        Math.min(...onY.map((m) => m.decay)) * 2,
+      )
+    }
   })
 })
 
