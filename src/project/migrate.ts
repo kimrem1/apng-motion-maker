@@ -649,10 +649,9 @@ function normalizeLayer(
    * 자르기는 참일 때만 남긴다.
    *
    * 객체가 ...raw 로 시작하므로 false 나 문자열이 그대로 살아남는다. 아무 일도 하지
-   * 않는 값이 저장 파일에 남으면 왕복 JSON 이 달라진다. 폴더는 자를 그림이 없으므로
-   * 함께 지운다.
+   * 않는 값이 저장 파일에 남으면 왕복 JSON 이 달라진다.
    */
-  if ('clipToBelow' in layer && (layer.clipToBelow !== true || layer.type === 'group')) {
+  if ('clipToBelow' in layer && layer.clipToBelow !== true) {
     delete layer.clipToBelow
   }
   /*

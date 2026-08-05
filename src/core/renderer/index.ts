@@ -22,7 +22,7 @@ import { resolveComposition } from '../evaluate.ts'
 import { solveOverscan, type OverscanMap } from '../overscan.ts'
 import { buildLayerMatrix, canvasToClip, mat3Multiply, type Mat3 } from '../transform.ts'
 import { applyFolderMatrix, buildFolderMatrices } from '../group.ts'
-import { clipGroups } from '../clip.ts'
+import { clipGroups, subtreeEnds } from '../clip.ts'
 import { CLIP_FS } from './shaders/clip.ts'
 import { secToFrame } from '../time.ts'
 import { setPremultipliedBlend, type GlCapabilities } from './gl.ts'
@@ -180,8 +180,18 @@ export class Renderer {
      * 누산기에 이미 섞인 뒤에는 밑판만의 알파를 되찾을 방법이 없기 때문이다.
      */
     const groups = clipGroups(layers)
-    const membersByBase = new Map(groups.map((g) => [g.base, g.members]))
-    const clippedIndexes = new Set(groups.flatMap((g) => g.members))
+    const subtreeEnd = subtreeEnds(layers)
+    const groupByBase = new Map(groups.map((g) => [g.base, g]))
+    /*
+     * 덩어리가 이미 그린 번호들. 폴더가 붙는 쪽이면 **그 안쪽까지** 전부 들어간다.
+     * 빠뜨리면 폴더 식구가 잘린 그림 위에 한 번 더 그려져 마스크가 무의미해진다.
+     */
+    const clippedIndexes = new Set<number>()
+    for (const g of groups) {
+      for (const m of g.members) {
+        for (let k = m; k <= (subtreeEnd[m] ?? m); k += 1) clippedIndexes.add(k)
+      }
+    }
 
     // 레이어별 이펙트가 있으면 그 레이어를 따로 그려 체인을 태워야 하고,
     // 혼합 모드가 있으면 배경을 읽어야 한다. 둘 다 오프스크린을 요구한다.
@@ -239,9 +249,11 @@ export class Renderer {
       gl.viewport(0, 0, w, h)
       this.clearBackground(doc)
 
-      // 자르기가 있을 때만 빌린다. 옛 문서에서는 버퍼 두 장을 만들지 않는다.
+      // 자르기가 있을 때만 빌린다. 옛 문서에서는 버퍼 세 장을 만들지 않는다.
       const maskBuf = groups.length > 0 ? borrow() : null
       const groupBuf = groups.length > 0 ? borrow() : null
+      /** 폴더 하나를 통째로 담는 자리. 폴더가 자르기에 참여할 때만 쓴다. */
+      const subBuf = groups.length > 0 ? borrow() : null
 
       /** 레이어 한 장을 layerBuf 에 그리고 이펙트까지 태운 결과. */
       const renderLayerAlone = (layer: ResolvedLayer): PooledTarget => {
@@ -296,15 +308,56 @@ export class Renderer {
         spare = swap
       }
 
+      /**
+       * from..to 를 한 장에 담는다. **폴더 하나를 통째로 그릴 때** 쓴다.
+       *
+       * 안에서는 노멀 합성이다. 폴더 식구의 혼합 모드를 살리려면 배경 버퍼를 한 장
+       * 더 떠야 하는데, 자르기에 들어간 폴더 안에서 그 조합은 거의 나오지 않는다.
+       * 이펙트는 레이어마다 그대로 걸린다. 그쪽은 흔하기 때문이다.
+       */
+      const renderRange = (dest: PooledTarget, from: number, to: number): PooledTarget => {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
+        gl.viewport(0, 0, w, h)
+        gl.clearColor(0, 0, 0, 0)
+        gl.clear(gl.COLOR_BUFFER_BIT)
+
+        for (let k = from; k <= to; k += 1) {
+          const inner = layers[k]!
+          if (!inner.visible) continue
+          if (!layerNeedsPass[k]) {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
+            gl.viewport(0, 0, w, h)
+            setPremultipliedBlend(gl)
+            this.drawLayer(doc, inner, assets)
+            continue
+          }
+          const source = renderLayerAlone(inner)
+          gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
+          gl.viewport(0, 0, w, h)
+          setPremultipliedBlend(gl)
+          this.composePass(source)
+        }
+        return dest
+      }
+
+      /**
+       * 자르기에 참여하는 한 덩이. 폴더면 안쪽까지, 아니면 자기 한 장이다.
+       * 폴더 경로만 subBuf 를 쓰므로, 밑판을 복사해 둔 뒤에 식구를 그려야 한다.
+       */
+      const renderUnit = (index: number, end: number): PooledTarget => {
+        if (end > index && subBuf) return renderRange(subBuf, index, end)
+        return renderLayerAlone(layers[index]!)
+      }
+
       for (let i = 0; i < layers.length; i += 1) {
         const layer = layers[i]!
 
-        // 덩어리에 속한 레이어는 밑판 차례에 이미 그렸다.
+        // 덩어리에 속한 레이어(와 그 폴더 식구)는 밑판 차례에 이미 그렸다.
         if (clippedIndexes.has(i)) continue
 
-        const members = membersByBase.get(i)
+        const group = groupByBase.get(i)
 
-        if (members && maskBuf && groupBuf) {
+        if (group && maskBuf && groupBuf) {
           /*
            * 자르기 덩어리.
            *
@@ -313,20 +366,25 @@ export class Renderer {
            *   3. 위에 붙는 레이어를 하나씩 그려 마스크로 깎아 덩어리에 얹는다.
            *   4. 덩어리를 밑판의 혼합 모드로 누산기에 얹는다.
            *
-           * 덩어리 **안에서는** 노멀 합성이다. 붙는 레이어의 혼합 모드를 여기서
-           * 쓰려면 덩어리 버퍼를 매번 한 장 더 떠야 하는데, 자르기의 쓰임(사진을
-           * 글자 모양으로 자르기)에서 그 조합은 거의 나오지 않는다.
+           * 밑판도 붙는 쪽도 **폴더일 수 있다.** 그때는 폴더 안쪽 전체가 한 장으로
+           * 그려진 뒤 그 한 장이 마스크가 되거나 잘린다. 도형 여러 장으로 만든
+           * 모양 안에만 사진을 채우는 것이 이 경로다.
+           *
+           * 밑판을 **먼저 복사해 두고** 식구를 그린다. 폴더 경로가 subBuf 를
+           * 공유하므로, 복사 전에 식구를 그리면 마스크가 덮인다.
            */
-          const baseSource = renderLayerAlone(layer)
+          const baseSource = renderUnit(group.base, group.baseEnd)
           this.copyPass(baseSource, { gl, width: w, height: h, fbo: maskBuf.fbo })
           this.copyPass(baseSource, { gl, width: w, height: h, fbo: groupBuf.fbo })
 
-          for (const m of members) {
-            const source = renderLayerAlone(layers[m]!)
+          for (const m of group.members) {
+            const source = renderUnit(m, subtreeEnd[m] ?? m)
             this.clipPass(groupBuf, source, maskBuf)
           }
 
           compose(groupBuf, layer.blend)
+          // 밑판이 폴더면 그 식구들까지 이 차례에 끝났다.
+          i = Math.max(i, group.baseEnd)
           continue
         }
 

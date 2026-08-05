@@ -156,9 +156,13 @@ export function LayerProperties({ layer }: LayerPropertiesProps) {
     const ordered = [...doc.layers].sort((a, b) => a.z - b.z)
     const index = ordered.findIndex((l) => l.id === layer.id)
     if (index < 0) return null
-    const probe = ordered.map((l) => ({
-      clipToBelow: index === ordered.indexOf(l) ? true : l.clipToBelow,
-      folderId: l.folderId,
+    const probe = ordered.map((l, i) => ({
+      layerId: l.id,
+      // 지금 레이어는 켜져 있다고 보고 묻는다. 꺼져 있어도 "켜면 무엇에 잘리는지" 를
+      // 미리 알려 줘야 사용자가 순서를 맞출 수 있다.
+      clipToBelow: i === index ? true : l.clipToBelow,
+      ...(l.folderId === undefined ? {} : { folderId: l.folderId }),
+      isFolder: l.type === 'group',
       visible: l.visible,
     }))
     const base = clipBaseIndexes(probe)[index] ?? -1

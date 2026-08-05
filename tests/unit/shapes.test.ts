@@ -123,8 +123,8 @@ describe('도형 값 규칙', () => {
 // ---------------------------------------------------------------------------
 
 describe('도형 세트 카탈로그', () => {
-  it('서른네 종이고 id 가 겹치지 않는다', () => {
-    expect(SHAPE_SCENES).toHaveLength(34)
+  it('서른여덟 종이고 id 가 겹치지 않는다', () => {
+    expect(SHAPE_SCENES).toHaveLength(38)
     expect(SHAPE_SCENE_BY_ID.size).toBe(SHAPE_SCENES.length)
   })
 

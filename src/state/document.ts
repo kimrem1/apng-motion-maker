@@ -1138,11 +1138,6 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         for (const id of layerIds) {
           const layer = findLayer(d, id)
           if (!layer) continue
-          /*
-           * 폴더는 자를 그림이 없다. 폴더에 켜 두면 아무 일도 안 하는 값이 문서에
-           * 남고, 나중에 폴더가 그림을 갖게 되면 그때 갑자기 동작한다.
-           */
-          if (layer.type === 'group') continue
           if (on) layer.clipToBelow = true
           else delete layer.clipToBelow
         }
