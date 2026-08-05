@@ -26,8 +26,16 @@ import type {
   ResolvedTransform,
   SafeZonePolicy,
 } from './types.ts'
-import { baseFitScale, buildLayerMatrix, perspectiveZMax } from './transform.ts'
+import {
+  baseFitScale,
+  buildGroupMatrix,
+  buildLayerMatrix,
+  mat3Multiply,
+  perspectiveZMax,
+  type Mat3,
+} from './transform.ts'
 import { resolveLayerTransformWithParents } from './evaluate.ts'
+import { folderChain } from './group.ts'
 import { layerIntrinsicSize } from './shape.ts'
 import { modifierPeak } from '@/motions/generators.ts'
 
@@ -281,6 +289,7 @@ function containScaleAt(
   imageH: number,
   t: ResolvedTransform,
   fit: FitMode,
+  group?: Mat3,
 ): number {
   // fit 과 baseScale 을 미리 곱해 넘기면 안 된다. 기준점 보정이 그 둘로 계산되므로
   // (transform.ts buildLayerMatrix), 접어 넣는 순간 솔버가 렌더러와 다른 위치를 본다.
@@ -293,6 +302,18 @@ function containScaleAt(
     imageW,
     imageH,
   )
+  /*
+   * 폴더는 바깥에 곱한다. 렌더러와 **정확히 같은 자리**여야 한다.
+   *
+   * 폴더 매트릭스는 어파인이라 1차식이 그대로다.
+   *   G·(pos + c·D) = G_선형·pos + G_이동 + c·G_선형·D
+   * 마지막 행도 [0,0,1] 이라 w 성분이 바뀌지 않는다. 아래에서 "두 매트릭스의
+   * 마지막 행이 같다" 고 가정하는 부분이 그래서 그대로 유효하다.
+   */
+  if (group) {
+    mat3Multiply(group, full, full)
+    mat3Multiply(group, origin, origin)
+  }
   const halfW = canvasW / 2
   const halfH = canvasH / 2
 
@@ -327,6 +348,47 @@ function containScaleAt(
   // 중심이 이미 프레임 밖이면 어떤 양수 배율로도 담기지 않는다.
   if (!Number.isFinite(c) || c < 0) return 0
   return c
+}
+
+/**
+ * 이 레이어를 담고 있는 폴더들의 누적 매트릭스. 폴더가 없으면 undefined 다.
+ *
+ * core/group.ts 의 buildFolderMatrices 와 **같은 곱셈 순서**여야 한다. 저쪽은
+ * 렌더러가 프레임당 한 번 쓰는 캐시이고 이쪽은 솔버가 표본 프레임마다 쓰는
+ * 일회용이다. 순서가 어긋나면 솔버가 실제와 다른 자리를 재서, 폴더에 모션을 건
+ * 순간 안쪽 그림이 이유 없이 작아진다.
+ */
+function folderMatrixAt(
+  doc: CompositionSnapshot,
+  layer: Layer,
+  frame: number,
+): Mat3 | undefined {
+  const chain = folderChain(doc.layers, layer)
+  if (chain.length === 0) return undefined
+
+  // 사슬은 안쪽부터 담겨 있다. 바깥 폴더가 왼쪽에 와야 하므로 뒤에서부터 곱한다.
+  let acc: Mat3 | undefined
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    const t = resolveLayerTransformWithParents(doc, chain[i]!, frame)
+    const g = buildGroupMatrix(t, doc.canvas.w, doc.canvas.h)
+    acc = acc ? mat3Multiply(acc, g, g) : g
+  }
+  return acc
+}
+
+function isIdentityMatrix(m: Mat3): boolean {
+  const EPS = 1e-6
+  return (
+    Math.abs(m[0]! - 1) < EPS &&
+    Math.abs(m[4]! - 1) < EPS &&
+    Math.abs(m[8]! - 1) < EPS &&
+    Math.abs(m[1]!) < EPS &&
+    Math.abs(m[2]!) < EPS &&
+    Math.abs(m[3]!) < EPS &&
+    Math.abs(m[5]!) < EPS &&
+    Math.abs(m[6]!) < EPS &&
+    Math.abs(m[7]!) < EPS
+  )
 }
 
 export interface ContainNeed {
@@ -378,7 +440,15 @@ export function solveLayerContain(
    */
   for (const f of frames) {
     const t = resolveLayerTransformWithParents(doc, layer, f)
-    const c = containScaleAt(canvasW, canvasH, imageW, imageH, t, layer.fit)
+    const c = containScaleAt(
+      canvasW,
+      canvasH,
+      imageW,
+      imageH,
+      t,
+      layer.fit,
+      folderMatrixAt(doc, layer, f),
+    )
     if (c < worst) {
       worst = c
       worstFrame = f
@@ -437,6 +507,24 @@ export function solveLayerOverscan(
 
   const headroom = modifierHeadroom(layer)
   const frames = sampleFrames(doc, layer, options.sampleCount ?? doc.safeZone.sampleCount)
+
+  /*
+   * 움직이는 폴더 안에서는 채우기를 끈다.
+   *
+   * 채우기 solver 는 매트릭스가 아니라 닫힌 식(requiredScaleAt)으로 "캔버스를 덮는
+   * 배율" 을 푼다. 폴더가 그룹째로 움직이거나 줄이면 그 식이 답할 수 없는 문제가
+   * 되고, 그대로 두면 **틀린 배율로 개입한다.** 개입하지 않는 편이 낫다. 담기 쪽은
+   * 매트릭스 기반이라 폴더를 그대로 반영한다.
+   *
+   * 정리용으로만 쓰는(움직이지 않는) 폴더에서는 예전과 똑같이 동작해야 한다.
+   * 그래서 "폴더가 있다" 가 아니라 "폴더가 실제로 기하를 바꾼다" 로 가른다.
+   */
+  if (layer.folderId) {
+    for (const f of frames) {
+      const g = folderMatrixAt(doc, layer, f)
+      if (g && !isIdentityMatrix(g)) return idle
+    }
+  }
 
   let sRequired = 0
   let kMax = 0

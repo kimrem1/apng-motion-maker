@@ -667,6 +667,48 @@ function normalizeLayer(
 }
 
 /**
+ * 폴더 사슬을 검사한다.
+ *
+ * folderId 는 **'group' 타입 레이어**만 가리킬 수 있다. 이미지 레이어를 가리키고
+ * 있으면 그 레이어의 변환이 통째로 얹혀 그림이 엉뚱한 자리로 간다. 순환은 부모
+ * 사슬과 같은 이유로 끊는다.
+ *
+ * 순서는 여기서 손대지 않는다. 폴더 식구를 붙여 두는 것은 스토어의 일이고
+ * (state/document.ts normalizeFolderOrder), 저장된 문서는 이미 그 순서다.
+ * 여기서 z 를 다시 매기면 옛 문서의 그리는 순서가 조용히 달라진다.
+ */
+function fixFolders(layers: Layer[], bag: WarningBag): void {
+  const byId = new Map(layers.map((l) => [l.id, l]))
+
+  for (const layer of layers) {
+    if (layer.folderId === undefined) continue
+
+    if (typeof layer.folderId !== 'string' || !byId.has(layer.folderId)) {
+      bag.add('없는 폴더를 가리켜 폴더에서 꺼냈습니다.')
+      delete layer.folderId
+      continue
+    }
+    if (byId.get(layer.folderId)!.type !== 'group') {
+      bag.add('폴더가 아닌 레이어를 폴더로 가리켜 꺼냈습니다.')
+      delete layer.folderId
+      continue
+    }
+
+    const seen = new Set<string>([layer.id])
+    let cursor: string | undefined = layer.folderId
+    while (cursor) {
+      if (seen.has(cursor)) {
+        bag.add('폴더 관계가 순환이라 폴더에서 꺼냈습니다.')
+        delete layer.folderId
+        break
+      }
+      seen.add(cursor)
+      cursor = byId.get(cursor)?.folderId
+    }
+  }
+}
+
+/**
  * 부모 사슬을 검사한다.
  * 순환이 있으면 평가기가 부모를 따라 돌다 자기 자신으로 돌아온다.
  * 평가기에도 방어가 있지만 문서에 애초에 남기지 않는 편이 낫다.
@@ -879,6 +921,7 @@ function normalizeProject(raw: RawRecord, known: ReadonlySet<string>, bag: Warni
     if (layer) layers.push(layer)
   })
   fixParents(layers, bag)
+  fixFolders(layers, bag)
 
   const assetIds = new Set(assets.map((a) => a.id))
   const dangling = layers.filter((l) => l.assetId !== null && !assetIds.has(l.assetId))

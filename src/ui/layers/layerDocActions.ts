@@ -92,6 +92,11 @@ export function setLayerBlend(layerId: string, blend: BlendMode): void {
   useDocumentStore.getState().setLayerBlend(layerId, blend)
 }
 
+/** 레이어를 폴더에 넣거나 밖으로 꺼낸다. 값 규칙은 스토어 한 곳에만 있다. */
+export function setLayerFolder(layerIds: string[], folderId: string | null): void {
+  useDocumentStore.getState().setLayerFolder(layerIds, folderId)
+}
+
 export function setLayerParent(layerId: string, parentId: string | null): void {
   useDocumentStore.getState().setLayerParent(layerId, parentId)
 }

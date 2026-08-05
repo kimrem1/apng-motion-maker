@@ -356,3 +356,29 @@
   font-size: var(--fs-xs);
   text-align: right;
 }
+
+/* --------------------------------------------------------------------------
+ * 폴더
+ *
+ * 들여쓰기는 왼쪽 여백 하나로만 준다. 목록이 격자(grid)라서 열 구조를 건드리면
+ * 썸네일과 이름이 깊이마다 다른 자리에 오게 되고, 그러면 눈이 목록을 훑지 못한다.
+ * ------------------------------------------------------------------------ */
+
+.mm-lyr-row[data-depth='1'] { margin-left: 14px; }
+.mm-lyr-row[data-depth='2'] { margin-left: 28px; }
+.mm-lyr-row[data-depth='3'] { margin-left: 42px; }
+.mm-lyr-row[data-depth='4'] { margin-left: 56px; }
+
+/* 폴더는 그리는 것이 없다. 목록에서만 존재하므로 배경을 눌러 구분한다. */
+.mm-lyr-row.is-folder {
+  background: var(--surface);
+  border-style: solid;
+}
+
+.mm-lyr-folder-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text-muted);
+}

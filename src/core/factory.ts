@@ -179,6 +179,42 @@ export function createTextLayer(text: TextSpec, name: string, z: number): Layer 
   }
 }
 
+/**
+ * 폴더 레이어.
+ *
+ * 아무것도 그리지 않는다. 안에 담긴 레이어의 매트릭스 바깥에 자기 변환이 곱해질
+ * 뿐이다 (core/group.ts). 그래서 맞춤도 원본도 없다.
+ *
+ * **트랙은 다른 레이어와 똑같다.** 그래야 94종 프리셋이 폴더에도 그대로 걸린다.
+ * 폴더 전용 모션 목록을 따로 만들 이유가 없다.
+ *
+ * 담기 / 채우기는 끈다. 폴더는 잴 원본 크기가 없어 솔버 대상이 아니다.
+ */
+export function createFolderLayer(name: string, z: number): Layer {
+  return {
+    id: nextId('l'),
+    name,
+    type: 'group',
+    assetId: null,
+    parentId: null,
+    z,
+    visible: true,
+    locked: false,
+    fit: 'none',
+    anchor: [0.5, 0.5],
+    keepPlaceOnAnchorChange: true,
+    baseScale: 1,
+    blend: 'normal',
+    parallaxFactor: 1,
+    fillsCanvas: false,
+    keepInside: false,
+    motionExitsFrame: false,
+    tracks: [],
+    modifiers: [],
+    effects: [],
+  }
+}
+
 export function createStaticTrack(prop: TrackProp, unit: TrackUnit, value: number): Track {
   return {
     id: nextId('t'),

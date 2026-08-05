@@ -21,6 +21,7 @@ import { REVEAL_MODE_CODE } from '../reveal.ts'
 import { resolveComposition } from '../evaluate.ts'
 import { solveOverscan, type OverscanMap } from '../overscan.ts'
 import { buildLayerMatrix, canvasToClip, mat3Multiply, type Mat3 } from '../transform.ts'
+import { applyFolderMatrix, buildFolderMatrices } from '../group.ts'
 import { secToFrame } from '../time.ts'
 import { setPremultipliedBlend, type GlCapabilities } from './gl.ts'
 import { ProgramCache, type ProgramInfo } from './programCache.ts'
@@ -108,6 +109,9 @@ export class Renderer {
   private overscanDoc: CompositionSnapshot | null = null
   private overscanMap: OverscanMap = new Map()
 
+  /** 이번 프레임의 폴더 매트릭스. 폴더가 없으면 비어 있고 비용도 0 이다. */
+  private folderMatrices: ReadonlyMap<string, Mat3> = new Map()
+
   constructor(gl: WebGL2RenderingContext, caps: GlCapabilities) {
     this.gl = gl
     this.caps = caps
@@ -161,6 +165,11 @@ export class Renderer {
     }
 
     const layers = resolveComposition(doc, frame, this.overscanMap)
+    /*
+     * 폴더 매트릭스는 프레임마다 폴더 개수만큼만 만든다.
+     * 레이어마다 사슬을 다시 곱하면 깊이의 제곱이 된다.
+     */
+    this.folderMatrices = buildFolderMatrices(layers, doc.canvas.w, doc.canvas.h)
 
     // 레이어별 이펙트가 있으면 그 레이어를 따로 그려 체인을 태워야 하고,
     // 혼합 모드가 있으면 배경을 읽어야 한다. 둘 다 오프스크린을 요구한다.
@@ -412,6 +421,8 @@ export class Renderer {
       asset.height,
       this.layerMatrix,
     )
+    // 폴더는 바깥에 곱한다. 폴더가 없으면 아무 일도 하지 않는다.
+    applyFolderMatrix(this.layerMatrix, layer.folderId, this.folderMatrices)
     mat3Multiply(this.clipMatrix, this.layerMatrix, this.finalMatrix)
 
     gl.useProgram(info.program)
@@ -461,6 +472,7 @@ export class Renderer {
       h,
       this.layerMatrix,
     )
+    applyFolderMatrix(this.layerMatrix, layer.folderId, this.folderMatrices)
     mat3Multiply(this.clipMatrix, this.layerMatrix, this.finalMatrix)
 
     gl.useProgram(info.program)
@@ -539,6 +551,7 @@ export class Renderer {
       boxH,
       this.layerMatrix,
     )
+    applyFolderMatrix(this.layerMatrix, layer.folderId, this.folderMatrices)
     mat3Multiply(this.clipMatrix, this.layerMatrix, this.textBase)
 
     const info = this.programs.get(TEXT_VS, TEXT_FS)

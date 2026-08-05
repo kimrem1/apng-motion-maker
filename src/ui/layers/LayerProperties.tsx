@@ -13,6 +13,8 @@
 import { useId, useMemo, useState } from 'react'
 
 import type { Layer } from '@/core/types.ts'
+import { resolveLayerTransformWithParents } from '@/core/evaluate.ts'
+import { folderChain } from '@/core/group.ts'
 import { diagnose, isContainTarget, solveLayerContain, solveLayerOverscan } from '@/core/overscan.ts'
 import { layerIntrinsicSize } from '@/core/shape.ts'
 import { useDocumentStore } from '@/state/document.ts'
@@ -27,11 +29,13 @@ import {
   setFrameFit,
   setLayerBlend,
   setLayerParallax,
+  setLayerFolder,
   setLayerParent,
 } from './layerDocActions.ts'
 import './layers.css'
 
 const NO_PARENT = ''
+const NO_FOLDER = ''
 
 export interface LayerPropertiesProps {
   layer: Layer
@@ -94,6 +98,49 @@ export function LayerProperties({ layer }: LayerPropertiesProps) {
     return options
   }, [doc, layer.id])
 
+  /**
+   * 담을 수 있는 폴더 목록.
+   *
+   * 자기 자신과 자기 자손은 뺀다. 넣으면 사슬이 자기에게 돌아와 아무도 안 그려진다.
+   */
+  const folderOptions = useMemo<SelectOption<string>[]>(() => {
+    const options: SelectOption<string>[] = [{ value: NO_FOLDER, label: '없음 (최상위)' }]
+    for (const candidate of [...doc.layers].reverse()) {
+      if (candidate.type !== 'group') continue
+      if (candidate.id === layer.id) continue
+      if (folderChain(doc.layers, candidate).some((f) => f.id === layer.id)) continue
+      options.push({ value: candidate.id, label: candidate.name })
+    }
+    return options
+  }, [doc.layers, layer.id])
+
+  /**
+   * 움직이는 폴더 안인가. 채우기가 꺼지는 조건과 **같은 규칙**이어야 한다
+   * (core/overscan.ts solveLayerOverscan). 여기서는 첫 프레임과 중간, 끝만 본다.
+   * 안내 문구용이라 표본이 촘촘할 필요가 없다.
+   */
+  const insideMovingFolder = useMemo(() => {
+    if (!layer.folderId || !layer.fillsCanvas) return false
+    const last = Math.max(0, doc.timeline.durationFrames - 1)
+    for (const f of [0, Math.floor(last / 2), last]) {
+      for (const folder of folderChain(doc.layers, layer)) {
+        const t = resolveLayerTransformWithParents(doc, folder, f)
+        if (
+          t.translateX !== 0 ||
+          t.translateY !== 0 ||
+          t.rotate !== 0 ||
+          t.skewX !== 0 ||
+          t.skewY !== 0 ||
+          t.scaleX !== 1 ||
+          t.scaleY !== 1
+        ) {
+          return true
+        }
+      }
+    }
+    return false
+  }, [doc, layer])
+
   const frameFit = frameFitOf(layer)
   const hasParent = layer.parentId !== null
   // fillsCanvas 를 켜도 맞춤이 contain/none 이면 솔버가 돌지 않는다 (overscan.isSolverTarget).
@@ -112,6 +159,26 @@ export function LayerProperties({ layer }: LayerPropertiesProps) {
       </h2>
 
       <div className="mm-stack">
+        {/* ------------------------------------------------------------- */}
+        {/* 어느 폴더에 담겨 있는가. 폴더의 움직임이 통째로 얹힌다.        */}
+        {/* ------------------------------------------------------------- */}
+        {folderOptions.length > 1 ? (
+          <SelectField
+            label="폴더"
+            value={layer.folderId ?? NO_FOLDER}
+            options={folderOptions}
+            ariaLabel="이 레이어가 담긴 폴더"
+            hint="폴더의 움직임이 안에 든 레이어에 그대로 얹힙니다."
+            onChange={(v) => setLayerFolder([layer.id], v === NO_FOLDER ? null : v)}
+          />
+        ) : null}
+        {insideMovingFolder ? (
+          <p className="mm-lyr-note">
+            움직이는 폴더 안에서는 채우기가 동작하지 않습니다. 폴더가 그룹째로 움직이면
+            한 장만 보고 푼 배율이 맞지 않기 때문입니다.
+          </p>
+        ) : null}
+
         {/* ------------------------------------------------------------- */}
         {/* 모션이 프레임을 벗어날 때 무엇을 지킬 것인가. 셋은 배타다. */}
         {/* ------------------------------------------------------------- */}

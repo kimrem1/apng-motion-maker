@@ -42,12 +42,14 @@ import {
 import {
   TRACK_DEFAULTS,
   createEmptyProject,
+  createFolderLayer,
   createImageLayer,
   createShapeLayer,
   createTextLayer,
   createStaticTrack,
   nextId,
 } from '@/core/factory.ts'
+import { MAX_FOLDER_DEPTH } from '@/core/group.ts'
 import { normalizeShapeSpec } from '@/core/shape.ts'
 import { normalizeTextSpec } from '@/core/text.ts'
 import { createCharAnimSpec, normalizeCharAnimSpec } from '@/core/charAnim.ts'
@@ -136,6 +138,14 @@ export interface AddShapeSceneInput {
    */
   replace?: string[]
   coalesceKey?: string
+  /**
+   * 만든 레이어들을 이 이름의 폴더로 묶는다.
+   *
+   * 세트 하나가 도형을 스무 장까지 만든다. 목록에 스무 줄이 그대로 쏟아지면
+   * 그다음 작업이 전부 스크롤 싸움이 된다. 폴더로 묶으면 한 줄이고, **그 한 줄에
+   * 모션을 걸면 세트 전체가 함께 움직인다.**
+   */
+  folderName?: string
 }
 
 interface DocumentState {
@@ -197,6 +207,20 @@ interface DocumentState {
   setLayerPerspective(layerId: string, value: number): void
   removeLayer(layerId: string): void
   reorderLayer(layerId: string, direction: -1 | 1): void
+
+  /**
+   * 폴더를 만든다. layerIds 를 주면 그 레이어들을 바로 담는다.
+   *
+   * 폴더는 아무것도 그리지 않고, 자기 변환이 안쪽 레이어 바깥에 곱해진다.
+   * 그래서 폴더에 모션 A 를 걸고 안의 그림에 모션 B 를 걸면 둘이 함께 보인다.
+   */
+  addFolder(input?: { name?: string; layerIds?: string[] }): { folderId: string }
+  /**
+   * 레이어를 폴더에 넣거나(folderId) 밖으로 꺼낸다(null).
+   *
+   * 순환은 만들지 않는다. 폴더를 자기 자손 안으로 넣으려 하면 아무 일도 하지 않는다.
+   */
+  setLayerFolder(layerIds: string[], folderId: string | null): void
 
   /**
    * 이미지 다듬기(배경 제거 / 크롭) 결과를 문서에 반영한다.
@@ -488,6 +512,93 @@ function writeCharInSpan(layer: Layer, start: number, end: number): void {
   ]
 }
 
+/**
+ * 폴더에 담긴 레이어가 폴더 **바로 뒤에** 오도록 배열을 정리하고 z 를 다시 매긴다.
+ *
+ * 이 한 가지 규칙 덕분에 렌더러가 폴더의 존재를 몰라도 순서를 맞게 그린다. z 로
+ * 정렬하면 한 폴더의 식구가 저절로 붙어 있기 때문이다. 정리하지 않으면 폴더 밖
+ * 레이어가 폴더 식구들 사이에 끼어 들어가고, 그러면 "폴더째로 앞에 놓기" 가
+ * 불가능해진다.
+ *
+ * 배열을 통째로 재대입한다. 레이어 순서를 바꾸는 조작에서는 어차피 거의 모든
+ * 원소가 움직이므로, splice 를 반복하는 것보다 패치가 작다.
+ */
+function normalizeFolderOrder(d: MotionProject): void {
+  const childrenOf = new Map<string, Layer[]>()
+  const roots: Layer[] = []
+
+  for (const layer of d.layers) {
+    const parent = layer.folderId
+    // 없는 폴더를 가리키거나 자기 자신을 가리키면 최상위로 본다.
+    const valid =
+      parent !== undefined &&
+      parent !== layer.id &&
+      d.layers.some((l) => l.id === parent && l.type === 'group')
+    if (!valid) {
+      roots.push(layer)
+      continue
+    }
+    const list = childrenOf.get(parent!)
+    if (list) list.push(layer)
+    else childrenOf.set(parent!, [layer])
+  }
+
+  /*
+   * 중복 제거는 **id 가 아니라 객체 자체로** 한다.
+   *
+   * 다른 문서에서 온 레이어와 id 가 겹치는 일이 실제로 있다. id 로 걸러내면 그중
+   * 한 장이 out 에 못 들어가서, 순서를 정리했을 뿐인데 레이어가 조용히 사라진다.
+   * 객체 동일성은 무슨 일이 있어도 겹치지 않는다.
+   */
+  const out: Layer[] = []
+  const emitted = new Set<Layer>()
+  const emit = (layer: Layer, depth: number): void => {
+    if (emitted.has(layer) || depth > MAX_FOLDER_DEPTH) return
+    emitted.add(layer)
+    out.push(layer)
+    for (const child of childrenOf.get(layer.id) ?? []) emit(child, depth + 1)
+  }
+  for (const root of roots) emit(root, 0)
+  // 순환이나 깊이 상한에 걸려 못 나온 레이어는 최상위로 끌어올린다. 사라지면 안 된다.
+  for (const layer of d.layers) {
+    if (emitted.has(layer)) continue
+    delete layer.folderId
+    emitted.add(layer)
+    out.push(layer)
+  }
+
+  /*
+   * **자리 하나씩 갈아 끼운다.** 배열을 통째로 재대입하면 안 된다.
+   *
+   * immer 는 `d.layers = out` 을 ['layers'] 전체 스냅샷 패치 하나로 기록한다. 순서가
+   * 한 칸도 안 바뀐 경우에도 배열 참조가 달라졌다는 이유로 기록되므로, 레이어를
+   * 건드리는 모든 조작이 문서 전체 사본을 실행취소 스택에 쌓는다. 스무 장짜리
+   * 문서에서 슬라이더를 끄는 동안 메모리가 그대로 터진다.
+   *
+   * 자리별로 비교해 다른 곳만 쓰면 패치가 실제로 움직인 개수만큼만 생긴다.
+   * 순서가 그대로면 패치가 아예 없다. z 도 같은 이유로 값이 다를 때만 쓴다.
+   */
+  for (let i = 0; i < out.length; i += 1) {
+    if (d.layers[i] !== out[i]) d.layers[i] = out[i]!
+  }
+  d.layers.forEach((l, i) => {
+    if (l.z !== i) l.z = i
+  })
+}
+
+/** layerId 가 folderId 안에 (몇 겹이든) 들어 있는가. 순환을 만들지 않기 위한 검사다. */
+function isInsideFolder(d: MotionProject, layerId: string, folderId: string): boolean {
+  let cursor: string | undefined = folderId
+  const seen = new Set<string>()
+  while (cursor) {
+    if (cursor === layerId) return true
+    if (seen.has(cursor)) return false
+    seen.add(cursor)
+    cursor = d.layers.find((l) => l.id === cursor)?.folderId
+  }
+  return false
+}
+
 function ensureCharInTrack(d: MotionProject, layer: Layer): void {
   if (findTrack(layer, 'charIn')) return
   writeCharInSpan(layer, 0, Math.max(1, d.timeline.durationFrames - 1))
@@ -648,7 +759,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       return { layerId }
     },
 
-    addShapeScene({ label, layers, durationFrames, loopMode, fps, replace, coalesceKey }) {
+    addShapeScene({ label, layers, durationFrames, loopMode, fps, replace, coalesceKey, folderName }) {
       const layerIds: string[] = []
       mutateDoc(
         label,
@@ -662,12 +773,27 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
             }
           }
 
+          /*
+           * 폴더가 먼저 들어간다. 폴더는 자기 뒤에 오는 식구들의 좌표계를 정하므로
+           * 목록에서도 앞자리다 (state/document.ts normalizeFolderOrder).
+           * 반환하는 layerIds 에도 포함시킨다. 그래야 슬라이더를 끌어 세트를 다시
+           * 만들 때 빈 폴더가 남지 않는다.
+           */
+          let folderId: string | undefined
+          if (folderName !== undefined && layers.length > 0) {
+            const folder = createFolderLayer(folderName, d.layers.length)
+            folderId = folder.id
+            layerIds.push(folder.id)
+            d.layers.push(folder)
+          }
+
           for (const input of layers) {
             const layer = createShapeLayer(
               normalizeShapeSpec(input.shape),
               input.name,
               d.layers.length,
             )
+            if (folderId) layer.folderId = folderId
             if (input.anchor) {
               layer.anchor = [clamp(input.anchor[0], 0, 1), clamp(input.anchor[1], 0, 1)]
             }
@@ -682,9 +808,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
             d.layers.push(layer)
           }
 
-          d.layers.forEach((l, i) => {
-            l.z = i
-          })
+          normalizeFolderOrder(d)
 
           d.timeline.durationFrames = clamp(Math.round(durationFrames), 2, FRAMES_MAX)
           if (loopMode !== undefined) d.timeline.loop.mode = loopMode
@@ -845,6 +969,19 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         const [removed] = d.layers.splice(index, 1)
         if (!removed) return
 
+        /*
+         * 폴더를 지우면 **안의 레이어는 한 겹 밖으로 나온다.** 함께 지우지 않는다.
+         * 정리하려고 만든 상자를 지웠다고 안에 든 것까지 사라지면, 되돌리기를 모르는
+         * 사람은 그림을 잃는다. 안까지 지우고 싶으면 레이어를 골라 지우면 된다.
+         */
+        if (removed.type === 'group') {
+          for (const l of d.layers) {
+            if (l.folderId !== removed.id) continue
+            if (removed.folderId) l.folderId = removed.folderId
+            else delete l.folderId
+          }
+        }
+
         if (removed.assetId) {
           const stillUsed = d.layers.some((l) => l.assetId === removed.assetId)
           if (!stillUsed) {
@@ -856,9 +993,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
             orphanAssetId = removed.assetId
           }
         }
-        d.layers.forEach((l, i) => {
-          l.z = i
-        })
+        normalizeFolderOrder(d)
       })
       // 비트맵 해제는 문서 변경 밖에서 한다. undo 로 되돌릴 때 픽셀이 살아 있어야 한다.
       // 지금은 세션 동안 비트맵을 붙잡고 있다. 정리는 영속화와 함께 다룬다.
@@ -939,6 +1074,59 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
     },
 
+    addFolder(input = {}) {
+      let folderId = ''
+      mutateDoc('폴더 만들기', (d) => {
+        const wanted = (input.layerIds ?? []).filter((id) =>
+          d.layers.some((l) => l.id === id),
+        )
+        /*
+         * 폴더는 담을 레이어들 **바로 앞자리**에 놓는다.
+         *
+         * 맨 뒤에 만들면 정리 순서가 뒤바뀐 채로 나타나서, 사용자가 폴더를 만들자마자
+         * 목록을 다시 끌어 옮겨야 한다. normalizeFolderOrder 가 뒤이어 식구들을
+         * 붙여 주므로 여기서는 앞자리만 잡으면 된다.
+         */
+        const first = wanted.length > 0
+          ? Math.min(...wanted.map((id) => d.layers.findIndex((l) => l.id === id)))
+          : d.layers.length
+
+        const folder = createFolderLayer(input.name ?? '폴더', first)
+        folderId = folder.id
+        d.layers.splice(first, 0, folder)
+
+        for (const id of wanted) {
+          const layer = d.layers.find((l) => l.id === id)
+          if (layer) layer.folderId = folder.id
+        }
+        normalizeFolderOrder(d)
+      })
+      return { folderId }
+    },
+
+    setLayerFolder(layerIds, folderId) {
+      mutateDoc('폴더 옮기기', (d) => {
+        if (folderId !== null) {
+          const folder = d.layers.find((l) => l.id === folderId)
+          if (!folder || folder.type !== 'group') return
+        }
+
+        for (const id of layerIds) {
+          const layer = d.layers.find((l) => l.id === id)
+          if (!layer) continue
+          if (folderId === null) {
+            delete layer.folderId
+            continue
+          }
+          // 자기 자신이나 자기 자손 안으로는 못 들어간다. 사슬이 끊기지 않게 한다.
+          if (id === folderId) continue
+          if (isInsideFolder(d, id, folderId)) continue
+          layer.folderId = folderId
+        }
+        normalizeFolderOrder(d)
+      })
+    },
+
     setLayerParent(layerId, parentId) {
       mutateDoc('부모 레이어 변경', (d) => {
         const layer = findLayer(d, layerId)
@@ -974,9 +1162,24 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         const [moved] = d.layers.splice(from, 1)
         if (!moved) return
         d.layers.splice(to, 0, moved)
-        d.layers.forEach((l, i) => {
-          l.z = i
-        })
+
+        /*
+         * 놓은 자리가 곧 폴더 소속이다.
+         *
+         * 목록에서 폴더 안으로 끌어다 놓았는데 그대로 튕겨 나오면, 사용자는 폴더가
+         * 고장 났다고 읽는다. **바로 아래 이웃**을 따른다. 이웃이 폴더 자신이면
+         * 그 폴더의 첫 자리에 놓인 것이고, 이웃이 어떤 폴더 안에 있으면 같은 폴더다.
+         *
+         * 순환은 만들지 않는다. 폴더를 자기 자손 안으로 끌면 소속을 그대로 둔다.
+         */
+        const below = to > 0 ? d.layers[to - 1] : undefined
+        const wanted = below ? (below.type === 'group' ? below.id : below.folderId) : undefined
+        if (wanted === undefined) delete moved.folderId
+        else if (wanted !== moved.id && !isInsideFolder(d, moved.id, wanted)) {
+          moved.folderId = wanted
+        }
+
+        normalizeFolderOrder(d)
       })
     },
 

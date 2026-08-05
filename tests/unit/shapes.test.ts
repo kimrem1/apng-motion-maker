@@ -534,32 +534,36 @@ describe('도형 세트 세션 기억', () => {
   it('같은 세트를 다시 누르면 갈아끼우고, 손댄 뒤에는 갈아끼우지 않는다', () => {
     applyShapeScene('pulse.ripple')
     const first = useShapeUiStore.getState().applied
-    expect(first?.layerIds).toHaveLength(3)
-    expect(s().doc.layers).toHaveLength(3)
+    // 폴더 한 장 + 링 세 장. 세트는 폴더로 묶여 나온다.
+    expect(first?.layerIds).toHaveLength(4)
+    expect(s().doc.layers).toHaveLength(4)
 
     applyShapeScene('pulse.ripple')
-    expect(s().doc.layers).toHaveLength(3)
+    expect(s().doc.layers).toHaveLength(4)
 
     // 손을 댄다. 이제 다시 만들면 그 편집이 사라지므로 라이브 재적용을 막아야 한다.
-    const target = useShapeUiStore.getState().applied!.layerIds[0]!
+    // 폴더에는 모양이 없으므로 도형 레이어를 고른다.
+    const target = s().doc.layers.find((l) => l.type === 'shape')!.id
     s().setShapeSpec(target, { color: '#ff0000ff' })
 
     const report = applyShapeScene('pulse.ripple', true)
     expect(report.ok).toBe(false)
     expect(useShapeUiStore.getState().applied).toBeNull()
-    expect(s().doc.layers).toHaveLength(3)
-    expect(s().doc.layers[0]!.shape?.color).toBe('#ff0000ff')
+    expect(s().doc.layers).toHaveLength(4)
+    expect(s().doc.layers.find((l) => l.id === target)!.shape?.color).toBe('#ff0000ff')
   })
 
   it('세트 레이어를 하나 지우면 나머지를 되살리지 않는다', () => {
     applyShapeScene('bars.loading')
     const ids = useShapeUiStore.getState().applied!.layerIds
-    expect(ids).toHaveLength(3)
-    s().removeLayer(ids[0]!)
+    // 폴더 한 장 + 막대 세 장.
+    expect(ids).toHaveLength(4)
+    // 폴더가 아니라 도형 한 장을 지운다. 폴더를 지우면 식구가 밖으로 나올 뿐이다.
+    s().removeLayer(ids[1]!)
 
     applyShapeScene('bars.loading', true)
-    // 지운 한 장이 되살아나지 않는다. 남은 두 장도 그대로다.
-    expect(s().doc.layers).toHaveLength(2)
+    // 지운 한 장이 되살아나지 않는다. 폴더와 남은 두 장도 그대로다.
+    expect(s().doc.layers).toHaveLength(3)
   })
 
   it('다른 문서를 열면 앞 문서의 기억을 버린다', () => {
@@ -585,9 +589,13 @@ describe('도형 세트 세션 기억', () => {
 
     expect(useShapeUiStore.getState().applied).toBeNull()
     applyShapeScene('pulse.ripple')
-    // 이미지 세 장은 그대로 있고 링 세 장이 위에 얹힌다.
-    expect(s().doc.layers.filter((l) => l.type === 'image')).toHaveLength(3)
-    expect(s().doc.layers.filter((l) => l.type === 'shape')).toHaveLength(3)
+    /*
+     * 지켜야 할 것은 **남의 이미지가 한 장도 안 지워졌다** 는 것이다. 링이 몇 장인지는
+     * 세트가 문서 길이에 맞춰 정하므로 여기서 못 박지 않는다.
+     */
+    expect(s().doc.layers.filter((l) => l.type === 'image')).toHaveLength(ids.length)
+    expect(s().doc.layers.filter((l) => l.type === 'shape').length).toBeGreaterThan(0)
+    expect(s().doc.layers.filter((l) => l.type === 'group')).toHaveLength(1)
   })
 
   it('이미 만들어 둔 타임라인이 있으면 길이를 덮지 않는다', () => {

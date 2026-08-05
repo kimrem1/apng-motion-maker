@@ -16,6 +16,7 @@ import type {
 } from './types.ts'
 import { baseFitScale, identityTransform } from './transform.ts'
 import { charAnimIsActive, objectCharTransform } from './charAnim.ts'
+import { folderChain, isFolderLayer } from './group.ts'
 import { layerIntrinsicSize } from './shape.ts'
 import { layerTimeGate } from './cuts.ts'
 import { evalTrack } from '@/easing/curve.ts'
@@ -335,15 +336,35 @@ export function resolveComposition(
     const gate = layerTimeGate(layer, frame)
     if (gate < 1) transform.opacity *= gate
 
+    /*
+     * 폴더에 담긴 레이어.
+     *
+     * **투명도와 보임 여부와 구간만 여기서 물려받는다.** 이동/회전/배율은 채널이
+     * 아니라 매트릭스로 얹는다 (core/group.ts 머리주석). 폴더의 가로세로 배율이
+     * 다르고 안쪽이 돌아가 있으면 채널로는 만들 수 없는 기울임이 생기기 때문이다.
+     *
+     * 폴더의 투명도에는 폴더 자신의 구간 페이드가 이미 곱해져 있다. 그래서 곱하기
+     * 한 번으로 "폴더가 사라지면 안쪽도 사라진다" 가 따라온다.
+     */
+    let folderVisible = true
+    for (const folder of folderChain(doc.layers, layer)) {
+      const folderTransform = resolveLayerTransformWithParents(doc, folder, frame)
+      const folderGate = layerTimeGate(folder, frame)
+      transform.opacity *= folderTransform.opacity * folderGate
+      if (!folder.visible || folderGate <= 0) folderVisible = false
+    }
+
     resolved.push({
       layerId: layer.id,
       assetId: layer.assetId,
-      visible: layer.visible && gate > 0,
+      visible: layer.visible && folderVisible && gate > 0,
       z: layer.z,
       fit: layer.fit,
       blend: layer.blend,
       transform,
       effects: layer.effects,
+      ...(isFolderLayer(layer) ? { isFolder: true } : {}),
+      ...(layer.folderId ? { folderId: layer.folderId } : {}),
       // 도형이 아닌 레이어에는 키 자체를 만들지 않는다. JSON 비교로 결정론을
       // 확인하는 테스트가 있어서 undefined 를 실어 보내도 결과는 같지만,
       // 뜻이 없는 키를 남기지 않는 편이 읽기 쉽다.

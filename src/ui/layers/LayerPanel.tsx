@@ -129,6 +129,19 @@ function IconTrash() {
   )
 }
 
+function IconFolder() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M2.5 5.25c0-.69.56-1.25 1.25-1.25h3.1c.4 0 .77.19 1 .51l.79 1.09h6.11c.69 0 1.25.56 1.25 1.25v7.4c0 .69-.56 1.25-1.25 1.25H3.75c-.69 0-1.25-.56-1.25-1.25V5.25z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // 썸네일
 // ---------------------------------------------------------------------------
@@ -294,6 +307,7 @@ export function LayerPanel() {
   const setLayerFlag = useDocumentStore((s) => s.setLayerFlag)
   const setAllLayersFlag = useDocumentStore((s) => s.setAllLayersFlag)
   const setLayerName = useDocumentStore((s) => s.setLayerName)
+  const addFolder = useDocumentStore((s) => s.addFolder)
 
   const selectedIds = useLayerUiStore((s) => s.selectedLayerIds)
   const select = useLayerUiStore((s) => s.select)
@@ -312,6 +326,30 @@ export function LayerPanel() {
 
   // 위가 z 가 큰 레이어다. 문서 배열은 z 오름차순이라 뒤집는다.
   const display = useMemo(() => [...layers].reverse(), [layers])
+
+  /**
+   * 폴더 중첩 깊이. 목록의 들여쓰기가 이 값만 쓴다.
+   *
+   * 한 번에 다 계산해 두고 행마다 조회한다. 행에서 사슬을 다시 타면 깊이의 제곱이 된다.
+   */
+  const depthById = useMemo(() => {
+    const map = new Map<string, number>()
+    const byId = new Map(layers.map((l) => [l.id, l]))
+    const depthOf = (layer: Layer, guard: number): number => {
+      const cached = map.get(layer.id)
+      if (cached !== undefined) return cached
+      if (guard > 8 || !layer.folderId) {
+        map.set(layer.id, 0)
+        return 0
+      }
+      const parent = byId.get(layer.folderId)
+      const d = parent ? depthOf(parent, guard + 1) + 1 : 0
+      map.set(layer.id, d)
+      return d
+    }
+    for (const layer of layers) depthOf(layer, 0)
+    return map
+  }, [layers])
   const orderedIds = useMemo(() => display.map((l) => l.id), [display])
 
   // 삭제된 레이어를 선택에서 걷어낸다.
@@ -543,6 +581,22 @@ export function LayerPanel() {
         <span>레이어</span>
 
         <span className="mm-lyr-head-actions">
+          {/*
+            고른 레이어가 있으면 그것들을 담은 폴더를, 없으면 빈 폴더를 만든다.
+            폴더는 그리는 것이 없고 자기 변환만 안쪽에 얹는다.
+          */}
+          <button
+            type="button"
+            className="mm-icon-btn"
+            title={selectedIds.length > 0 ? '고른 레이어를 폴더로 묶기' : '빈 폴더 만들기'}
+            aria-label={selectedIds.length > 0 ? '고른 레이어를 폴더로 묶기' : '빈 폴더 만들기'}
+            onClick={() => {
+              const { folderId } = addFolder({ layerIds: selectedIds })
+              setSelectedLayerIds([folderId], folderId)
+            }}
+          >
+            <IconFolder />
+          </button>
           <button
             type="button"
             className="mm-icon-btn"
@@ -589,8 +643,10 @@ export function LayerPanel() {
               const selected = selectedIds.includes(layer.id)
               const isActive = activeRowId === layer.id
               const isEditing = editingId === layer.id
+              const isFolder = layer.type === 'group'
               const rowClass = [
                 'mm-lyr-row',
+                isFolder ? 'is-folder' : '',
                 selected ? 'is-selected' : '',
                 layer.visible ? '' : 'is-hidden',
                 layer.locked ? 'is-locked' : '',
@@ -612,8 +668,9 @@ export function LayerPanel() {
                   }}
                   className={rowClass}
                   role="option"
+                  data-depth={Math.min(4, depthById.get(layer.id) ?? 0)}
                   aria-selected={selected}
-                  aria-label={`${layer.name}${layer.visible ? '' : ', 숨김'}${layer.locked ? ', 잠김' : ''}`}
+                  aria-label={`${isFolder ? '폴더 ' : ''}${layer.name}${layer.visible ? '' : ', 숨김'}${layer.locked ? ', 잠김' : ''}`}
                   tabIndex={isActive ? 0 : -1}
                   onFocus={() => setActiveId(layer.id)}
                   onKeyDown={(e) => onRowKeyDown(e, layer, di)}
@@ -636,7 +693,13 @@ export function LayerPanel() {
                     <IconGrip />
                   </span>
 
-                  <LayerThumb assetId={layer.assetId} shape={layer.shape} name={layer.name} />
+                  {isFolder ? (
+                    <span className="mm-lyr-folder-icon" aria-hidden="true">
+                      <IconFolder />
+                    </span>
+                  ) : (
+                    <LayerThumb assetId={layer.assetId} shape={layer.shape} name={layer.name} />
+                  )}
 
                   {isEditing ? (
                     <input

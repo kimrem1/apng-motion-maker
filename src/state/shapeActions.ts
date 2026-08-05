@@ -169,6 +169,16 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
     fps: emission.fps,
     replace: previous,
     coalesceKey: `shapeScene:${sceneId}`,
+    /*
+     * 두 장 이상이면 폴더로 묶는다.
+     *
+     * 세트 하나가 도형을 스무 장까지 만든다. 목록에 스무 줄이 쏟아지면 그다음
+     * 작업이 스크롤 싸움이 되고, 무엇보다 **세트 전체를 한 번에 움직일 방법이
+     * 없어진다.** 폴더 한 줄에 모션을 걸면 세트가 통째로 움직인다.
+     *
+     * 한 장짜리 세트는 묶지 않는다. 레이어 하나를 감싼 폴더는 껍데기만 늘린다.
+     */
+    ...(emission.layers.length > 1 ? { folderName: scene.label } : {}),
   })
 
   const nextDoc = useDocumentStore.getState().doc
@@ -180,7 +190,16 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
   // 슬라이더를 끄는 중에는 선택을 옮기지 않는다. 인스펙터가 매번 다른 레이어로
   // 튀면 값을 읽는 중에 화면이 흔들린다.
   if (!live && layerIds.length > 0) {
-    useLayerUiStore.getState().setSelectedLayerIds(layerIds, layerIds[layerIds.length - 1] ?? null)
+    /*
+     * 폴더로 묶었으면 **폴더 하나만** 고른다.
+     *
+     * 세트를 넣은 직후 사용자가 하고 싶은 일은 "이 세트를 움직이기" 다. 도형 스무
+     * 장이 전부 선택돼 있으면 인스펙터가 다중 선택 상태가 되고, 모션 갤러리도
+     * 어디에 걸릴지 알기 어렵다. 폴더 하나면 답이 분명하다.
+     */
+    const folderId = nextDoc.layers.find((l) => l.id === layerIds[0] && l.type === 'group')?.id
+    if (folderId) useLayerUiStore.getState().setSelectedLayerIds([folderId], folderId)
+    else useLayerUiStore.getState().setSelectedLayerIds(layerIds, layerIds[layerIds.length - 1] ?? null)
   }
   return { ok: true }
 }

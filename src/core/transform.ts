@@ -324,3 +324,46 @@ export function identityTransform(): ResolvedTransform {
     charIn: 1,
   }
 }
+
+// ---------------------------------------------------------------------------
+// 폴더(그룹) 변환
+// ---------------------------------------------------------------------------
+
+/**
+ * 폴더 하나의 변환. **캔버스 픽셀 좌표에서 바깥에 곱해진다.**
+ *
+ *   최종 = G_바깥폴더 · ... · G_안쪽폴더 · buildLayerMatrix(레이어)
+ *
+ * buildLayerMatrix 와 다른 점이 둘 있다.
+ *
+ * 1. **원본 크기가 없다.** 폴더는 픽셀을 갖지 않으므로 맞춤(fit)도 유닛 사각형도
+ *    없다. 그래서 이미지 로컬로 내려갔다 올라오는 단계가 통째로 빠진다.
+ * 2. **기준점이 진짜 축이다.** 이미지 레이어의 기준점은 "회전축이되 배치는 그대로"
+ *    라는 보정이 붙어 있지만(buildLayerMatrix 주석), 폴더는 보정할 배치가 없다.
+ *    기준점은 캔버스 비율로 읽는다. 0.5, 0.5 가 캔버스 한가운데다.
+ *
+ * 어파인이라는 것이 중요하다. 마지막 행이 [0,0,1] 이므로 안쪽 레이어가 원근을
+ * 써도(마지막 행이 [0,0,1] 이 아니어도) 나눗셈과 교환된다. 그래서 "먼저 투영하고
+ * 그 결과를 폴더가 옮긴다" 와 결과가 같다. 담기 솔버가 기대는
+ * "꼭짓점 = 위치 + c·D" 라는 1차식도 그대로 유지된다.
+ *   G·(p + c·D) = G_선형·p + G_이동 + c·(G_선형·D)
+ */
+export function buildGroupMatrix(
+  t: ResolvedTransform,
+  canvasW: number,
+  canvasH: number,
+  out?: Mat3,
+): Mat3 {
+  const k = Number.isFinite(t.baseScale) && t.baseScale > 0 ? t.baseScale : 1
+  // 기준점을 캔버스 픽셀로 옮긴 것. 회전과 배율이 이 점을 축으로 돈다.
+  const px = (t.anchorX - 0.5) * canvasW
+  const py = (t.anchorY - 0.5) * canvasH
+
+  const m = out ?? new Float32Array(9)
+  mat3Translation(t.translateX + px, t.translateY + py, m)
+  mat3Multiply(m, mat3Rotation(degToRad(t.rotate)), m)
+  mat3Multiply(m, mat3Skew(t.skewX, t.skewY), m)
+  mat3Multiply(m, mat3Scaling(t.scaleX * k, t.scaleY * k), m)
+  mat3Multiply(m, mat3Translation(-px, -py), m)
+  return m
+}

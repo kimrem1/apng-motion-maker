@@ -627,6 +627,7 @@ export function Inspector() {
   const layers = useDocumentStore((s) => s.doc.layers)
   const selectedLayerId = useUiStore((s) => s.selectedLayerId)
   const layer = layers.find((l) => l.id === selectedLayerId) ?? null
+  const isFolder = layer?.type === 'group'
 
   return (
     <aside className="mm-panel mm-app-inspector" aria-label="인스펙터">
@@ -646,14 +647,17 @@ export function Inspector() {
               규칙이 한 벌이라 화면도 한 벌이다 (core/charAnim.ts).
             */}
             <CharAnimSection key={`charin:${layer.id}`} layer={layer} />
-            {/* 경계선이 지나가는 모양. 모양은 여기, 진행률은 타임라인이다 */}
-            <RevealSection key={`reveal:${layer.id}`} layer={layer} />
+            {/*
+              폴더는 픽셀이 없다. 가리기 / 이펙트 / 다듬기는 그릴 그림이 있어야 뜻이
+              있으므로 통째로 숨긴다. 눌러도 아무 일 없는 노브가 가장 나쁘다.
+              대신 위치·회전·배율은 그대로 보인다. 그것이 폴더의 쓰임새다.
+            */}
+            {isFolder ? null : <RevealSection key={`reveal:${layer.id}`} layer={layer} />}
             {/* 레이어 고유 속성: 혼합, 깊이감, 부모, 캔버스 채움, 오버스캔 진단 */}
             <LayerProperties layer={layer} />
-            {/* 이펙트 스택. 글리치와 자글자글이 여기 쌓인다 */}
-            <EffectStack layer={layer} />
-            {/* 배경 제거와 크롭. 도형은 픽셀이 없어 다듬을 것이 없다 */}
-            {layer.shape ? null : <PrepPanel />}
+            {isFolder ? null : <EffectStack layer={layer} />}
+            {/* 배경 제거와 크롭. 도형과 폴더는 픽셀이 없어 다듬을 것이 없다 */}
+            {layer.shape || isFolder ? null : <PrepPanel />}
           </>
         ) : (
           <section className="mm-section">
