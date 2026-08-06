@@ -11,7 +11,7 @@
  * 각 플랫폼의 실제 APNG/WebP 지원 여부는 미검증이다.
  */
 
-import { CANVAS_MAX } from '@/core/types.ts'
+import { CANVAS_MAX, GIF_COLOR_CHOICES } from '@/core/types.ts'
 import type { ExportFormat, ExportSettings } from '@/export/pipeline.ts'
 
 export type ExportPurposeId = 'sticker' | 'web' | 'messenger' | 'sns' | 'custom'
@@ -156,8 +156,13 @@ export const PURPOSE_BY_ID: ReadonlyMap<ExportPurposeId, ExportPurpose> = new Ma
   EXPORT_PURPOSES.map((p) => [p.id, p]),
 )
 
-/** GIF 팔레트 크기 선택지 */
-export const MAX_COLOR_CHOICES = [64, 128, 256] as const
+/**
+ * GIF 팔레트 크기 선택지. 정의는 core/types.ts 한 곳에 있다.
+ *
+ * 여기에 다시 적으면 용량 맞추기 사다리와 갈린다. 실제로 갈려 있어서, 사다리가
+ * 만든 32색이 이 목록에 없어 색상 셀렉트가 빈 값으로 그려졌다.
+ */
+export const MAX_COLOR_CHOICES = GIF_COLOR_CHOICES
 
 /**
  * WebP 손실 압축 품질 기본값.

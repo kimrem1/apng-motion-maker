@@ -424,9 +424,29 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
     })
   }
 
-  const background = readBackground(doc.canvas.background.type, doc.canvas.background.color)
+  /*
+   * '직접 고르기' 는 문서에 남는 상태가 아니다.
+   *
+   * 배경은 문서에 type + color 두 값으로만 있고, 셀렉트의 값은 그것을 되읽은
+   * 파생값이다(readBackground). 그런데 '직접 고르기' 를 골라도 색이 그대로면
+   * 되읽기가 여전히 '흰색' 이나 '검정' 을 내서 셀렉트가 곧바로 튕겨 돌아왔다.
+   * 쓰기와 읽기가 같은 4지선다를 다른 규칙으로 계산한 것이다.
+   *
+   * 그래서 "사용자가 직접 고르기를 눌렀다" 는 사실만 화면 상태로 들고 있는다.
+   * 문서에는 아무것도 더 넣지 않는다. 다른 항목을 고르거나 투명으로 가면 놓는다.
+   */
+  const [pickingColor, setPickingColor] = useState(false)
+  const colorInputRef = useRef<HTMLInputElement | null>(null)
+
+  const documentBackground = readBackground(
+    doc.canvas.background.type,
+    doc.canvas.background.color,
+  )
+  const background: EasyBackground =
+    pickingColor && documentBackground !== 'alpha' ? 'custom' : documentBackground
 
   const setBackground = (next: EasyBackground): void => {
+    setPickingColor(next === 'custom')
     if (next === 'alpha') {
       setBackgroundType('alpha')
       return
@@ -434,6 +454,8 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
     setBackgroundType('solid')
     if (next === 'white') setBackgroundColor(WHITE)
     else if (next === 'black') setBackgroundColor(BLACK)
+    // 고른 직후 바로 색을 집을 수 있게 한다. 이 항목의 목적이 그것 하나다.
+    else colorInputRef.current?.click()
   }
 
   // -------------------------------------------------------------------------
@@ -786,6 +808,7 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           </select>
           {background !== 'alpha' ? (
             <input
+              ref={colorInputRef}
               type="color"
               className="mm-color"
               aria-label="배경색"

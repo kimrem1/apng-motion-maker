@@ -169,16 +169,38 @@ describe('modifierPeak', () => {
     expect(modifierPeak(mod({ type: 'sine', amplitude: 6 }))).toBeCloseTo(6, 9)
   })
 
-  it('eventBurst 는 사건이 겹칠 수 있어 여유를 둔다', () => {
-    expect(modifierPeak(mod({ type: 'eventBurst', amplitude: 6 }))).toBeGreaterThan(6)
+  /**
+   * eventBurst 는 감쇠가 봉우리를 깎는다.
+   *
+   * 예전에는 상수 1.5 를 썼다. "사건이 겹쳐 1 을 넘을 수 있다" 는 것은 감쇠가
+   * 아주 약할 때만 맞고, 흔히 쓰는 6~8 에서는 실제 봉우리가 0.53 ~ 0.45 다.
+   * 세 배로 잡은 여유만큼 채우기 솔버가 원본을 더 확대해 화질이 손해였다.
+   */
+  it('eventBurst 는 감쇠에 따라 상한이 달라진다', () => {
+    const strong = modifierPeak(mod({ type: 'eventBurst', amplitude: 6, decay: 8 }))
+    const weak = modifierPeak(mod({ type: 'eventBurst', amplitude: 6, decay: 1 }))
+
+    // 감쇠가 세면 진폭에 한참 못 미친다. 상수 1.5 로는 9 가 나왔다.
+    expect(strong).toBeLessThan(6)
+    // 감쇠가 약하면 사건이 겹쳐 진폭을 넘는다. 그 사실 자체는 맞았다.
+    expect(weak).toBeGreaterThan(6)
+    expect(weak).toBeGreaterThan(strong)
   })
 
   it('실측 최대값이 상한을 넘지 않는다', () => {
-    for (const type of ['loopNoise', 'sine', 'spring'] as const) {
-      const m = mod({ type, amplitude: 10, cycles: 3 })
-      const peak = modifierPeak(m)
-      for (let f = 0; f < 60; f++) {
-        expect(Math.abs(evalModifier(m, ctx(f, 60))), `${type} @ ${f}`).toBeLessThanOrEqual(peak + 1e-9)
+    for (const type of ['loopNoise', 'sine', 'spring', 'eventBurst'] as const) {
+      for (const decay of [1, 4, 8, 20]) {
+        for (const cycles of [1, 3, 8]) {
+          const m = mod({ type, amplitude: 10, cycles, decay })
+          const peak = modifierPeak(m)
+          // 프레임 격자보다 촘촘히 훑는다. 상한이 모자라면 그림이 잘린다.
+          for (let i = 0; i < 2000; i += 1) {
+            const value = Math.abs(evalModifier(m, ctx(i, 2000)))
+            if (value > peak + 1e-9) {
+              throw new Error(`${type} decay=${decay} cycles=${cycles}: ${value} > ${peak}`)
+            }
+          }
+        }
       }
     }
   })

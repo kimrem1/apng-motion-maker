@@ -358,6 +358,34 @@ describe('도형 세트 카탈로그', () => {
     }
   })
 
+  /**
+   * 한 바퀴 도는 트랙의 끝 키는 span 에 있어야 한다.
+   *
+   * 마지막 출력 프레임은 span-1 이고 360 도는 0 도와 같은 그림이라, span 에 두면
+   * 값이 겹치지 않고 이음새가 닫힌다. span-1 에 두면 마지막 한 프레임이 각도를
+   * 붙잡아 주기마다 회전이 한 번 멈칫한다. 색종이만 그 형태였다.
+   */
+  it('한 바퀴 도는 회전은 마지막 프레임에서 멈칫하지 않는다', () => {
+    for (const scene of SHAPE_SCENES) {
+      const out = buildShapeScene(scene.id, createSceneContext({ fps: 25 }))
+      if (!out) throw new Error(scene.id)
+      for (const layer of out.layers) {
+        for (const track of layer.tracks) {
+          if (track.unit !== 'deg' || track.keys.length < 2) continue
+          const first = track.keys[0]!
+          const last = track.keys[track.keys.length - 1]!
+          if (Math.abs(last.v - first.v) < 359.9) continue
+
+          const where = `${scene.id} ${layer.name}`
+          expect(last.f, where).toBe(out.durationFrames)
+          // 마지막 출력 프레임에서 아직 한 바퀴가 안 끝나 있어야 한다.
+          const atLast = evalTrack(track, out.durationFrames - 1) ?? 0
+          expect(Math.abs(atLast - first.v), where).toBeLessThan(Math.abs(last.v - first.v))
+        }
+      }
+    }
+  })
+
   it('이미 만들어 둔 길이가 있으면 그 길이에 맞춘다', () => {
     for (const scene of SHAPE_SCENES) {
       const out = buildShapeScene(scene.id, createSceneContext({ fitFrames: 77, fps: 20 }))

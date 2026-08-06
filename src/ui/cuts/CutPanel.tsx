@@ -64,7 +64,15 @@ export function CutPanel() {
         {ranges.map((range, i) => {
           const cut = (doc.cuts ?? [])[i]
           const frames = cut?.frames ?? range.end - range.start + 1
-          const cross = cut?.crossFrames ?? 0
+          /*
+           * 엔진이 실제로 쓰는 값을 보여 준다. 원본 스펙이 아니다.
+           *
+           * cutRanges 는 첫 컷의 겹침을 0 으로 본다(앞에 겹칠 것이 없다). 그런데
+           * 패널만 doc.cuts[i].crossFrames 를 그대로 읽어서, 겹침 5 를 넣어 둔 컷을
+           * 맨 위로 올리면 화면에는 5 로 남고 구간 계산과 [이 컷에 넣기] 는 0 으로
+           * 돌았다. 게다가 첫 컷의 그 칸은 비활성이라 0 으로 되돌릴 수단도 없었다.
+           */
+          const cross = range.crossFrames
           const inCut = countIn(range.start, range.end)
 
           return (

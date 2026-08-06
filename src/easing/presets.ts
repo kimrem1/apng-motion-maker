@@ -73,6 +73,32 @@ export const EASING_PRESETS: EasingPreset[] = [
     canonical: PENNER.easeOutQuint,
     chip: false,
   },
+  /*
+   * 아래 둘은 EASY 칩에 없다. 프리셋 코드가 쓰는 이름이라 표에 있어야 할 뿐이다.
+   *
+   * 없을 때 어떻게 됐는가. segmentEase 는 모르는 id 를 조용히 기본 베지어로
+   * 바꾼다(presets/shared.ts). 그래서 「광택 내며 등장」의 감속이 대칭 이즈인아웃이
+   * 되어 초반이 두 배 느렸고, 트랙만 봐서는 티가 안 났다. 이름은 PENNER 표에서
+   * 가져다 썼는데 그 표와 이 팔레트가 갈라져 있었다.
+   */
+  {
+    id: 'easeOutQuad',
+    label: '부드럽게 끝 (아주 약하게)',
+    hint: '가장 순한 감속. 짧은 페이드처럼 곡선이 눈에 띄면 안 될 때.',
+    interp: 'bezier',
+    handles: h(0.25, 0.46, 0.45, 0.94),
+    canonical: PENNER.easeOutQuad,
+    chip: false,
+  },
+  {
+    id: 'easeInOutSine',
+    label: '양끝 아주 부드럽게',
+    hint: '대칭 곡선 중 가장 순하다. 계속 오가는 움직임에 쓴다.',
+    interp: 'bezier',
+    handles: h(0.37, 0, 0.63, 1),
+    canonical: PENNER.easeInOutSine,
+    chip: false,
+  },
   {
     id: 'easeInOutCubic',
     label: '양끝 부드럽게',

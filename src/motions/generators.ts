@@ -101,6 +101,52 @@ export function springPeak(decay: number): number {
   return Math.sin(p * Math.PI * 2) * Math.exp(-d * p)
 }
 
+/**
+ * 충격 후 감쇠 파형. 사이클 수만큼 균등 배치하고 각 사건에서 지수 감쇠한다.
+ *
+ * 봉우리 계산(burstPeak)이 같은 식을 다시 적지 않도록 여기 하나만 둔다.
+ * 난수를 쓰지 않으므로 같은 (t, cycles, decay) 면 언제나 같은 값이다.
+ */
+export function burstWave(t: number, cycles: number, decay: number): number {
+  const events = Math.max(1, Math.round(cycles))
+  const d = Math.max(0.001, decay || 6)
+  let sum = 0
+  for (let i = 0; i < events; i += 1) {
+    // 이전 주기에서 넘어온 꼬리까지 더해야 t=0 에서 이음새가 없다.
+    for (const wrap of [-1, 0]) {
+      const dt = t - (i / events + wrap)
+      if (dt < 0) continue
+      sum += Math.sin(dt * Math.PI * 2 * events * 2) * Math.exp(-d * dt * events)
+    }
+  }
+  return sum
+}
+
+/**
+ * eventBurst 가 실제로 낼 수 있는 최대 절대값.
+ *
+ * 상수 1.5 를 쓰던 자리다. 감쇠가 셀수록(흔히 쓰는 6~8) 실제 봉우리는 0.53 ~ 0.45 라
+ * 상수가 세 배쯤 컸고, 채우기 솔버가 그만큼 원본을 더 확대했다. 이 파일 자신이
+ * "오버스캔을 과하게 잡으면 화질이 손해다" 라고 적어 둔 것과 어긋났다.
+ *
+ * 닫힌 형태로 풀 수도 있지만(springPeak 처럼) 감쇠가 약하면 사건이 겹쳐 합이 한
+ * 사건의 봉우리를 넘는다. 실제로 decay 1 에서는 1.4 까지 간다. 그래서 파형을 직접
+ * 훑는다. 한 주기 안에서 사건 수만큼 같은 모양이 반복되므로 표본을 사건 수에
+ * 비례해 잡으면 촘촘함이 일정하다. 프레임마다 부르는 함수가 아니라
+ * 오버스캔 솔버가 한 번 부르는 값이므로 이 정도 비용은 문제가 안 된다.
+ */
+export function burstPeak(cycles: number, decay: number): number {
+  const events = Math.max(1, Math.round(cycles))
+  const samples = Math.min(4096, 256 * events)
+  let peak = 0
+  for (let i = 0; i < samples; i += 1) {
+    const v = Math.abs(burstWave(i / samples, events, decay))
+    if (v > peak) peak = v
+  }
+  // 표본 사이에 걸린 봉우리를 놓칠 수 있다. 모자라면 잘리므로 조금 넉넉히 잡는다.
+  return peak * 1.02
+}
+
 export interface GeneratorContext {
   /** 정수 프레임 인덱스 */
   frame: number
@@ -139,23 +185,9 @@ export function evalModifier(m: Modifier, ctx: GeneratorContext): number {
       break
     }
 
-    case 'eventBurst': {
-      // 충격 후 감쇠. 사이클 수만큼 균등 배치하고 각 사건에서 지수 감쇠한다.
-      const events = Math.max(1, Math.round(m.cycles))
-      const decay = Math.max(0.001, m.decay || 6)
-      let sum = 0
-      for (let i = 0; i < events; i += 1) {
-        // 이전 주기에서 넘어온 꼬리까지 더해야 t=0 에서 이음새가 없다.
-        for (const wrap of [-1, 0]) {
-          const start = i / events + wrap
-          const dt = t - start
-          if (dt < 0) continue
-          sum += Math.sin(dt * Math.PI * 2 * events * 2) * Math.exp(-decay * dt * events)
-        }
-      }
-      raw = sum
+    case 'eventBurst':
+      raw = burstWave(t, m.cycles, m.decay)
       break
-    }
 
     case 'spring': {
       // 임펄스 응답. 사이클마다 한 번 튕긴다.
@@ -193,16 +225,21 @@ export function modifierPeak(m: Modifier): number {
   if (m.type === 'audioEnvelope') return 0
 
   // fbmLoop 은 가중 평균을 정규화하므로 옥타브 수와 무관하게 [-1,1] 을 넘지 않는다.
-  // sine 도 마찬가지다. eventBurst 만 사건이 겹쳐 1 을 넘을 수 있다.
+  // sine 도 마찬가지다.
   //
   // 흔히 쓰는 amplitude * Σoctave 는 정규화하지 않는 fBm 을 전제한 식이다.
   // 여기 구현은 정규화하므로 그 식을 쓰면 필요 이상으로 크게 잡힌다.
   // 오버스캔을 과하게 잡으면 원본을 더 확대해 화질이 손해다.
   //
-  // spring 은 반대로 1 에 한참 못 미친다. 감쇠가 봉우리를 깎기 때문이다. 1 로 잡으면
-  // 타격 프리셋을 건 그림이 실제 필요보다 다섯 배쯤 작아진다 (springPeak 주석).
+  // spring 과 eventBurst 는 감쇠가 봉우리를 깎아 1 에 못 미친다. 둘 다 상수가 아니라
+  // 실제 파형에서 잰다. eventBurst 를 1.5 로 잡아 두었을 때 흔히 쓰는 감쇠(6~8)에서
+  // 실제 봉우리의 세 배였고, 그만큼 원본을 더 확대했다.
   const shape =
-    m.type === 'eventBurst' ? 1.5 : m.type === 'spring' ? springPeak(m.decay) : 1
+    m.type === 'eventBurst'
+      ? burstPeak(m.cycles, m.decay)
+      : m.type === 'spring'
+        ? springPeak(m.decay)
+        : 1
 
   // 엔벨로프가 1 을 넘으면 그만큼 더 커진다.
   let envPeak = 1

@@ -27,7 +27,7 @@
  * DOM 을 참조하지 않는다. 측정은 measure 콜백으로 주입받으므로 워커에서도 돈다.
  */
 
-import type { AssetTable, MotionProject } from '@/core/types.ts'
+import { GIF_COLOR_CHOICES, type AssetTable, type MotionProject } from '@/core/types.ts'
 import type { Renderer } from '@/core/renderer/index.ts'
 import { estimateExportSize, formatBytes } from './estimate.ts'
 import type { ExportSettings } from './pipeline.ts'
@@ -140,7 +140,7 @@ export function createEstimateMeasure(
 export const DEFAULT_MAX_ATTEMPTS = 5
 const DEFAULT_MIN_WIDTH = 96
 const DEFAULT_MIN_FPS = 10
-const DEFAULT_MIN_COLORS = 32
+const DEFAULT_MIN_COLORS = GIF_COLOR_CHOICES[0]
 
 /**
  * 사다리 길이 상한. 이분 탐색이 ceil(log2(15+1)) = 4회에 끝나야
@@ -157,8 +157,8 @@ const SCALE_STEPS = [0.85, 0.72, 0.6, 0.5, 0.42] as const
  */
 const FPS_STEPS = [50, 30, 25, 20, 15, 12.5, 10] as const
 
-/** GIF 팔레트 사다리. */
-const COLOR_STEPS = [256, 128, 64, 32] as const
+/** GIF 팔레트 사다리. 화면 선택지와 같은 값이어야 한다(core/types.ts GIF_COLOR_CHOICES). */
+const COLOR_STEPS = [...GIF_COLOR_CHOICES].reverse()
 
 /** 압축 파라미터. 디더는 마지막에 건드린다(가장 눈에 덜 띄지만 효과도 작다). */
 const DITHER_STEPS = [0.5, 0] as const

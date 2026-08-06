@@ -115,6 +115,16 @@ export function createSteps(count: number, jump: StepJump = 'end'): EasingFn {
   }
 }
 
+/**
+ * 사인 반주기. 양끝이 가장 부드러운 대칭 곡선이다.
+ *
+ * 프리셋 코드가 이미 이 이름을 쓰고 있었는데 표에 없어서, 모르는 id 로 떨어져
+ * 조용히 기본 베지어가 심겼다 (presets.ts easeInOutSine 주석).
+ */
+function easeInOutSine(t: number): number {
+  return -(Math.cos(Math.PI * t) - 1) / 2
+}
+
 // --- 이름 -> 함수 -----------------------------------------------------------
 
 export const PENNER: Record<string, EasingFn> = {
@@ -131,6 +141,7 @@ export const PENNER: Record<string, EasingFn> = {
   easeInQuint: power(5),
   easeOutQuint: powerOut(5),
   easeInOutQuint: powerInOut(5),
+  easeInOutSine,
   easeInExpo,
   easeOutExpo,
   easeInOutExpo,

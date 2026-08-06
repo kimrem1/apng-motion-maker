@@ -7,7 +7,12 @@
 
 import { describe, expect, it } from 'vitest'
 
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { evalSegment } from '@/easing/curve.ts'
+
 import { EASING_PRESET_BY_ID, presetEasing } from '@/easing/presets.ts'
 import type { Keyframe } from '@/core/types.ts'
 
@@ -119,5 +124,35 @@ describe('스프링 캐시', () => {
     const t0 = Date.now()
     for (let i = 0; i < 2000; i++) evalSegment(a, b, (i % 100) / 100)
     expect(Date.now() - t0).toBeLessThan(200)
+  })
+})
+
+/**
+ * 프리셋 코드가 쓰는 이징 이름은 전부 팔레트에 있어야 한다.
+ *
+ * segmentEase 는 모르는 id 를 조용히 기본 베지어로 바꾼다. 예외도 경고도 없고
+ * 트랙만 봐서는 티가 안 난다. 실제로 easeOutQuad 와 easeInOutSine 이 그렇게
+ * 떨어져, 감속으로 의도한 곡선이 대칭 이즈인아웃으로 심겨 있었다.
+ *
+ * 셰이더를 문자열 수준에서 검사하는 것과 같은 방식이다. 런타임에 잡히지 않으므로
+ * 소스에서 이름을 걷어 대조한다.
+ */
+describe('프리셋이 쓰는 이징 이름', () => {
+  it('전부 팔레트에 등록되어 있다', () => {
+    const dir = fileURLToPath(new URL('../../src/motions/presets/', import.meta.url))
+    const files = readdirSync(dir).filter((f) => f.endsWith('.ts'))
+    expect(files.length).toBeGreaterThan(5)
+
+    const missing: string[] = []
+    for (const file of files) {
+      const source = readFileSync(join(dir, file), 'utf8')
+      // 따옴표 안의 이징처럼 생긴 이름만 본다. 글자 등장 이징(back/soft/snap)은
+      // 다른 열거형이라 걸리지 않는다.
+      for (const m of source.matchAll(/'(ease[A-Z][A-Za-z]*|popBack|spring[A-Z][A-Za-z]*)'/g)) {
+        const id = m[1]!
+        if (!EASING_PRESET_BY_ID.has(id)) missing.push(`${file}: ${id}`)
+      }
+    }
+    expect([...new Set(missing)]).toEqual([])
   })
 })

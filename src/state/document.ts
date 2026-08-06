@@ -621,7 +621,7 @@ function writeCharInSpan(layer: Layer, start: number, end: number): void {
  * 잃을 걱정은 실행취소가 받는다. 삭제 한 번이 실행취소 한 칸이라 폴더 안에 스무
  * 장이 있어도 Ctrl+Z 하나로 전부 돌아온다.
  */
-function withFolderContents(layers: readonly Layer[], ids: Iterable<string>): Set<string> {
+export function withFolderContents(layers: readonly Layer[], ids: Iterable<string>): Set<string> {
   const drop = new Set(ids)
   const folders = new Set<string>()
   for (const layer of layers) {

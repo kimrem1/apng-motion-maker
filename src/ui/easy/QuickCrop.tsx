@@ -259,10 +259,22 @@ export function QuickCrop({ open, assetId, onClose, onDone }: QuickCropProps) {
     if (natural.w === 0) return
     const base = cropRect ?? { x: 0, y: 0, w: natural.w, h: natural.h }
     const next = { ...base, [key]: Math.round(value) }
+
     if (ratio !== null) {
+      /*
+       * 비율을 지킨 채 경계 안으로 넣는 일은 fitRectToAspect 한 곳에서만 한다.
+       *
+       * 예전에는 여기서 반대 축을 계산한 다음 두 축을 **각각** 잘랐다. 클램프에
+       * 걸린 쪽을 기준으로 반대편을 다시 계산하지 않아, 512 폭 이미지에 16:9 를
+       * 걸고 폭 600 을 넣으면 512 x 337(비율 1.52)이 됐다. 칩은 16:9 로 눌린 채
+       * 실제 영역만 비뚤어지고, 그대로 확정까지 갔다.
+       */
       if (key === 'w') next.h = next.w / ratio
       else if (key === 'h') next.w = next.h * ratio
+      setCropRect(roundRect(fitRectToAspect(next, ratio, bounds), natural.w, natural.h))
+      return
     }
+
     next.w = clamp(next.w, CROP_MIN_SIZE, natural.w)
     next.h = clamp(next.h, CROP_MIN_SIZE, natural.h)
     next.x = clamp(next.x, 0, natural.w - next.w)

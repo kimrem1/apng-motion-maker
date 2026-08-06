@@ -84,6 +84,17 @@ export const FPS_CHOICES = [10, 12, 12.5, 15, 20, 24, 25, 30, 50] as const
 export type Fps = (typeof FPS_CHOICES)[number]
 
 /**
+ * 고를 수 있는 GIF 팔레트 크기. 오름차순이다.
+ *
+ * 한 곳에만 둔다. 용량 맞추기의 사다리(export/targetSize.ts)와 내보내기 다이얼로그의
+ * 셀렉트(ui/export/exportSettings.ts)가 이 값을 서로 다르게 들고 있었다. 사다리는
+ * 32 까지 내려가는데 셀렉트에는 64 가 하한이라, 용량을 맞춘 뒤 설정 화면으로
+ * 돌아오면 32 에 해당하는 option 이 없어 색상 칸이 빈 값으로 그려졌다.
+ * 사용자는 그 값을 UI 로 다시 고르거나 되돌릴 방법이 없었다.
+ */
+export const GIF_COLOR_CHOICES = [32, 64, 128, 256] as const
+
+/**
  * GIF 에서 지연 시간이 정확히 표현되는 fps.
  *
  * GIF 의 지연 필드는 1/100초 단위 정수다. 100/N 이 정수인 fps 만 어긋나지 않는다.

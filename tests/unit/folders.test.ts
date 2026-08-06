@@ -24,7 +24,7 @@ import { solveLayerContain } from '@/core/overscan.ts'
 import { buildGroupMatrix, buildLayerMatrix, mat3Multiply } from '@/core/transform.ts'
 import type { AssetRef, Layer, MotionProject } from '@/core/types.ts'
 import { migrateProject } from '@/project/migrate.ts'
-import { useDocumentStore } from '@/state/document.ts'
+import { useDocumentStore, withFolderContents } from '@/state/document.ts'
 import { buildLayerRows, dropTarget } from '@/ui/layers/layerTree.ts'
 
 const SIZE = 500
@@ -573,5 +573,57 @@ describe('폴더 사슬', () => {
     }
     // 30 겹이어도 사슬은 상한에서 끊긴다. 무한 루프가 되면 렌더러가 멈춘다.
     expect(folderChain(doc.layers, folders[29]!).length).toBeLessThanOrEqual(8)
+  })
+})
+
+/**
+ * 폴더를 지우면 안에 든 것도 함께 지워진다. 그러니 **함께 지워질 행은 이웃이 아니다.**
+ *
+ * 레이어 패널의 Delete 는 포커스가 사라지지 않도록 이웃으로 먼저 옮기는데,
+ * 이웃을 인접 인덱스만으로 골랐다. 펼친 폴더 바로 아래 행은 그 폴더의 자식이라
+ * 곧 함께 지워진다. 그 결과 포커스가 body 로 빠지고 선택도 비워졌다.
+ */
+describe('폴더 삭제와 이웃 고르기', () => {
+  beforeEach(() => {
+    s().replaceDocument(baseDoc(3))
+  })
+
+  it('폴더와 함께 지워질 레이어를 전부 알아낸다', () => {
+    const ids = s().doc.layers.slice(0, 2).map((l) => l.id)
+    const { folderId } = s().addFolder({ name: '묶음', layerIds: ids })
+
+    const doomed = withFolderContents(s().doc.layers, [folderId])
+    expect(doomed.has(folderId)).toBe(true)
+    for (const id of ids) expect(doomed.has(id)).toBe(true)
+    // 폴더 밖 레이어는 살아남는다. 그 자리가 이웃 후보다.
+    const outside = s().doc.layers.find((l) => !doomed.has(l.id))
+    expect(outside).toBeDefined()
+  })
+
+  it('펼친 폴더 바로 아래 행은 함께 지워지는 자식이다', () => {
+    const ids = s().doc.layers.slice(0, 2).map((l) => l.id)
+    const { folderId } = s().addFolder({ name: '묶음', layerIds: ids })
+
+    const rows = buildLayerRows(s().doc.layers, new Set())
+    const at = rows.findIndex((r) => r.layer.id === folderId)
+    const doomed = withFolderContents(s().doc.layers, [folderId])
+
+    // 인접 인덱스만 보면 여기서 걸린다.
+    expect(doomed.has(rows[at + 1]!.layer.id)).toBe(true)
+
+    /*
+     * 살아남는 첫 행을 찾으면 폴더 블록 밖이다. 아래로 먼저 보고 없으면 위로 본다.
+     * 폴더가 목록 끝에 있으면 아래에는 자식뿐이라 위쪽이 유일한 이웃이다.
+     */
+    const survivor =
+      rows.slice(at + 1).find((r) => !doomed.has(r.layer.id)) ??
+      [...rows.slice(0, at)].reverse().find((r) => !doomed.has(r.layer.id))
+    expect(survivor).toBeDefined()
+    expect(doomed.has(survivor!.layer.id)).toBe(false)
+
+    // 실제로 지워 보면 그 행만 남아 있다.
+    s().removeLayer(folderId)
+    expect(s().doc.layers.some((l) => l.id === survivor!.layer.id)).toBe(true)
+    expect(s().doc.layers.some((l) => doomed.has(l.id))).toBe(false)
   })
 })

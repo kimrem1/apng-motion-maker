@@ -263,3 +263,27 @@ describe('컷 저장 왕복', () => {
     expect(doc.layers[0]).not.toHaveProperty('outFade')
   })
 })
+
+/**
+ * 첫 컷의 겹침은 무시된다. 앞에 겹칠 것이 없다.
+ *
+ * 컷 패널이 이 규칙을 우회해 doc.cuts[i].crossFrames 원본을 그대로 보여 주고
+ * 있었다. 겹침 5 를 넣어 둔 컷을 맨 위로 올리면 화면에는 5 로 남는데 구간 계산과
+ * 배정은 0 으로 돌았고, 첫 컷의 그 칸은 비활성이라 되돌릴 수단도 없었다.
+ * 화면이 읽어야 할 값은 언제나 cutRanges 가 내놓는 쪽이다.
+ */
+describe('첫 컷의 겹침', () => {
+  it('맨 앞 컷은 겹침이 0 으로 계산된다', () => {
+    const ranges = cutRanges([cut('a', 10, 5), cut('b', 10, 5)])
+    expect(ranges[0]!.crossFrames).toBe(0)
+    expect(ranges[1]!.crossFrames).toBe(5)
+    // 첫 컷은 0 프레임에서 시작한다. 겹침이 살아 있으면 음수로 당겨진다.
+    expect(ranges[0]!.start).toBe(0)
+  })
+
+  it('순서를 바꿔도 맨 앞이 된 컷의 겹침이 0 이다', () => {
+    const moved = cutRanges([cut('b', 10, 5), cut('a', 10, 0)])
+    expect(moved[0]!.crossFrames).toBe(0)
+    expect(moved[0]!.start).toBe(0)
+  })
+})

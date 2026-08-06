@@ -21,6 +21,7 @@ import {
   SOLID_TRIM_TOLERANCE,
   applyCropDrag,
   contentBounds,
+  fitRectToAspect,
   pickBorderColor,
   roundRect,
   type CropHandle,
@@ -405,5 +406,45 @@ describe('크롭 드래그와 경계', () => {
       }
     }
     expect(bad.slice(0, 8)).toEqual([])
+  })
+})
+
+/**
+ * 비율을 고정한 채 숫자로 크기를 넣을 때.
+ *
+ * QuickCrop 의 숫자 칸은 비율에 맞춰 반대 축을 구한 뒤 두 축을 **각각** 잘랐다.
+ * 클램프에 걸린 쪽을 기준으로 반대편을 다시 계산하지 않아 비율이 깨졌다.
+ * 그 일을 하는 함수(fitRectToAspect)가 이미 있었는데 이 경로만 안 썼다.
+ */
+describe('비율 고정 + 넘치는 입력', () => {
+  const bounds: CropRect = { x: 0, y: 0, w: 512, h: 512 }
+
+  it('폭을 경계 밖으로 넣어도 비율이 유지된다', () => {
+    const ratio = 16 / 9
+    // 사용자가 폭 600 을 친다. 반대 축은 비율로 따라온다.
+    const asked: CropRect = { x: 0, y: 0, w: 600, h: 600 / ratio }
+    const out = fitRectToAspect(asked, ratio, bounds)
+
+    expect(out.w / out.h).toBeCloseTo(ratio, 9)
+    expect(out.w).toBeLessThanOrEqual(bounds.w)
+    expect(out.h).toBeLessThanOrEqual(bounds.h)
+    expect(out.x).toBeGreaterThanOrEqual(0)
+    expect(out.y).toBeGreaterThanOrEqual(0)
+  })
+
+  it('어느 비율 어느 입력에서도 비율이 안 깨진다', () => {
+    const bad: string[] = []
+    for (const ratio of [1, 16 / 9, 9 / 16, 4 / 5, 3 / 4]) {
+      for (const w of [1, 8, 300, 512, 600, 5000]) {
+        const out = fitRectToAspect({ x: 0, y: 0, w, h: w / ratio }, ratio, bounds)
+        const where = `ratio=${ratio.toFixed(3)} w=${w}`
+        if (out.h > 0 && Math.abs(out.w / out.h - ratio) > 1e-6) {
+          bad.push(`${where} -> ${out.w.toFixed(2)}x${out.h.toFixed(2)}`)
+        }
+        if (out.x + out.w > bounds.w + 1e-9) bad.push(`${where} 오른쪽 넘침`)
+        if (out.y + out.h > bounds.h + 1e-9) bad.push(`${where} 아래 넘침`)
+      }
+    }
+    expect(bad).toEqual([])
   })
 })

@@ -13,6 +13,8 @@
 
 import { describe, expect, it } from 'vitest'
 
+import { GIF_COLOR_CHOICES } from '@/core/types.ts'
+import { MAX_COLOR_CHOICES } from '@/ui/export/exportSettings.ts'
 import type { ExportSettings } from '@/export/pipeline.ts'
 import {
   buildSizeLadder,
@@ -282,5 +284,33 @@ describe('planForTargetSize', () => {
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ name: 'AbortError' })
+  })
+})
+
+/**
+ * 용량 맞추기가 만드는 설정은 **화면에서 다시 고를 수 있어야 한다.**
+ *
+ * 사다리와 셀렉트가 허용 색상 수를 각자 들고 있었다. 사다리는 32 까지 내려가는데
+ * 셀렉트 하한은 64 라, 용량을 맞춘 뒤 설정으로 돌아오면 색상 칸이 빈 값이 됐다.
+ * 사용자는 그 값을 UI 로 되돌릴 수 없었다.
+ */
+describe('용량 맞추기 결과와 화면 선택지', () => {
+  it('색상 사다리의 모든 칸이 화면 선택지 안에 있다', () => {
+    for (const colors of GIF_COLOR_CHOICES) {
+      expect(MAX_COLOR_CHOICES as readonly number[]).toContain(colors)
+    }
+  })
+
+  it('사다리가 내는 색상 수가 전부 화면 선택지 안이다', () => {
+    const rungs = buildSizeLadder(baseCandidate({ format: 'gif', maxColors: 256 }))
+    const seen = new Set<number>()
+    for (const rung of rungs) {
+      const colors = rung.settings.maxColors
+      if (typeof colors !== 'number') continue
+      seen.add(colors)
+      expect(MAX_COLOR_CHOICES as readonly number[], `${colors}색`).toContain(colors)
+    }
+    // 사다리가 실제로 색상을 내려 보긴 하는지도 확인한다. 안 그러면 검사가 공허하다.
+    expect(seen.size).toBeGreaterThan(1)
   })
 })

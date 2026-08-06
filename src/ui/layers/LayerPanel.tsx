@@ -35,7 +35,7 @@ import {
 import type { BlendMode, Layer, ShapeSpec } from '@/core/types.ts'
 import { toHex6 } from '@/core/shape.ts'
 import { assetRegistry } from '@/state/assets.ts'
-import { useDocumentStore } from '@/state/document.ts'
+import { useDocumentStore, withFolderContents } from '@/state/document.ts'
 import { useLayerUiStore, type LayerSelectMode } from '@/state/layerUi.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { addSingleShape } from '@/state/shapeActions.ts'
@@ -562,11 +562,28 @@ export function LayerPanel() {
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault()
-      // 포커스가 사라지지 않도록 이웃으로 먼저 옮긴다.
-      const neighbour = orderedIds[di + 1] ?? orderedIds[di - 1] ?? null
+      /*
+       * 포커스가 사라지지 않도록 이웃으로 먼저 옮긴다.
+       *
+       * **함께 지워질 행은 이웃이 아니다.** 폴더를 지우면 그 안의 레이어도 같이
+       * 지워지는데(document.ts withFolderContents), 펼친 폴더 바로 아래 행이 곧
+       * 그 자식이다. 인접 인덱스만 보고 고르면 곧 언마운트될 li 에 focus() 를 걸어
+       * 포커스가 body 로 빠지고, 선택도 죽은 id 라 정리가 비워 버린다. 이 코드의
+       * 목적이 폴더에서만 정확히 반대로 동작했다.
+       */
+      const doomed = withFolderContents(layers, [layer.id])
+      const survivor = (from: number, step: number): string | null => {
+        for (let i = from; i >= 0 && i < orderedIds.length; i += step) {
+          const id = orderedIds[i]
+          if (id !== undefined && !doomed.has(id)) return id
+        }
+        return null
+      }
+      const neighbour = survivor(di + 1, 1) ?? survivor(di - 1, -1)
+
       removeLayer(layer.id)
       if (neighbour) {
-        select(neighbour, 'replace', orderedIds)
+        select(neighbour, 'replace', orderedIds.filter((id) => !doomed.has(id)))
         focusRow(neighbour)
       }
     }
