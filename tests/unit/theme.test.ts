@@ -15,6 +15,7 @@ import {
   drawTimeline,
   readTheme,
   selectionId,
+  type ClipRow,
   type TimelineDrawOptions,
   type TimelineModel,
 } from '@/ui/timeline/timelineDraw.ts'
@@ -114,16 +115,51 @@ function model(): TimelineModel {
   }
 }
 
+function clips(): ClipRow[] {
+  return [
+    {
+      layerId: 'L1',
+      name: '레이어',
+      type: 'image',
+      depth: 0,
+      isFolder: false,
+      visible: true,
+      locked: false,
+      clipped: false,
+      start: 0,
+      end: 30,
+      explicit: true,
+      inFade: 0,
+      outFade: 0,
+      keyFrames: [0, 30],
+    },
+  ]
+}
+
 function options(selected: ReadonlySet<string>): TimelineDrawOptions {
   return {
     theme: readTheme(null),
     width: 600,
     height: 200,
-    geo: { rulerH: 24, rowH: 22, axis: { originX: 120, pxPerFrame: 8, scrollFrame: 0 } },
+    geo: {
+      rulerH: 24,
+      rowH: 22,
+      clipRowH: 26,
+      clipCount: 1,
+      sectionH: 18,
+      trackCount: 1,
+      axis: { originX: 120, pxPerFrame: 8, scrollFrame: 0 },
+    },
+    fps: 30,
+    durationFrames: 60,
+    clips: clips(),
     model: model(),
     playhead: 10,
     selected,
     hovered: null,
+    selectedLayerIds: new Set<string>(),
+    hoveredLayerId: null,
+    drop: null,
     loopMode: 'loop',
   }
 }

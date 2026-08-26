@@ -201,23 +201,27 @@ export function LayerProperties({ layer }: LayerPropertiesProps) {
           />
         ) : null}
         {/* ------------------------------------------------------------- */}
-        {/* 아래 레이어 모양으로 자르기. 폴더는 자를 그림이 없다.          */}
+        {/* 아래 모양으로 자르기.                                          */}
+        {/*                                                                */}
+        {/* 폴더도 자를 수 있다. 폴더가 잘리는 쪽이면 안에 든 그림 전체가   */}
+        {/* 한 장처럼 잘린다 (core/clip.ts 머리주석). 엔진과 렌더러는       */}
+        {/* 처음부터 그렇게 동작했는데 이 토글만 폴더에서 숨어 있었다.      */}
         {/* ------------------------------------------------------------- */}
-        {layer.type === 'group' ? null : (
-          <>
-            <ToggleField
-              label="아래 모양으로 자르기"
-              checked={layer.clipToBelow === true}
-              ariaLabel="아래 레이어 모양으로 자르기"
-              onChange={(v) => setLayerClip([layer.id], v)}
-            />
-            <p className="mm-lyr-note">
-              {clipBase
-                ? `바로 아래 「${clipBase.name}」 이 그린 자리에만 보입니다.`
-                : '바로 아래에 기준이 될 레이어가 없습니다. 순서를 바꾸거나 아래에 한 장을 놓으세요.'}
-            </p>
-          </>
-        )}
+        <ToggleField
+          label="아래 모양으로 자르기"
+          checked={layer.clipToBelow === true}
+          ariaLabel="아래 레이어 모양으로 자르기"
+          onChange={(v) => setLayerClip([layer.id], v)}
+        />
+        <p className="mm-lyr-note">
+          {clipBase
+            ? `바로 아래 「${clipBase.name}」 이 그린 자리에만 보입니다.${
+                layer.type === 'group' ? ' 폴더 안의 그림이 통째로 한 장처럼 잘립니다.' : ''
+              }${
+                clipBase.type === 'group' ? ' 밑판이 폴더라 그 안의 그림 전체가 모양이 됩니다.' : ''
+              }`
+            : '바로 아래에 기준이 될 레이어가 없습니다. 순서를 바꾸거나 아래에 한 장을 놓으세요.'}
+        </p>
 
         {insideMovingFolder ? (
           <p className="mm-lyr-note">

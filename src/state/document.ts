@@ -424,6 +424,22 @@ interface DocumentState {
     layerIds: readonly string[],
     range: { inFrame: number; outFrame: number; inFade?: number; outFade?: number } | null,
   ): void
+  /**
+   * 레이어마다 서로 다른 구간을 한 번에 쓴다. 타임라인에서 클립 막대를 끌 때 쓴다.
+   *
+   * setLayerRange 와 나눠 둔 이유는 두 가지다. 저쪽은 여러 장에 **같은** 구간을
+   * 씌우는 컷 배정이고, 이쪽은 장마다 다른 구간이다. 그리고 이쪽은 드래그라서
+   * coalesceKey 로 실행취소 한 칸에 묶어야 한다. 묶지 않으면 막대를 한 번 끄는
+   * 동안 히스토리가 스텝 수만큼 쌓여 Ctrl+Z 를 수십 번 눌러야 한다.
+   *
+   * 페이드는 건드리지 않되 구간 길이 안으로 접는다. 구간보다 긴 페이드가 남으면
+   * 구간 전체가 반투명해져서 "왜 흐릿하지" 가 된다. clearFades 를 켜면 아예 지운다.
+   */
+  setLayerRanges(
+    entries: readonly { layerId: string; inFrame: number; outFrame: number }[],
+    label: string,
+    options?: { coalesceKey?: string; clearFades?: boolean },
+  ): void
   setLoopMode(mode: LoopMode): void
   setLoopCount(count: number): void
 
@@ -1864,6 +1880,42 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           else delete layer.outFade
         }
       })
+    },
+
+    setLayerRanges(entries, label, options) {
+      if (entries.length === 0) return
+      const last = Math.max(0, get().doc.timeline.durationFrames - 1)
+      const byId = new Map(entries.map((e) => [e.layerId, e]))
+      mutateDoc(
+        label,
+        (d) => {
+          for (const layer of d.layers) {
+            const entry = byId.get(layer.id)
+            if (!entry) continue
+            const start = clamp(Math.round(entry.inFrame), 0, last)
+            const end = clamp(Math.round(entry.outFrame), start, last)
+            layer.inFrame = start
+            layer.outFrame = end
+
+            // 페이드가 구간을 넘으면 구간 전체가 반투명해진다. 안으로 접는다.
+            // 0 이면 키를 남기지 않는다. 아무 일도 하지 않는 값이 저장 파일에
+            // 남으면 왕복 JSON 이 달라진다 (setLayerRange 와 같은 규칙).
+            const span = end - start + 1
+            const fold = (fade: number | undefined): number => {
+              if (options?.clearFades) return 0
+              if (typeof fade !== 'number' || fade <= 0) return 0
+              return Math.min(Math.round(fade), span - 1)
+            }
+            const nextIn = fold(layer.inFade)
+            if (nextIn > 0) layer.inFade = nextIn
+            else delete layer.inFade
+            const nextOut = fold(layer.outFade)
+            if (nextOut > 0) layer.outFade = nextOut
+            else delete layer.outFade
+          }
+        },
+        options?.coalesceKey,
+      )
     },
 
     setLoopMode(mode) {

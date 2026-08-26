@@ -122,3 +122,58 @@ export function layerTimeGate(
 export function hasCuts(doc: Pick<MotionProject, 'cuts'>): boolean {
   return Array.isArray(doc.cuts) && doc.cuts.length > 0
 }
+
+/**
+ * 레이어가 보이는 구간을 프레임 두 개로 편다.
+ *
+ * 구간이 없는 레이어는 처음부터 끝까지 보인다. explicit 이 거짓이면 문서에 값이
+ * 없다는 뜻이고, 화면은 그걸 "전체" 로 표시해야 한다. 그 구분이 없으면 구간을
+ * 한 번도 손대지 않은 레이어와 우연히 전 구간으로 맞춰 둔 레이어가 같아 보인다.
+ */
+export function layerRange(
+  layer: Pick<Layer, 'inFrame' | 'outFrame'>,
+  durationFrames: number,
+): { start: number; end: number; explicit: boolean } {
+  const last = Math.max(0, Math.round(durationFrames) - 1)
+  const hasIn = typeof layer.inFrame === 'number' && Number.isFinite(layer.inFrame)
+  const hasOut = typeof layer.outFrame === 'number' && Number.isFinite(layer.outFrame)
+  if (!hasIn && !hasOut) return { start: 0, end: last, explicit: false }
+  const start = clamp(hasIn ? Math.round(layer.inFrame!) : 0, 0, last)
+  const end = clamp(hasOut ? Math.round(layer.outFrame!) : last, start, last)
+  return { start, end, explicit: true }
+}
+
+/**
+ * 구간 하나를 count 토막으로 나눈다.
+ *
+ * 눈 깜빡임처럼 그림 여러 장을 딱딱 바꿔 끼울 때 쓴다. 토막끼리 한 프레임도
+ * 겹치지 않고 사이도 비지 않아야 한다. 겹치면 두 장이 동시에 보이고, 비면 그
+ * 프레임에 아무것도 없다.
+ *
+ * 나머지는 앞 토막부터 한 프레임씩 가져간다. 뒤에 몰아주면 마지막 그림만 길게
+ * 남아 리듬이 끝에서 무너진다.
+ *
+ * 프레임 수가 토막 수보다 적으면 만들 수 있는 만큼만 돌려준다. 길이 0 짜리
+ * 구간은 문서에 쓸 수 없기 때문이다. 호출부가 개수를 보고 알려야 한다.
+ */
+export function splitRange(
+  count: number,
+  start: number,
+  end: number,
+): { start: number; end: number }[] {
+  const first = Math.max(0, Math.round(start))
+  const last = Math.max(first, Math.round(end))
+  const total = last - first + 1
+  const n = Math.max(1, Math.min(Math.floor(count), total))
+  const base = Math.floor(total / n)
+  const extra = total % n
+
+  const out: { start: number; end: number }[] = []
+  let cursor = first
+  for (let i = 0; i < n; i += 1) {
+    const len = base + (i < extra ? 1 : 0)
+    out.push({ start: cursor, end: cursor + len - 1 })
+    cursor += len
+  }
+  return out
+}

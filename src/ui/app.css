@@ -303,9 +303,14 @@
  * 타임라인 도크. 스테이지가 남은 높이를 갖고 타임라인은 고정 높이를 갖는다.
  * 그래프 에디터가 열리면 같은 자리를 차지하므로 높이를 조금 더 준다.
  */
+/*
+ * 타임라인은 두 층이다(레이어 클립 + 속성 트랙). 레이어가 여러 장이면 예전
+ * 높이로는 위층만으로 꽉 찬다. 안쪽은 스크롤되지만, 스크롤해야만 속성이 보이는
+ * 상태를 기본으로 두면 두 층이 함께 있다는 사실 자체가 안 보인다.
+ */
 .mm-timeline-dock {
   flex: 0 0 auto;
-  height: 220px;
+  height: 264px;
   min-height: 0;
   border-top: 1px solid var(--border);
   background: var(--surface);
@@ -314,13 +319,13 @@
 
 @media (max-height: 760px) {
   .mm-timeline-dock {
-    height: 168px;
+    height: 196px;
   }
 }
 
 @media (max-width: 1023px) {
   .mm-timeline-dock {
-    height: 190px;
+    height: 220px;
   }
 }
 

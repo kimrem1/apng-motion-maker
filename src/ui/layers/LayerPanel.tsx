@@ -15,7 +15,8 @@
  *   ul[role=listbox] / li[role=option] 이고 화살표로 이동한다.
  *   행 안의 아이콘 버튼은 tabIndex=-1 이다. 레이어 10개면 Tab 이 40번 걸리기 때문이다.
  *   대신 행에서 키로 전부 조작할 수 있다.
- *     Space 가시성, L 잠금, Enter/F2 이름 편집, Delete 삭제, Alt+상하 순서 이동,
+ *     Space 가시성, L 잠금, C 아래 모양으로 자르기, Enter/F2 이름 편집, Delete 삭제,
+ *     Alt+상하 순서 이동,
  *     좌우 화살표로 폴더 접기/펴기
  *   합성 모드만 키보드로 못 바꾸는데, 그건 인스펙터의 LayerProperties 가 담당한다.
  */
@@ -40,7 +41,12 @@ import { useLayerUiStore, type LayerSelectMode } from '@/state/layerUi.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { addSingleShape } from '@/state/shapeActions.ts'
 import { AddLayerMenu } from './AddLayerMenu.tsx'
-import { BLEND_OPTIONS, moveLayerTo, setLayerBlend } from './layerDocActions.ts'
+import {
+  timelineDropCancel,
+  timelineDropCommit,
+  timelineDropHover,
+} from '@/ui/timeline/timelineDrop.ts'
+import { BLEND_OPTIONS, moveLayerTo, setLayerBlend, setLayerClip } from './layerDocActions.ts'
 import { buildLayerRows, dropTarget } from './layerTree.ts'
 import './layers.css'
 
@@ -129,6 +135,37 @@ function IconTrash() {
         d="M6.25 4.25V3.2c0-.39.31-.7.7-.7h2.1c.39 0 .7.31.7.7v1.05"
         stroke="currentColor"
         strokeWidth="1.3"
+      />
+    </svg>
+  )
+}
+
+/**
+ * 아래 모양으로 자르기 표식.
+ *
+ * 포토샵의 클리핑 마스크와 같은 모양이다. 꺾쇠가 아래를 가리키고, 그 아래가
+ * 밑판이라는 뜻이다. 켜지면 채워진다.
+ */
+function IconClip({ on }: { on: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M4 4.5h8"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeDasharray={on ? undefined : '2 2'}
+      />
+      <path d="M6.4 7.2 8 9l1.6-1.8" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <rect
+        x="3.25"
+        y="10"
+        width="9.5"
+        height="3.5"
+        rx="1"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        fill={on ? 'currentColor' : 'none'}
       />
     </svg>
   )
@@ -304,6 +341,8 @@ interface DragMeta {
   /** 삽입 경계. 0 = 맨 위, n = 맨 아래 */
   boundary: number
   active: boolean
+  /** 손이 타임라인 위로 갔는가. 그 순간 드래그의 뜻이 순서에서 구간으로 바뀜다. */
+  overTimeline: boolean
 }
 
 /** 렌더에 필요한 만큼만 뽑은 사본 */
@@ -311,6 +350,7 @@ interface DragView {
   layerId: string
   boundary: number
   active: boolean
+  overTimeline: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -411,9 +451,10 @@ export function LayerPanel() {
         startScroll: scrollHost?.scrollTop ?? 0,
         boundary: fromDisplay,
         active: false,
+        overTimeline: false,
       }
       e.currentTarget.setPointerCapture(e.pointerId)
-      setDrag({ layerId, boundary: fromDisplay, active: false })
+      setDrag({ layerId, boundary: fromDisplay, active: false, overTimeline: false })
     },
     [orderedIds],
   )
@@ -424,6 +465,21 @@ export function LayerPanel() {
 
     if (!meta.active && Math.abs(e.clientY - meta.startY) <= DRAG_THRESHOLD_PX) return
     meta.active = true
+
+    /*
+     * 타임라인 위인가.
+     *
+     * 위면 순서 바꾸기가 아니라 "이 프레임부터 보이게 놓기" 다. 손이 목록 밖으로
+     * 나간 순간 뜻이 달라지는 것이고, 타임라인이 놓일 자리를 미리 그려 준다.
+     * 판정과 미리보기를 타임라인 쪽에 맡기는 이유는 여기가 배율과 스크롤을
+     * 모르기 때문이다 (ui/timeline/timelineDrop.ts).
+     */
+    const overTimeline = timelineDropHover(e.clientX, e.clientY, meta.layerId)
+    if (overTimeline !== meta.overTimeline) {
+      meta.overTimeline = overTimeline
+      setDrag({ layerId: meta.layerId, boundary: meta.boundary, active: true, overTimeline })
+    }
+    if (overTimeline) return
 
     // 드래그 중 목록이 스크롤되면 mids(뷰포트 좌표)가 그만큼 낡는다. 커서를 되돌려 맞춘다.
     // 위 임계값 판정은 보정하지 않은 clientY 를 그대로 쓴다. 여기에 보정값을 쓰면
@@ -438,7 +494,7 @@ export function LayerPanel() {
     }
     if (boundary === meta.boundary && drag?.active) return
     meta.boundary = boundary
-    setDrag({ layerId: meta.layerId, boundary, active: true })
+    setDrag({ layerId: meta.layerId, boundary, active: true, overTimeline: false })
   }, [drag?.active])
 
   const endDrag = useCallback(
@@ -450,7 +506,13 @@ export function LayerPanel() {
         e.currentTarget.releasePointerCapture(e.pointerId)
       }
       setDrag(null)
-      if (!commit || !meta.active) return
+      if (!commit || !meta.active) {
+        timelineDropCancel()
+        return
+      }
+
+      // 타임라인 위에서 놓았으면 순서는 건드리지 않는다. 구간만 옮긴다.
+      if (timelineDropCommit(e.clientX, e.clientY, meta.layerId)) return
 
       const from = meta.fromDisplay
       const boundary = meta.boundary
@@ -554,6 +616,13 @@ export function LayerPanel() {
       return
     }
 
+    // 아래 모양으로 자르기. 폴더에서도 같이 동작한다.
+    if (e.key === 'c' || e.key === 'C') {
+      e.preventDefault()
+      setLayerClip([layer.id], layer.clipToBelow !== true)
+      return
+    }
+
     if (e.key === 'Enter' || e.key === 'F2') {
       e.preventDefault()
       beginRename(layer)
@@ -591,7 +660,9 @@ export function LayerPanel() {
 
   // -------------------------------------------------------------------------
 
-  const dragging = drag?.active === true
+  // 타임라인 위로 나간 동안에는 목록의 삽입선을 지운다. 두 곳이 동시에 켜져
+  // 있으면 손을 뗼 때까지 어느 쪽이 일어날지 알 수 없다.
+  const dragging = drag?.active === true && drag.overTimeline !== true
   const listClass = ['mm-lyr-list', dragging ? 'is-dragging mm-dragging' : ''].filter(Boolean).join(' ')
 
   /*
@@ -723,7 +794,7 @@ export function LayerPanel() {
                   <span
                     className="mm-lyr-grip"
                     aria-hidden="true"
-                    title="끌어서 순서 바꾸기"
+                    title="끌어서 순서 바꾸기. 타임라인 위에 놓으면 그 프레임부터 보입니다."
                     onPointerDown={(e) => onGripPointerDown(e, layer.id, di)}
                     onPointerMove={onGripPointerMove}
                     onPointerUp={(e) => endDrag(e, true)}
@@ -810,6 +881,25 @@ export function LayerPanel() {
                       type="button"
                       className="mm-icon-btn"
                       tabIndex={-1}
+                      aria-pressed={isClipped}
+                      /*
+                       * 폴더도 자를 수 있다. 폴더가 쟘리는 쪽이면 안에 든 그림
+                       * 전체가 한 장처럼 잘린다 (core/clip.ts 머리주석). 엔진은 처음부터
+                       * 그렇게 동작했는데 UI 가 폴더에서만 이 길을 막고 있었다.
+                       */
+                      title={isClipped ? '자르기 끄기' : '아래 모양으로 자르기 (C)'}
+                      aria-label={`${layer.name} 아래 모양으로 자르기 ${isClipped ? '끄기' : '켜기'}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setLayerClip([layer.id], !isClipped)
+                      }}
+                    >
+                      <IconClip on={isClipped} />
+                    </button>
+                    <button
+                      type="button"
+                      className="mm-icon-btn"
+                      tabIndex={-1}
                       aria-pressed={layer.locked}
                       title={layer.locked ? '잠금 풀기' : '잠그기'}
                       aria-label={`${layer.name} ${layer.locked ? '잠금 풀기' : '잠그기'}`}
@@ -867,6 +957,7 @@ export function LayerPanel() {
         {rows.length > 0 ? (
           <p className="mm-lyr-help">
             Ctrl 클릭으로 여러 장, Shift 클릭으로 범위 선택. 왼쪽 손잡이를 끌면 순서가 바뀝니다.
+            손잡이를 아래 타임라인으로 끌고 가면 그 프레임부터만 보이게 놓입니다.
             폴더 앞 삼각형으로 접습니다.
           </p>
         ) : null}

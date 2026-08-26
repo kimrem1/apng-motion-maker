@@ -17,11 +17,13 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Reac
 
 import type { TrackProp } from '@/core/types.ts'
 import {
+  describeClip,
   describeKeyframe,
   describeTrack,
   formatPropValue,
   INTERP_LABELS,
   selectionId,
+  type ClipRow,
   type TimelineModel,
 } from './timelineDraw.ts'
 
@@ -375,6 +377,193 @@ export function TimelineAriaTree({
       </ul>
 
       <p className="tl-aria__hint">{HINT}</p>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 클립(구간) 목록
+// ---------------------------------------------------------------------------
+
+const CLIP_HINT =
+  '위아래 화살표로 레이어 이동, 좌우 화살표로 구간을 한 프레임씩 밀기(Shift 는 10), ' +
+  '대괄호 [ 와 ] 로 재생 헤드에 시작과 끝 맞추기, Delete 로 구간 해제, Enter 로 선택.'
+
+/** 이 목록이 직접 처리하는 키. TimelineAriaTree 와 같은 이유로 위로 올려보내지 않는다. */
+const CLIP_HANDLED: ReadonlySet<string> = new Set([
+  'ArrowDown',
+  'ArrowUp',
+  'ArrowRight',
+  'ArrowLeft',
+  'Home',
+  'End',
+  'Enter',
+  ' ',
+  'Delete',
+  'Backspace',
+  '[',
+  ']',
+])
+
+export interface ClipAriaListProps {
+  rows: readonly ClipRow[]
+  fps: number
+  durationFrames: number
+  /** 지금 고른 레이어들 */
+  selected: ReadonlySet<string>
+  onSelect(layerId: string, additive: boolean): void
+  onSetRange(layerId: string, start: number, end: number): void
+  onClearRange(layerId: string): void
+  onGoToFrame(frame: number): void
+}
+
+/**
+ * 클립 층의 키보드 편집 경로.
+ *
+ * 캔버스는 접근성 트리에 아무것도 남기지 않는다. 구간 편집이 마우스로만 되면
+ * "있다 없다" 를 키보드로는 만들 수 없다는 뜻이고, 그건 이 기능이 절반만 있는
+ * 것이다. 그래서 같은 ClipRow 목록에서 파생되는 리스트박스를 한 벌 더 낸다.
+ *
+ * 재생 헤드는 여기서 읽지 않는다. 초당 수십 번 바뀌는 값을 구독하면 이 목록이
+ * 그만큼 리렌더된다. 대신 [ 와 ] 는 Timeline 루트가 처리하도록 그대로 올려보낸다.
+ */
+export function ClipAriaList({
+  rows,
+  fps,
+  durationFrames,
+  selected,
+  onSelect,
+  onSetRange,
+  onClearRange,
+  onGoToFrame,
+}: ClipAriaListProps): ReactNode {
+  const [wantedId, setWantedId] = useState<string>(() => rows[0]?.layerId ?? '')
+  const activeId = rows.some((r) => r.layerId === wantedId) ? wantedId : (rows[0]?.layerId ?? '')
+
+  const wantFocusRef = useRef(false)
+  const itemsRef = useRef(new Map<string, HTMLElement>())
+
+  const registerItem = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) itemsRef.current.set(id, el)
+    else itemsRef.current.delete(id)
+  }, [])
+
+  useEffect(() => {
+    if (!wantFocusRef.current) return
+    wantFocusRef.current = false
+    itemsRef.current.get(activeId)?.focus()
+  }, [activeId])
+
+  function moveActive(id: string): void {
+    wantFocusRef.current = true
+    setWantedId(id)
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLUListElement>): void {
+    // [ 와 ] 는 Timeline 루트가 고른 레이어 전부에 대해 처리한다. 여기서 삼키지 않는다.
+    if (e.key === '[' || e.key === ']') return
+    if (!CLIP_HANDLED.has(e.key)) return
+    e.stopPropagation()
+
+    const index = rows.findIndex((r) => r.layerId === activeId)
+    if (index < 0) return
+    const row = rows[index]
+    if (!row) return
+    const last = Math.max(0, durationFrames - 1)
+
+    switch (e.key) {
+      case 'ArrowDown': {
+        e.preventDefault()
+        const next = rows[Math.min(rows.length - 1, index + 1)]
+        if (next) moveActive(next.layerId)
+        return
+      }
+      case 'ArrowUp': {
+        e.preventDefault()
+        const prev = rows[Math.max(0, index - 1)]
+        if (prev) moveActive(prev.layerId)
+        return
+      }
+      case 'ArrowRight':
+      case 'ArrowLeft': {
+        e.preventDefault()
+        if (row.locked) return
+        const step = (e.key === 'ArrowRight' ? 1 : -1) * (e.shiftKey ? 10 : 1)
+        // 구간이 없으면 여기서 처음 생긴다. 폭은 그대로 두고 통째로 민다.
+        const span = row.end - row.start + 1
+        const start = Math.max(0, Math.min(last - span + 1, row.start + step))
+        onSetRange(row.layerId, start, start + span - 1)
+        return
+      }
+      case 'Home': {
+        e.preventDefault()
+        const first = rows[0]
+        if (first) moveActive(first.layerId)
+        return
+      }
+      case 'End': {
+        e.preventDefault()
+        const tail = rows[rows.length - 1]
+        if (tail) moveActive(tail.layerId)
+        return
+      }
+      case 'Enter':
+      case ' ': {
+        e.preventDefault()
+        onSelect(row.layerId, e.ctrlKey || e.metaKey || e.shiftKey)
+        onGoToFrame(row.start)
+        return
+      }
+      case 'Delete':
+      case 'Backspace': {
+        e.preventDefault()
+        if (row.locked) return
+        onClearRange(row.layerId)
+        return
+      }
+      default:
+    }
+  }
+
+  if (rows.length === 0) return null
+
+  return (
+    <div className="tl-aria">
+      <style href="mm-timeline-aria" precedence="default">
+        {ARIA_CSS}
+      </style>
+      <p className="tl-aria__title" id="tl-aria-clip-title">
+        레이어 구간 (키보드 편집)
+      </p>
+
+      <ul role="listbox" aria-labelledby="tl-aria-clip-title" onKeyDown={handleKeyDown}>
+        {rows.map((row) => {
+          const isSelected = selected.has(row.layerId)
+          return (
+            <li
+              key={row.layerId}
+              role="option"
+              aria-label={describeClip(row, fps)}
+              aria-selected={isSelected}
+              className="tl-aria__key"
+              tabIndex={activeId === row.layerId ? 0 : -1}
+              ref={(el) => registerItem(row.layerId, el)}
+              onFocus={() => setWantedId(row.layerId)}
+              onClick={() => {
+                onSelect(row.layerId, false)
+                onGoToFrame(row.start)
+              }}
+            >
+              <span aria-hidden="true">
+                <span className="tl-aria__mark">{isSelected ? '*' : ''}</span>
+                {`${row.name} ${row.explicit ? `f${row.start}-f${row.end}` : '전체'}`}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+
+      <p className="tl-aria__hint">{CLIP_HINT}</p>
     </div>
   )
 }
