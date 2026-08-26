@@ -800,7 +800,14 @@ function drawClipRow(
   const x0 = Math.max(-8, bar.x0)
   const x1 = Math.min(width + 8, bar.x1)
   if (x1 <= x0) return
-  const w = x1 - x0
+  /*
+   * 최소 폭 2px.
+   *
+   * 한 프레임짜리 구간을 축소해 놓으면 폭이 1px 아래로 내려간다. 그대로 그리면
+   * 둥근 모서리 경로가 뒤집혀 아무것도 안 보이고, 사용자는 구간이 사라진 줄 안다.
+   * 히트 테스트는 실제 좌표를 쓰므로(clipBarRect) 잡는 자리는 달라지지 않는다.
+   */
+  const w = Math.max(2, x1 - x0)
 
   if (!row.explicit) {
     ctx.globalAlpha = row.visible ? 0.55 : 0.25
