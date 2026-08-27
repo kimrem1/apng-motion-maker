@@ -54,6 +54,7 @@ import { PreviewCanvas } from '@/ui/canvas/PreviewCanvas.tsx'
 import { ExportDialog } from '@/ui/export/ExportDialog.tsx'
 import { CreatorTabs } from '@/ui/shapes/CreatorTabs.tsx'
 import { FRAME_FIT_OPTIONS, frameFitOf, setFrameFit } from '@/ui/layers/layerDocActions.ts'
+import { ReplaceImageButton } from '@/ui/layers/ReplaceImageButton.tsx'
 import { AnchorGrid, anchorLabelOf } from '@/ui/widgets/AnchorGrid.tsx'
 import {
   restoreAssetOriginal,
@@ -705,6 +706,31 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
               {repeatCap < 2
                 ? '전체 길이가 너무 짧아 더 쪼갤 수 없습니다.'
                 : '전체 길이와 초당 프레임은 그대로 두고 고른 오브제만 빨라집니다. 위 속도 슬라이더는 전체 길이를 바꿉니다.'}
+            </p>
+          </div>
+        ) : null}
+
+        {/*
+          그림만 갈아끼우기. 템플릿 흐름의 핵심이다.
+
+          모션을 맞춰 둔 다음 그림만 바꿔 스티커 세트를 뽑는 것이 이 도구의 가장 잦은
+          쓰임새다. 레이어를 새로 만들면 트랙과 이펙트가 딸려 사라지므로, assetId 만
+          갈아끼운다 (state/document.ts replaceLayerImage).
+        */}
+        {hasImage && targetLayer?.type === 'image' ? (
+          <div className="mm-easy-group">
+            <span className="mm-field-label">그림 갈아끼우기</span>
+            <ReplaceImageButton
+              layerId={targetLayer.id}
+              className="mm-btn"
+              label="그림만 바꾸기"
+              disabled={targetLayer.locked}
+              onError={setNotice}
+              onReplaced={() => setNotice('그림만 바꿨습니다. 움직임과 효과는 그대로입니다.')}
+            />
+            <p className="mm-easy-note">
+              지금 고른 오브제의 그림만 바꿉니다. 움직임 · 효과 · 크기 · 자리는 그대로 남아서,
+              같은 모션에 그림만 갈아끼워 스티커 세트를 만들 수 있습니다.
             </p>
           </div>
         ) : null}

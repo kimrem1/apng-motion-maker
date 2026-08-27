@@ -171,6 +171,29 @@ interface DocumentState {
   clearHistory(): void
 
   addImage(input: AddImageInput): { assetId: string; layerId: string }
+
+  /**
+   * 레이어는 그대로 두고 **그림만** 갈아끼운다. 템플릿의 실체다.
+   *
+   * 왜 지우고 다시 넣으면 안 되는가
+   *
+   * 레이어를 새로 만들면 id 가 바뀐다. id 가 바뀌면 트랙 / 모디파이어 / 이펙트 /
+   * 가리기 / 등장 / 기준점 / 모션 배수 / 구간 / 폴더 소속 / 깊이감이 전부 딸려
+   * 사라진다. 프리셋을 다시 눌러 되살릴 수 있는 것은 그중 프리셋이 심은 것뿐이고,
+   * 그래프 에디터로 다듬은 곡선과 손으로 쌓은 이펙트는 돌아오지 않는다.
+   * 여기서는 assetId 하나만 바꾼다. 나머지는 한 글자도 건드리지 않는다.
+   *
+   * 화면에서 차지하던 크기도 지킨다. 맞춤이 '원본 크기'(none)면 그림 크기가 곧
+   * 화면 크기라, 500px 로 만든 템플릿에 2000px 를 끼우면 네 배로 튀어나온다.
+   * 긴 변이 같아지도록 baseScale 을 민다. cover / contain / fill 은 맞춤이 이미
+   * 크기를 정하므로 건드리지 않는다.
+   *
+   * 캔버스는 건드리지 않는다. addImage 는 들어온 그림에 맞춰 캔버스를 넓히는데,
+   * 갈아끼우기에서 그러면 "결과물 해상도가 고정된 템플릿" 이라는 전제가 깨진다.
+   *
+   * 이미지 레이어가 아니면 아무 일도 하지 않고 null 을 돌려준다.
+   */
+  replaceLayerImage(layerId: string, input: AddImageInput): { assetId: string } | null
   /**
    * 도형 레이어 한 장을 만든다.
    *
@@ -951,6 +974,75 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
 
       return { assetId, layerId }
+    },
+
+    replaceLayerImage(layerId, { name, bitmap, hasAlpha }) {
+      const target = get().doc.layers.find((l) => l.id === layerId)
+      // 도형과 글자와 폴더에는 갈아끼울 그림이 없다. 조용히 넘기지 않고 null 로 알린다.
+      if (!target || target.type !== 'image') return null
+
+      const assetId = nextId('a')
+      assetRegistry.set(assetId, bitmap)
+
+      const ref: AssetRef = {
+        id: assetId,
+        name,
+        storeKey: `idb:asset:${assetId}`,
+        naturalW: bitmap.width,
+        naturalH: bitmap.height,
+        hasAlpha,
+      }
+
+      mutateDoc('그림 갈아끼우기', (d) => {
+        const layer = findLayer(d, layerId)
+        if (!layer) return
+        const before = d.assets.find((a) => a.id === layer.assetId)
+
+        d.assets.push(ref)
+
+        /*
+         * 화면에서 차지하던 크기를 지킨다 (선언부 주석).
+         *
+         * 긴 변으로 잰다. 넓이로 재면 가로 사진과 세로 사진을 바꿔 끼울 때 한쪽이
+         * 프레임을 넘어간다. 긴 변이 같으면 어느 방향이든 같은 상자 안에 들어온다.
+         */
+        if (layer.fit === 'none' && before && before.naturalW > 0 && before.naturalH > 0) {
+          const beforeLong = Math.max(before.naturalW, before.naturalH)
+          const afterLong = Math.max(bitmap.width, bitmap.height)
+          if (afterLong > 0) {
+            const base =
+              typeof layer.baseScale === 'number' && layer.baseScale > 0 ? layer.baseScale : 1
+            layer.baseScale = clamp(base * (beforeLong / afterLong), 0.001, 1000)
+          }
+        }
+
+        /*
+         * 이름은 사용자가 손댄 적이 없을 때만 새 파일 이름을 따른다.
+         *
+         * 레이어 이름은 처음에 파일 이름으로 채워진다. 그대로면 아직 파일 이름이라는
+         * 뜻이므로 새 파일 이름이 맞고, 다르면 사용자가 "주인공" 처럼 자기 이름을
+         * 붙여 둔 것이라 갈아끼우기가 그것을 지우면 안 된다.
+         */
+        if (before && layer.name === before.name) layer.name = name
+
+        layer.assetId = assetId
+
+        /*
+         * 아무도 안 쓰게 된 옛 에셋을 걷어낸다. filter 재대입이 아니라 splice 다.
+         * 배열을 통째로 갈면 immer 가 ['assets'] 스냅샷 패치를 기록해서, 그 실행취소가
+         * 다른 에셋의 나중 갱신까지 함께 되돌린다 (dropLayers 와 같은 이유).
+         *
+         * 비트맵은 레지스트리에 남긴다. 실행취소로 돌아올 때 픽셀이 살아 있어야 한다.
+         */
+        for (let i = d.assets.length - 1; i >= 0; i -= 1) {
+          const asset = d.assets[i]
+          if (!asset) continue
+          if (d.layers.some((l) => l.assetId === asset.id)) continue
+          d.assets.splice(i, 1)
+        }
+      })
+
+      return { assetId }
     },
 
     addShape({ name, shape }) {

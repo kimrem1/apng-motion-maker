@@ -41,6 +41,7 @@ import { useLayerUiStore, type LayerSelectMode } from '@/state/layerUi.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { addSingleShape } from '@/state/shapeActions.ts'
 import { AddLayerMenu } from './AddLayerMenu.tsx'
+import { ReplaceImageButton } from './ReplaceImageButton.tsx'
 import {
   timelineDropCancel,
   timelineDropCommit,
@@ -876,6 +877,24 @@ export function LayerPanel() {
                   )}
 
                   <span className="mm-lyr-actions">
+                    {/*
+                      그림만 갈아끼우기. 이미지 레이어에만 뜬다.
+
+                      템플릿 흐름의 유일한 조작이라 목록 줄에 둔다. 인스펙터에만 두면
+                      "어느 그림을 바꾸는가" 가 선택 상태에 숨어서, 여러 장을 차례로
+                      갈아끼울 때 매번 고르고 스크롤해야 한다.
+                    */}
+                    {layer.type === 'image' ? (
+                      <ReplaceImageButton
+                        layerId={layer.id}
+                        disabled={layer.locked}
+                        title={
+                          layer.locked
+                            ? '잠긴 레이어입니다. 자물쇠를 풀면 바꿀 수 있습니다.'
+                            : `${layer.name} 의 그림만 갈아끼우기. 움직임과 효과는 그대로 남습니다.`
+                        }
+                      />
+                    ) : null}
                     <button
                       type="button"
                       className="mm-icon-btn"

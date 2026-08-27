@@ -442,6 +442,160 @@ describe('모션 옮기기', () => {
   })
 })
 
+describe('그림 갈아끼우기', () => {
+  /** 크기를 정할 수 있는 가짜 비트맵. addImage 는 width / height 만 읽는다. */
+  function fakeBitmap(w: number, h: number): ImageBitmap {
+    return { width: w, height: h, close() {} } as unknown as ImageBitmap
+  }
+
+  /** 첫 레이어에 옮길 거리를 만들어 둔다. */
+  function seedMotion(): void {
+    s().applyPresetTracks({
+      layerId: L,
+      presetId: 'zoom.pop',
+      tracks: [
+        {
+          id: '',
+          prop: 'scale',
+          unit: 'ratio',
+          keys: [
+            { f: 0, v: 0.8, interp: 'bezier' },
+            { f: 12, v: 1, interp: 'bezier' },
+          ],
+        },
+      ],
+      modifiers: [],
+      macro: { speed: 1, strength: 0.5 },
+    })
+    s().addEffect(L, 'fx.grain', { strength: 0.4 })
+    s().setLayerMotionRepeat(L, 3)
+  }
+
+  const layer = () => s().doc.layers[0]!
+
+  it('레이어 id 가 그대로라 모션이 한 개도 사라지지 않는다', () => {
+    seedMotion()
+    const before = {
+      id: layer().id,
+      tracks: JSON.stringify(layer().tracks),
+      effects: JSON.stringify(layer().effects.map((e) => [e.type, e.seed])),
+      repeat: layer().motionRepeat,
+    }
+
+    const out = s().replaceLayerImage(L, {
+      name: 'new.png',
+      bitmap: fakeBitmap(200, 200),
+      hasAlpha: true,
+    })
+
+    expect(out).not.toBeNull()
+    expect(layer().id).toBe(before.id)
+    expect(JSON.stringify(layer().tracks)).toBe(before.tracks)
+    expect(JSON.stringify(layer().effects.map((e) => [e.type, e.seed]))).toBe(before.effects)
+    expect(layer().motionRepeat).toBe(before.repeat)
+  })
+
+  it('에셋만 새것으로 갈리고 옛 에셋은 사라진다', () => {
+    const oldAssetId = layer().assetId
+    const out = s().replaceLayerImage(L, {
+      name: 'new.png',
+      bitmap: fakeBitmap(200, 200),
+      hasAlpha: true,
+    })
+    expect(layer().assetId).toBe(out?.assetId)
+    expect(layer().assetId).not.toBe(oldAssetId)
+    expect(s().doc.assets.map((a) => a.id)).toEqual([out?.assetId])
+  })
+
+  it('캔버스는 건드리지 않는다', () => {
+    const before = { ...s().doc.canvas }
+    s().replaceLayerImage(L, {
+      name: 'huge.png',
+      bitmap: fakeBitmap(3000, 3000),
+      hasAlpha: true,
+    })
+    expect(s().doc.canvas.w).toBe(before.w)
+    expect(s().doc.canvas.h).toBe(before.h)
+  })
+
+  it('원본 크기 맞춤이면 화면에서 차지하던 크기를 지킨다', () => {
+    // 기본 에셋은 200x200 이다. 400x400 을 끼우면 배율이 절반이 되어야 같은 상자다.
+    expect(layer().fit).toBe('none')
+    s().replaceLayerImage(L, {
+      name: 'big.png',
+      bitmap: fakeBitmap(400, 400),
+      hasAlpha: true,
+    })
+    expect(layer().baseScale).toBeCloseTo(0.5, 6)
+  })
+
+  it('가로세로가 달라도 긴 변으로 잰다', () => {
+    s().replaceLayerImage(L, {
+      name: 'wide.png',
+      bitmap: fakeBitmap(800, 100),
+      hasAlpha: true,
+    })
+    // 긴 변 800 이 200 이 되도록 0.25 배.
+    expect(layer().baseScale).toBeCloseTo(0.25, 6)
+  })
+
+  it('맞춤이 크기를 정하는 경우에는 배율을 건드리지 않는다', () => {
+    s().setLayerFit(L, 'cover')
+    const before = layer().baseScale
+    s().replaceLayerImage(L, {
+      name: 'big.png',
+      bitmap: fakeBitmap(400, 400),
+      hasAlpha: true,
+    })
+    expect(layer().baseScale).toBe(before)
+  })
+
+  it('이름을 손댄 적이 없으면 새 파일 이름을 따른다', () => {
+    s().replaceLayerImage(L, {
+      name: 'cat2.png',
+      bitmap: fakeBitmap(200, 200),
+      hasAlpha: true,
+    })
+    expect(layer().name).toBe('cat2.png')
+  })
+
+  it('이름을 손댔으면 그 이름을 지키지 않는다', () => {
+    s().setLayerName(L, '주인공')
+    s().replaceLayerImage(L, {
+      name: 'cat2.png',
+      bitmap: fakeBitmap(200, 200),
+      hasAlpha: true,
+    })
+    expect(layer().name).toBe('주인공')
+  })
+
+  it('실행취소 한 칸으로 옛 그림이 돌아온다', () => {
+    const oldAssetId = layer().assetId
+    s().clearHistory()
+    s().replaceLayerImage(L, {
+      name: 'new.png',
+      bitmap: fakeBitmap(400, 400),
+      hasAlpha: true,
+    })
+    expect(s().past).toHaveLength(1)
+    s().undo()
+    expect(layer().assetId).toBe(oldAssetId)
+    expect(s().doc.assets.map((a) => a.id)).toEqual([oldAssetId])
+  })
+
+  it('이미지 레이어가 아니면 아무 일도 하지 않는다', () => {
+    const { layerId } = s().addShape({ name: '사각형', shape: { kind: 'rect' } as never })
+    s().clearHistory()
+    const out = s().replaceLayerImage(layerId, {
+      name: 'x.png',
+      bitmap: fakeBitmap(100, 100),
+      hasAlpha: true,
+    })
+    expect(out).toBeNull()
+    expect(s().past).toHaveLength(0)
+  })
+})
+
 describe('레이어 모션 배수', () => {
   it('1 이면 키를 만들지 않는다', () => {
     s().setLayerMotionRepeat(L, 1)
