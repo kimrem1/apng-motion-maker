@@ -28,6 +28,7 @@ import { LayerPanel } from '@/ui/layers/LayerPanel.tsx'
 import { CreatorTabs } from '@/ui/shapes/CreatorTabs.tsx'
 
 const STORAGE_KEY = 'mm.leftDock.layerHeight'
+const WIDTH_STORAGE_KEY = 'mm.leftDock.width'
 
 /** 이보다 작으면 레이어 행 하나도 못 보여 준다. */
 const MIN_H = 96
@@ -36,22 +37,32 @@ const KEEP_BELOW = 140
 /** 화살표 한 번의 이동량. Shift 를 누르면 3배다. */
 const STEP_PX = 16
 
-function readStored(): number | null {
+/** 이보다 좁으면 프리셋 카드가 한 열도 안 들어간다. */
+const MIN_W = 200
+/** 도크 폭의 상한. 도크는 목록이지 편집 화면이 아니다. */
+const MAX_W = 560
+/**
+ * 스테이지와 인스펙터 몫으로 남겨 두는 폭. 인스펙터(300px)에 스테이지 최소폭을
+ * 더한 값이다. 이게 없으면 좁은 창에서 도크가 미리보기를 0 으로 밀어낸다.
+ */
+const KEEP_RIGHT = 720
+
+function readStored(key: string, min: number): number | null {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(key)
     if (raw === null) return null
     const n = Number(raw)
-    return Number.isFinite(n) && n >= MIN_H ? n : null
+    return Number.isFinite(n) && n >= min ? n : null
   } catch {
-    // 프라이빗 모드에서 막힐 수 있다. 기본 높이로 연다.
+    // 프라이빗 모드에서 막힐 수 있다. 기본값으로 연다.
     return null
   }
 }
 
-function writeStored(px: number | null): void {
+function writeStored(key: string, px: number | null): void {
   try {
-    if (px === null) window.localStorage.removeItem(STORAGE_KEY)
-    else window.localStorage.setItem(STORAGE_KEY, String(Math.round(px)))
+    if (px === null) window.localStorage.removeItem(key)
+    else window.localStorage.setItem(key, String(Math.round(px)))
   } catch {
     // 저장에 실패해도 이번 세션 동안은 그대로 쓴다.
   }
@@ -59,10 +70,17 @@ function writeStored(px: number | null): void {
 
 export function LeftDock() {
   const dockRef = useRef<HTMLDivElement | null>(null)
-  const [height, setHeight] = useState<number | null>(() => readStored())
+  const [height, setHeight] = useState<number | null>(() => readStored(STORAGE_KEY, MIN_H))
   /** 상태를 읽는 최신 사본. 포인터 핸들러가 옛 값을 보지 않게 한다. */
   const heightRef = useRef<number | null>(height)
   const dragRef = useRef<{ pointerId: number; startY: number; startH: number } | null>(null)
+
+  const [width, setWidth] = useState<number | null>(() => readStored(WIDTH_STORAGE_KEY, MIN_W))
+  const widthRef = useRef<number | null>(width)
+  const wDragRef = useRef<{ pointerId: number; startX: number; startW: number } | null>(null)
+  /** 실제로 나온 폭과 지금 허용되는 최대 폭. 폭 손잡이의 aria 값에 쓴다. */
+  const [shownW, setShownW] = useState(MIN_W)
+  const [maxW, setMaxW] = useState(MAX_W)
 
   /** 화면에 실제로 나온 높이와 지금 허용되는 최대값. 손잡이의 aria 값에 쓴다. */
   const [shownH, setShownH] = useState(MIN_H)
@@ -92,6 +110,7 @@ export function LeftDock() {
       const limit = Math.max(MIN_H, dock.clientHeight - KEEP_BELOW)
       setMaxH(limit)
       setShownH(Math.round(panel.getBoundingClientRect().height))
+      setShownW(Math.round(dock.getBoundingClientRect().width))
       const h = heightRef.current
       // 조건이 있으므로 되먹임 루프가 되지 않는다. 한 번 가둬 두면 다음 관측은 조용하다.
       if (h !== null && h > limit) apply(limit)
@@ -112,10 +131,99 @@ export function LeftDock() {
   const commit = useCallback(
     (px: number | null): void => {
       apply(px)
-      writeStored(px)
+      writeStored(STORAGE_KEY, px)
     },
     [apply],
   )
+
+  // ---- 폭 조절 ----
+
+  const applyWidth = useCallback((px: number | null): void => {
+    widthRef.current = px
+    setWidth(px)
+  }, [])
+
+  /** 창 크기가 허락하는 폭으로 가둔다. 스테이지와 인스펙터 몫은 남긴다. */
+  const clampWidth = useCallback((px: number): number => {
+    const limit = Math.max(MIN_W, Math.min(MAX_W, window.innerWidth - KEEP_RIGHT))
+    return Math.max(MIN_W, Math.min(px, limit))
+  }, [])
+
+  // 창을 줄이면 저장된 폭이 스테이지를 밀어낸다. 다시 가두고 최대값 표시도 맞춘다.
+  // 도크 폭은 스스로 정하는 값이라 ResizeObserver 로는 창 축소를 못 듣는다.
+  useEffect(() => {
+    const onResize = (): void => {
+      setMaxW(Math.max(MIN_W, Math.min(MAX_W, window.innerWidth - KEEP_RIGHT)))
+      const w = widthRef.current
+      if (w === null) return
+      const c = clampWidth(w)
+      if (c !== w) applyWidth(c)
+    }
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [clampWidth, applyWidth])
+
+  const currentWidth = useCallback((): number => {
+    return widthRef.current ?? shownW
+  }, [shownW])
+
+  const commitWidth = useCallback(
+    (px: number | null): void => {
+      applyWidth(px)
+      writeStored(WIDTH_STORAGE_KEY, px)
+    },
+    [applyWidth],
+  )
+
+  function onWPointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
+    if (e.button !== 0) return
+    e.preventDefault()
+    wDragRef.current = { pointerId: e.pointerId, startX: e.clientX, startW: currentWidth() }
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // 캡처를 못 잡아도 드래그는 계속된다.
+    }
+  }
+
+  function onWPointerMove(e: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = wDragRef.current
+    if (!drag || e.pointerId !== drag.pointerId) return
+    // 저장은 손을 뗄 때 한 번만 한다. 높이 손잡이와 같은 이유다.
+    applyWidth(clampWidth(drag.startW + (e.clientX - drag.startX)))
+  }
+
+  function endWDrag(e: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = wDragRef.current
+    if (!drag || e.pointerId !== drag.pointerId) return
+    wDragRef.current = null
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+    } catch {
+      // 이미 놓았다.
+    }
+    writeStored(WIDTH_STORAGE_KEY, widthRef.current)
+  }
+
+  function onWKeyDown(e: ReactKeyboardEvent<HTMLDivElement>): void {
+    const step = STEP_PX * (e.shiftKey ? 3 : 1)
+    let next: number
+    if (e.key === 'ArrowRight') next = currentWidth() + step
+    else if (e.key === 'ArrowLeft') next = currentWidth() - step
+    else if (e.key === 'Home') next = MIN_W
+    else if (e.key === 'End') next = maxW
+    else if (e.key === 'Enter' || e.key === 'Escape') {
+      e.preventDefault()
+      commitWidth(null)
+      return
+    } else return
+
+    e.preventDefault()
+    commitWidth(clampWidth(next))
+  }
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
     if (e.button !== 0) return
@@ -146,7 +254,7 @@ export function LeftDock() {
     } catch {
       // 이미 놓았다.
     }
-    writeStored(heightRef.current)
+    writeStored(STORAGE_KEY, heightRef.current)
   }
 
   function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>): void {
@@ -167,14 +275,21 @@ export function LeftDock() {
     commit(clampToDock(next))
   }
 
-  const style = height === null ? undefined : ({ '--mm-layer-h': `${Math.round(height)}px` } as CSSProperties)
+  const vars: Record<string, string> = {}
+  if (height !== null) vars['--mm-layer-h'] = `${Math.round(height)}px`
+  if (width !== null) vars['--mm-dock-w'] = `${Math.round(width)}px`
+  const style = Object.keys(vars).length > 0 ? (vars as CSSProperties) : undefined
+
+  const className = [
+    'mm-app-source mm-left-dock',
+    height === null ? '' : 'is-resized',
+    width === null ? '' : 'is-w-resized',
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
-    <div
-      ref={dockRef}
-      className={height === null ? 'mm-app-source mm-left-dock' : 'mm-app-source mm-left-dock is-resized'}
-      style={style}
-    >
+    <div ref={dockRef} className={className} style={style}>
       <LayerPanel />
 
       {/*
@@ -203,6 +318,26 @@ export function LeftDock() {
       </div>
 
       <CreatorTabs />
+
+      {/* 폭 손잡이. 우측 테두리에 걸쳐 있어 도크와 스테이지 사이를 끈다. */}
+      <div
+        className="mm-dock-wresizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="왼쪽 패널 폭 조절"
+        aria-valuenow={Math.round(width ?? shownW)}
+        aria-valuemin={MIN_W}
+        aria-valuemax={Math.round(maxW)}
+        aria-valuetext={`왼쪽 패널 폭 ${Math.round(width ?? shownW)}픽셀`}
+        tabIndex={0}
+        title="끌어서 레이어와 모션 패널의 폭을 바꿉니다. 두 번 누르면 기본 폭으로 돌아갑니다."
+        onPointerDown={onWPointerDown}
+        onPointerMove={onWPointerMove}
+        onPointerUp={endWDrag}
+        onPointerCancel={endWDrag}
+        onDoubleClick={() => commitWidth(null)}
+        onKeyDown={onWKeyDown}
+      />
     </div>
   )
 }

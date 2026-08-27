@@ -12,9 +12,13 @@
  * 그래서 이 그리드의 직계 자식은 전부 grid-area 를 가져야 한다.
  * 흐름에서 빼는 것들(스킵 링크, 낭독 영역, 알림 배너)만 예외다.
  */
+/*
+ * 좌우 열은 auto 다. 열 폭을 그리드에 박지 않고 패널 자신의 width 가 정하게
+ * 두어야, 좌측 도크가 손잡이로 제 폭을 바꿀 수 있다 (LeftDock.tsx).
+ */
 .mm-app {
   display: grid;
-  grid-template-columns: var(--panel-left-w) minmax(0, 1fr) var(--panel-right-w);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-rows: var(--toolbar-h) minmax(0, 1fr) auto;
   grid-template-areas:
     'toolbar toolbar toolbar'
@@ -41,6 +45,7 @@
 
 .mm-app-source {
   grid-area: source;
+  width: var(--panel-left-w);
   min-width: 0;
   border-right: 1px solid var(--border);
 }
@@ -53,6 +58,7 @@
 
 .mm-app-inspector {
   grid-area: inspector;
+  width: var(--panel-right-w);
   min-width: 0;
   border-left: 1px solid var(--border);
 }
@@ -94,6 +100,7 @@
 
   .mm-app-source,
   .mm-app-inspector {
+    width: auto;
     border-right: 0;
     border-left: 0;
     border-top: 1px solid var(--border);
@@ -617,13 +624,20 @@
  * 좌측 도크 (레이어 + 모션 프리셋)
  * ------------------------------------------------------------------------ */
 
+/* 폭 손잡이(absolute)의 기준 상자다. relative 를 빼면 손잡이가 화면 기준으로 뜬다. */
 .mm-left-dock {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--surface);
+}
+
+/* 폭 손잡이를 움직인 뒤에는 저장된 폭이 기본값(--panel-left-w)을 이긴다. */
+.mm-left-dock.is-w-resized {
+  width: var(--mm-dock-w);
 }
 
 /* 레이어 목록은 내용만큼, 프리셋 갤러리가 남은 높이를 갖는다. */
@@ -694,10 +708,56 @@
   background: var(--accent);
 }
 
+/* --------------------------------------------------------------------------
+ * 도크 폭 조절 손잡이
+ * ------------------------------------------------------------------------ */
+
+/*
+ * 우측 테두리를 걸치는 투명한 세로 띠다. 잡는 폭은 8px 이지만 보이는 것은
+ * 호버 / 포커스 때의 2px 선뿐이다. 늘 보이면 테두리가 두 겹으로 보인다.
+ */
+.mm-dock-wresizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  z-index: 5;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  /* 가로 드래그를 브라우저 제스처에 뺏기지 않는다. */
+  touch-action: none;
+  background: transparent;
+}
+
+.mm-dock-wresizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+
+.mm-dock-wresizer:hover::after,
+.mm-dock-wresizer:focus-visible::after {
+  background: var(--accent);
+}
+
 @media (max-width: 1023px) {
   .mm-left-dock {
     border-right: 0;
     border-top: 1px solid var(--border);
+  }
+
+  /* 세로로 쌓인 화면에서는 저장된 폭도 무시하고 전체 폭을 쓴다. */
+  .mm-left-dock.is-w-resized {
+    width: auto;
+  }
+
+  .mm-dock-wresizer {
+    display: none;
   }
 
   .mm-left-dock > .mm-lyr-panel {
