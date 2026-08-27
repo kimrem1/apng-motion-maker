@@ -34,7 +34,7 @@ import {
   perspectiveZMax,
   type Mat3,
 } from './transform.ts'
-import { resolveLayerTransformWithParents } from './evaluate.ts'
+import { effectiveRepeat, resolveLayerTransformWithParents } from './evaluate.ts'
 import { folderChain } from './group.ts'
 import { layerIntrinsicSize } from './shape.ts'
 import { modifierPeak } from '@/motions/generators.ts'
@@ -224,12 +224,28 @@ export function sampleFrames(doc: CompositionSnapshot, layer: Layer, count = DEF
 
   for (let i = 0; i <= count; i += 1) set.add((i / count) * last)
   for (let f = 0; f <= last; f += 1) set.add(f)
+
+  /*
+   * 키프레임 자리는 **문서 좌표로 되돌려서** 넣는다.
+   *
+   * 레이어 배수가 걸리면 키 f 는 문서 프레임 f 에 오지 않는다. 한 주기가
+   * durationFrames / repeat 이므로 f / repeat 에 오고, 그것이 주기마다 반복된다.
+   * 키 좌표를 그대로 넣으면 오버슈트 꼭짓점을 통째로 놓쳐서 담기 솔버가 배율을
+   * 덜 낮추고, 빠르게 도는 레이어만 가장자리가 잘린다.
+   *
+   * 반프레임 자리를 함께 보는 이유는 렌더러가 프레임 **한가운데** 시각을 그리기
+   * 때문이다 (export/pipeline.ts renderFrameSink 의 frame + 0.5). 정수 프레임만
+   * 보면 실제로 저장되는 그림을 안 보는 셈이 된다.
+   */
+  const repeat = effectiveRepeat(layer, doc.timeline.durationFrames)
+  const period = doc.timeline.durationFrames / repeat
   for (const track of layer.tracks) {
     for (const key of track.keys) {
-      set.add(key.f)
       // 오버슈트 꼭짓점은 키 직후에 온다. 세그먼트 앞쪽을 촘촘히 본다.
-      set.add(key.f + 0.25)
-      set.add(key.f + 0.5)
+      for (const localOffset of [0, 0.25, 0.5]) {
+        const local = (key.f + localOffset) / repeat
+        for (let cycle = 0; cycle < repeat; cycle += 1) set.add(local + cycle * period)
+      }
     }
   }
 
