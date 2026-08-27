@@ -752,6 +752,7 @@ export function LayerPanel() {
               const isEditing = editingId === layer.id
               const isFolder = layer.type === 'group'
               const isClipped = layer.clipToBelow === true
+              const motionRepeat = layer.motionRepeat ?? 1
               const rowClass = [
                 'mm-lyr-row',
                 isFolder ? 'is-folder' : '',
@@ -858,6 +859,18 @@ export function LayerPanel() {
                       {layer.name}
                       {isFolder ? (
                         <span className="mm-lyr-folder-count">{row.childCount}</span>
+                      ) : null}
+                      {/*
+                        모션 배수.
+
+                        타임라인에는 한 바퀴만 그려지므로(core/types.ts Layer.motionRepeat)
+                        이 표시가 없으면 "왜 화면이 그래프보다 빨리 움직이지" 가 된다.
+                        폴더 식구 수와 같은 자리를 쓴다.
+                      */}
+                      {motionRepeat > 1 ? (
+                        <span className="mm-lyr-folder-count" title="이 레이어만 빠르게 돕니다">
+                          {motionRepeat}배
+                        </span>
                       ) : null}
                     </span>
                   )}

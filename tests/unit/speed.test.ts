@@ -1,11 +1,14 @@
 /**
  * 속도 노브.
  *
- * 이 파일이 지키는 것은 네 가지다.
+ * 이 파일이 지키는 것은 다섯 가지다.
  *   1. 속도를 내리면 실제로 길어진다. 어느 지점부터 멈추지 않는다.
  *   2. 속도를 왕복하면 원래 길이로 돌아온다.
  *   3. 자동으로 고르는 fps 는 올라가지 않고, GIF 에서 정확한 값만 쓴다.
  *   4. 슬라이더 눈금 변환이 왕복해도 같은 값이다.
+ *   5. **레이어 배수는 전체 길이와 초당 프레임을 건드리지 않는다.** 위의 넷은 전부
+ *      전역 속도 노브의 계약이고, 이쪽은 그 반대편이다. 오브제 하나만 빠르게 하려고
+ *      전역 노브를 끌면 화면의 모든 것이 함께 빨라지고 프레임 수까지 줄어든다.
  *
  * 1번과 2번은 실제로 깨져 있었다. 속도 클램프가 일곱 군데에 흩어져 있어 0.5 아래가
  * 통째로 무시됐고(56종 전부 x0.5 와 x0.05 가 같은 결과), 기준선을 프레임으로 되짚어
@@ -15,7 +18,15 @@
 import { describe, expect, it } from 'vitest'
 
 import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
-import { FRAMES_MAX, GIF_EXACT_FPS, SPEED_MAX, SPEED_MIN, type AssetRef } from '@/core/types.ts'
+import {
+  FRAMES_MAX,
+  GIF_EXACT_FPS,
+  MOTION_REPEAT_MAX,
+  SPEED_MAX,
+  SPEED_MIN,
+  type AssetRef,
+} from '@/core/types.ts'
+import { effectiveRepeat, resolveLayerTransform } from '@/core/evaluate.ts'
 import { MOTION_PRESETS } from '@/motions/registry.ts'
 import { baselineFps, baselineSec, fpsForDuration } from '@/motions/apply.ts'
 import { useDocumentStore } from '@/state/document.ts'
@@ -304,5 +315,144 @@ describe('재적용 대상 가드', () => {
     reapplyAppliedPresetSoon()
     expect(commitMacroNow()).toBeNull()
     expect(JSON.stringify(s().doc.layers)).toBe(before)
+  })
+})
+
+describe('레이어별 모션 배수', () => {
+  const s = () => useDocumentStore.getState()
+
+  /** 배수를 건 레이어와 안 건 레이어를 한 문서에 둔다. */
+  function twoLayers(): { fast: string; plain: string } {
+    reset()
+    const doc = s().doc
+    const asset: AssetRef = {
+      id: 'a2', name: 'q.png', storeKey: 'n', naturalW: SIZE, naturalH: SIZE, hasAlpha: true,
+    }
+    s().replaceDocument({
+      ...doc,
+      assets: [...doc.assets, asset],
+      layers: [...doc.layers, createImageLayer(asset, 1)],
+    })
+    return { fast: s().doc.layers[0]!.id, plain: s().doc.layers[1]!.id }
+  }
+
+  it('배수를 걸어도 전체 길이와 초당 프레임이 그대로다', () => {
+    const { fast } = twoLayers()
+    applyAt('zoom.pulse', 1)
+    const frames = s().doc.timeline.durationFrames
+    const fps = s().doc.timeline.fps
+
+    s().setLayerMotionRepeat(fast, 4)
+
+    expect(s().doc.timeline.durationFrames).toBe(frames)
+    expect(s().doc.timeline.fps).toBe(fps)
+  })
+
+  it('배수를 걸어도 다른 레이어의 트랙은 한 글자도 안 바뀐다', () => {
+    const { fast, plain } = twoLayers()
+    applyAt('zoom.pulse', 1)
+    const before = JSON.stringify(s().doc.layers.find((l) => l.id === plain))
+
+    s().setLayerMotionRepeat(fast, 3)
+
+    expect(JSON.stringify(s().doc.layers.find((l) => l.id === plain))).toBe(before)
+  })
+
+  it('배수를 걸어도 자기 트랙의 키프레임은 그대로다', () => {
+    const { fast } = twoLayers()
+    applyAt('zoom.pulse', 1)
+    const before = JSON.stringify(s().doc.layers.find((l) => l.id === fast)!.tracks)
+
+    s().setLayerMotionRepeat(fast, 3)
+
+    // 굽지 않고 값으로만 들고 있다. 그래서 1 로 되돌리는 것이 곧 원상복구다.
+    expect(JSON.stringify(s().doc.layers.find((l) => l.id === fast)!.tracks)).toBe(before)
+  })
+
+  it('한 문서 길이 안에서 배수만큼 돈다', () => {
+    const { fast } = twoLayers()
+    applyAt('zoom.pulse', 1)
+    s().setLayerMotionRepeat(fast, 2)
+
+    const doc = s().doc
+    const layer = doc.layers.find((l) => l.id === fast)!
+    const total = doc.timeline.durationFrames
+    const canvas = doc.canvas
+
+    // 트랙이 없으면 아래 비교가 항상 참이라 아무것도 안 지킨다.
+    expect(layer.tracks.length).toBeGreaterThan(0)
+    // 실제로 움직이는 프리셋인지도 확인한다.
+    expect(resolveLayerTransform(layer, 0, canvas, total).scaleX).not.toBeCloseTo(
+      resolveLayerTransform(layer, Math.round(total / 4), canvas, total).scaleX,
+      6,
+    )
+
+    // 주기 하나가 total/2 다. 그래서 f 와 f + total/2 의 그림이 같아야 한다.
+    for (const f of [0, 1, 3, 5]) {
+      const a = resolveLayerTransform(layer, f, canvas, total)
+      const b = resolveLayerTransform(layer, f + total / 2, canvas, total)
+      expect(b.scaleX).toBeCloseTo(a.scaleX, 6)
+      expect(b.translateY).toBeCloseTo(a.translateY, 6)
+    }
+  })
+
+  it('배수 1 은 배수를 안 건 것과 완전히 같다', () => {
+    const { fast } = twoLayers()
+    applyAt('zoom.pulse', 1)
+    const doc = s().doc
+    const layer = doc.layers.find((l) => l.id === fast)!
+    const total = doc.timeline.durationFrames
+
+    s().setLayerMotionRepeat(fast, 1)
+    const after = s().doc.layers.find((l) => l.id === fast)!
+
+    for (let f = 0; f <= total; f += 1) {
+      expect(JSON.stringify(resolveLayerTransform(after, f, doc.canvas, total))).toBe(
+        JSON.stringify(resolveLayerTransform(layer, f, doc.canvas, total)),
+      )
+    }
+  })
+
+  it('반복 지점에서 값이 이어진다', () => {
+    const { fast } = twoLayers()
+    applyAt('shake.wobble', 1)
+    s().setLayerMotionRepeat(fast, 3)
+
+    const doc = s().doc
+    const layer = doc.layers.find((l) => l.id === fast)!
+    const total = doc.timeline.durationFrames
+
+    // 재생기는 frame % durationFrames 로 감는다 (core/time.ts). 그래서 심리스의
+    // 조건은 프레임 total 의 그림이 프레임 0 과 같다는 것이다. 정수 배수만 허용하는
+    // 이유가 이것이다. 배수가 정수가 아니면 마지막 주기가 잘려 여기서 값이 튄다.
+    const head = resolveLayerTransform(layer, 0, doc.canvas, total)
+    const tail = resolveLayerTransform(layer, total, doc.canvas, total)
+    expect(tail.scaleX).toBeCloseTo(head.scaleX, 6)
+    expect(tail.translateX).toBeCloseTo(head.translateX, 6)
+    expect(tail.translateY).toBeCloseTo(head.translateY, 6)
+    expect(tail.rotate).toBeCloseTo(head.rotate, 6)
+  })
+
+  it('배수를 걸어도 홀드 클럭은 문서 시간에 남는다', () => {
+    // 홀드를 배수에 태우면 자글자글의 "2컷, 3컷" 이 배수를 따라 잘아지고,
+    // durationFrames % hold 로 판정하는 홀드 정렬 검사가 거짓이 된다.
+    const { fast } = twoLayers()
+    applyAt('boil.fine', 1)
+    const before = s().doc.layers.find((l) => l.id === fast)!.modifiers.map((m) => m.holdFrames)
+    s().setLayerMotionRepeat(fast, 4)
+    const after = s().doc.layers.find((l) => l.id === fast)!.modifiers.map((m) => m.holdFrames)
+    expect(after).toEqual(before)
+  })
+
+  it('한 바퀴가 두 프레임 아래로 내려가지 않는다', () => {
+    const { fast } = twoLayers()
+    applyAt('zoom.pulse', 1)
+    s().setDurationFrames(6)
+    s().setLayerMotionRepeat(fast, MOTION_REPEAT_MAX)
+
+    // 6프레임이면 최대 3배다. 문서에는 고른 값이 남고 실제로 도는 값만 조인다.
+    const layer = s().doc.layers.find((l) => l.id === fast)!
+    expect(layer.motionRepeat).toBe(MOTION_REPEAT_MAX)
+    expect(effectiveRepeat(layer, 6)).toBe(3)
   })
 })

@@ -138,6 +138,32 @@ describe('프로젝트 파일 왕복', () => {
     expect(JSON.stringify(bundle.doc)).toBe(before)
   })
 
+  it('레이어 모션 배수를 단 문서도 한 글자도 안 바뀐다', () => {
+    const doc = sampleDoc()
+    doc.layers[0]!.motionRepeat = 4
+    const before = JSON.stringify(doc)
+
+    const bundle = deserializeProject(
+      serializeProject({ doc, assets: new Map([['a1', dummyPng(256)]]) }),
+    )
+
+    expect(JSON.stringify(bundle.doc)).toBe(before)
+    expect(bundle.doc.layers[0]!.motionRepeat).toBe(4)
+  })
+
+  it('뜻이 없는 배수 1 은 키째로 사라진다', () => {
+    // 1 은 "문서와 같은 속도" 라 아무 일도 하지 않는다. 남으면 이 기능이 생기기
+    // 전에 저장한 파일과 왕복 JSON 이 달라진다.
+    const doc = sampleDoc()
+    ;(doc.layers[0] as unknown as Record<string, unknown>).motionRepeat = 1
+
+    const bundle = deserializeProject(
+      serializeProject({ doc, assets: new Map([['a1', dummyPng(256)]]) }),
+    )
+
+    expect('motionRepeat' in bundle.doc.layers[0]!).toBe(false)
+  })
+
   it('빈 문서도 그대로 돌아온다', () => {
     resetIdCounter()
     const doc = createEmptyProject()

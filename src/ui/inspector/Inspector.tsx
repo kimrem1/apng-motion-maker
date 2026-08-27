@@ -29,6 +29,7 @@ import { LayerProperties } from '@/ui/layers/LayerProperties.tsx'
 import { PrepPanel } from '@/ui/prep/PrepPanel.tsx'
 import { TextSection } from './TextSection.tsx'
 import { CharAnimSection } from './CharAnimSection.tsx'
+import { MotionSpeedSection, MotionTransferSection } from './MotionTransferSection.tsx'
 import { ShapeSection } from '@/ui/inspector/ShapeSection.tsx'
 import { useUiStore } from '@/state/ui.ts'
 import { useEditFrame } from './useEditFrame.ts'
@@ -650,6 +651,15 @@ export function Inspector() {
             {/* 레이어 고유 속성: 혼합, 깊이감, 부모, 캔버스 채움, 오버스캔 진단 */}
             <LayerProperties layer={layer} />
             {isFolder ? null : <EffectStack layer={layer} />}
+            {/*
+              모션 속도와 모션 옮기기.
+
+              위에 늘어놓은 등장 / 가리기 / 효과 전부를 대상으로 삼는 조작이라
+              그것들 뒤에 온다. 폴더도 움직임을 갖고 움직임을 주고받을 수 있으므로
+              여기서는 폴더를 가리지 않는다. 갈래별 가드는 motions/transfer.ts 가 한다.
+            */}
+            <MotionSpeedSection key={`speed:${layer.id}`} layer={layer} />
+            <MotionTransferSection key={`transfer:${layer.id}`} layer={layer} />
             {/* 배경 제거와 크롭. 도형과 폴더는 픽셀이 없어 다듬을 것이 없다 */}
             {layer.shape || isFolder ? null : <PrepPanel />}
           </>

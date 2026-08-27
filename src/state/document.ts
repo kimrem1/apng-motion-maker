@@ -16,6 +16,8 @@ import {
   CANVAS_MIN,
   FPS_CHOICES,
   FRAMES_MAX,
+  MOTION_REPEAT_MAX,
+  MOTION_REPEAT_MIN,
   PERSPECTIVE_DEFAULT,
   PERSPECTIVE_MAX,
   type AssetPrep,
@@ -67,6 +69,14 @@ import {
   ownershipFor,
   ownershipOf,
 } from '@/motions/merge.ts'
+import {
+  applyMotionBundle,
+  bundleIsEmpty,
+  clearMotion,
+  extractMotion,
+  type IdMinter,
+  type MotionParts,
+} from '@/motions/transfer.ts'
 import { probeAlpha } from '@/imageprep/alphaProbe.ts'
 import { assetRegistry } from './assets.ts'
 
@@ -343,6 +353,34 @@ interface DocumentState {
     baseFps?: number
     macro: { speed: number; strength: number }
   }): void
+
+  /**
+   * 한 레이어의 모션과 효과를 다른 레이어들로 보낸다.
+   *
+   * 무엇이 따라가고 무엇이 남는지는 motions/transfer.ts 한 곳이 정한다.
+   * 이름 / 크기 / 맞춤 / 구간 / 담기 배율은 따라가지 않는다.
+   *
+   * `move` 가 참이면 원본에서 그 갈래를 걷어낸다. 그때 원본이 프리셋을 들고 있던
+   * 레이어면 presetRef 도 함께 지운다. 안 지우면 EASY 의 세기/속도 슬라이더를
+   * 스치는 순간 방금 걷어낸 모션이 원본에 되살아난다 (state/presetActions.ts).
+   *
+   * 대상이 여럿이어도 실행취소는 한 칸이다. coalesceKey 를 주지 않으므로 연속으로
+   * 두 번 보내면 두 칸이 쌓인다. 보내기는 드래그가 아니라 한 번의 결정이다.
+   */
+  transferMotion(args: {
+    fromLayerId: string
+    toLayerIds: readonly string[]
+    parts: MotionParts
+    move?: boolean
+  }): { moved: number; skipped: number }
+
+  /**
+   * 이 레이어의 움직임만 몇 배 빠르게 돌린다. 문서 길이와 fps 는 건드리지 않는다.
+   *
+   * 값 규칙과 왜 정수인지는 core/types.ts 의 Layer.motionRepeat 주석에 있다.
+   * 1 이면 키를 지운다. 뜻이 없는 키가 남으면 저장/열기 왕복에서 JSON 이 달라진다.
+   */
+  setLayerMotionRepeat(layerId: string, repeat: number): void
 
   /**
    * 이펙트를 추가한다.
@@ -1543,6 +1581,71 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           ...(baseFps !== undefined ? { baseFps } : {}),
         }
       }, `preset:${layerId}:${presetId}`)
+    },
+
+    transferMotion({ fromLayerId, toLayerIds, parts, move }) {
+      const doc = get().doc
+      const source = doc.layers.find((l) => l.id === fromLayerId)
+      if (!source) return { moved: 0, skipped: 0 }
+      if (!parts.tracks && !parts.effects && !parts.shaping) return { moved: 0, skipped: 0 }
+
+      const bundle = extractMotion(source)
+      if (bundleIsEmpty(bundle, parts)) return { moved: 0, skipped: 0 }
+
+      /*
+       * 대상을 먼저 거른다. 자기 자신과 잠긴 레이어는 건너뛴다. 걸러 낸 결과가 비면
+       * mutateDoc 을 부르지 않는다. 패치가 비면 히스토리에 안 쌓이기는 하지만,
+       * 부르지 않는 편이 뜻이 분명하다.
+       */
+      const targets = toLayerIds.filter((id) => {
+        if (id === fromLayerId) return false
+        const layer = doc.layers.find((l) => l.id === id)
+        return layer !== undefined && !layer.locked
+      })
+      const skipped = toLayerIds.length - targets.length
+      if (targets.length === 0) return { moved: 0, skipped }
+
+      const mint: IdMinter = {
+        track: () => nextId('t'),
+        modifier: () => nextId('m'),
+        effect: () => nextId('e'),
+      }
+
+      mutateDoc(move ? '모션 옮기기' : '모션 보내기', (d) => {
+        for (const id of targets) {
+          const target = findLayer(d, id)
+          if (target) applyMotionBundle(target, bundle, parts, mint)
+        }
+        if (move === true) {
+          const origin = findLayer(d, fromLayerId)
+          if (origin) clearMotion(origin, parts)
+          // 프리셋이 이 레이어에 걸려 있었다면 그 기록도 함께 지운다 (선언부 주석).
+          if (d.presetRef?.layerId === fromLayerId) delete d.presetRef
+        } else {
+          /*
+           * 복사는 원본을 안 건드리므로 presetRef 도 그대로다. 대상의 사본은 id 가
+           * 새로 발급되어 소유권 목록에 없고, ownershipFor 가 레이어로 대조하므로
+           * 대상에서는 "사용자가 만든 것" 으로 살아남는다 (motions/merge.ts).
+           */
+        }
+      })
+
+      return { moved: targets.length, skipped }
+    },
+
+    setLayerMotionRepeat(layerId, repeat) {
+      const next = Math.round(repeat)
+      if (!Number.isFinite(next)) return
+      const clamped = clamp(next, MOTION_REPEAT_MIN, MOTION_REPEAT_MAX)
+      mutateDoc('모션 속도', (d) => {
+        const layer = findLayer(d, layerId)
+        if (!layer) return
+        if (clamped <= MOTION_REPEAT_MIN) {
+          if ('motionRepeat' in layer) delete layer.motionRepeat
+          return
+        }
+        layer.motionRepeat = clamped
+      }, `repeat:${layerId}`)
     },
 
     setStaticValue(layerId, prop, value) {

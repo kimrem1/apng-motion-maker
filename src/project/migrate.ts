@@ -20,6 +20,8 @@ import {
   CANVAS_MIN,
   FPS_CHOICES,
   FRAMES_MAX,
+  MOTION_REPEAT_MAX,
+  MOTION_REPEAT_MIN,
   SPEED_DEFAULT,
   SPEED_MAX,
   SPEED_MIN,
@@ -611,6 +613,16 @@ function normalizeLayer(
     ...(typeof raw.containScale === 'number' && raw.containScale > 0 && raw.containScale <= 1
       ? { containScale: raw.containScale }
       : {}),
+    /*
+     * 레이어 모션 배수. 1 은 "문서와 같은 속도" 라 아무 일도 하지 않으므로 키를 남기지
+     * 않는다. 남기면 이 기능이 생기기 전에 저장한 파일과 왕복 JSON 이 달라진다.
+     * 정수가 아니면 반복 이음새가 깨지므로 내림한다 (core/types.ts Layer.motionRepeat).
+     */
+    ...(typeof raw.motionRepeat === 'number' &&
+    Number.isFinite(raw.motionRepeat) &&
+    Math.floor(raw.motionRepeat) > MOTION_REPEAT_MIN
+      ? { motionRepeat: Math.min(MOTION_REPEAT_MAX, Math.floor(raw.motionRepeat)) }
+      : {}),
     tracks,
     modifiers,
     effects,
@@ -637,6 +649,21 @@ function normalizeLayer(
   ) {
     delete layer.containScale
     bag.add('담기 배율 값이 범위를 벗어나 문서에서 다시 계산합니다.')
+  }
+  /*
+   * 배수도 같은 이유로 지운다. 객체가 ...raw 로 시작하므로 위의 조건부 스프레드만으로는
+   * 원본의 1 이나 소수가 그대로 살아남아 왕복 JSON 이 달라진다.
+   */
+  if (
+    'motionRepeat' in layer &&
+    !(
+      typeof layer.motionRepeat === 'number' &&
+      Number.isInteger(layer.motionRepeat) &&
+      layer.motionRepeat > MOTION_REPEAT_MIN &&
+      layer.motionRepeat <= MOTION_REPEAT_MAX
+    )
+  ) {
+    delete layer.motionRepeat
   }
   for (const key of ['inFrame', 'outFrame', 'inFade', 'outFade'] as const) {
     const v = layer[key]

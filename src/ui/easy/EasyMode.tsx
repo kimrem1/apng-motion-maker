@@ -28,9 +28,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { CANVAS_MAX, FRAMES_MAX, type BackgroundType, type LoopMode } from '@/core/types.ts'
+import {
+  CANVAS_MAX,
+  FRAMES_MAX,
+  MOTION_REPEAT_MAX,
+  type BackgroundType,
+  type LoopMode,
+} from '@/core/types.ts'
 import { importImageFile, toErrorMessage } from '@/imageprep/index.ts'
 import { EASY_PRESETS } from '@/motions/registry.ts'
+import { ALL_MOTION_PARTS } from '@/motions/transfer.ts'
 import { baselineFps, baselineSec, fpsForDuration } from '@/motions/apply.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import {
@@ -148,6 +155,15 @@ function IconSwap() {
 // EASY 모드
 // ---------------------------------------------------------------------------
 
+/**
+ * EASY 의 배수 선택지.
+ *
+ * PRO 와 같은 목록이다 (ui/inspector/MotionTransferSection.tsx). 같은 값을 두 곳에
+ * 적는 대신 목록 자체를 옮기지 않는 이유는, EASY 가 UI 컴포넌트를 서로 import 하지
+ * 않는 구조라서다. 값이 일곱 개뿐이고 상한은 상수를 공유한다.
+ */
+const EASY_REPEAT_CHOICES = [1, 2, 3, 4, 6, 8, MOTION_REPEAT_MAX] as const
+
 export interface EasyModeProps {
   /**
    * 상단 줄(이미지 바꾸기)을 EasyMode 가 직접 그릴지.
@@ -167,6 +183,8 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
   const setLoopMode = useDocumentStore((s) => s.setLoopMode)
   const setCanvasSize = useDocumentStore((s) => s.setCanvasSize)
   const setLayerAnchor = useDocumentStore((s) => s.setLayerAnchor)
+  const setLayerMotionRepeat = useDocumentStore((s) => s.setLayerMotionRepeat)
+  const transferMotion = useDocumentStore((s) => s.transferMotion)
   const setBackgroundType = useDocumentStore((s) => s.setBackgroundType)
   const setBackgroundColor = useDocumentStore((s) => s.setBackgroundColor)
 
@@ -222,6 +240,8 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
   const targetLayerId = resolveTargetLayerId()
   const targetLayer = targetLayerId ? doc.layers.find((l) => l.id === targetLayerId) : undefined
   const frameFit = targetLayer ? frameFitOf(targetLayer) : 'contain'
+  // 한 바퀴는 최소 두 프레임이다. 그보다 잘게 쪼개면 정수 프레임 격자에서 뭉개진다.
+  const repeatCap = Math.floor(doc.timeline.durationFrames / 2)
   const presetRef = doc.presetRef
   const dirty = presetRef?.dirty === true
 
@@ -650,6 +670,82 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
             <p className="mm-easy-note">왼쪽에서 움직임을 먼저 고르면 여기서 조절할 수 있어요.</p>
           ) : null}
         </div>
+
+        {/*
+          이 오브제만 빠르게.
+
+          바로 위의 속도 슬라이더는 **전체 길이**를 바꾼다. 오브제 여럿을 올려 둔
+          사람이 하나만 빠르게 하려고 그 슬라이더를 끌면 화면의 모든 것이 함께
+          빨라지고 프레임 수까지 줄어든다. 이 노브는 길이도 초당 프레임도 건드리지
+          않고 고른 오브제만 정수 배로 돌린다 (core/types.ts Layer.motionRepeat).
+
+          PRO 인스펙터에만 두면 EASY 사용자는 이 구별을 영원히 못 만난다.
+        */}
+        {hasImage ? (
+          <div className="mm-easy-group">
+            <label className="mm-field-label" htmlFor="mm-easy-repeat">
+              이 오브제만 빠르게
+            </label>
+            <select
+              id="mm-easy-repeat"
+              className="mm-select"
+              value={String(targetLayer?.motionRepeat ?? 1)}
+              disabled={targetLayerId === null || repeatCap < 2}
+              onChange={(e) => {
+                if (targetLayerId) setLayerMotionRepeat(targetLayerId, Number(e.target.value))
+              }}
+            >
+              {EASY_REPEAT_CHOICES.filter((r) => r === 1 || r <= repeatCap).map((r) => (
+                <option key={r} value={String(r)}>
+                  {r === 1 ? '보통 (1배)' : `${r}배`}
+                </option>
+              ))}
+            </select>
+            <p className="mm-easy-note">
+              {repeatCap < 2
+                ? '전체 길이가 너무 짧아 더 쪼갤 수 없습니다.'
+                : '전체 길이와 초당 프레임은 그대로 두고 고른 오브제만 빨라집니다. 위 속도 슬라이더는 전체 길이를 바꿉니다.'}
+            </p>
+          </div>
+        ) : null}
+
+        {/*
+          같은 모션을 나머지 오브제에도.
+
+          EASY 에서 가장 잦은 요구인데 인스펙터가 없어서 길이 없었다. 대상을 고르게
+          하지 않고 "나머지 전부" 로 못 박는다. EASY 화면에는 레이어 목록이 없어서
+          고르라고 해도 무엇이 무엇인지 알 방법이 없기 때문이다. 하나만 골라 보내는
+          것은 PRO 인스펙터의 「모션 옮기기」 가 맡는다.
+        */}
+        {doc.layers.length >= 2 ? (
+          <div className="mm-easy-group">
+            <span className="mm-field-label">모션 옮기기</span>
+            <button
+              type="button"
+              className="mm-btn"
+              disabled={targetLayerId === null}
+              onClick={() => {
+                if (!targetLayerId) return
+                const report = transferMotion({
+                  fromLayerId: targetLayerId,
+                  toLayerIds: doc.layers.map((l) => l.id),
+                  parts: ALL_MOTION_PARTS,
+                })
+                setNotice(
+                  report.moved > 0
+                    ? `나머지 ${report.moved}개에 같은 모션을 넣었습니다. Ctrl+Z 로 되돌릴 수 있습니다.`
+                    : '옮길 모션이 없습니다. 왼쪽에서 움직임을 먼저 고르세요.',
+                )
+              }}
+            >
+              지금 모션을 나머지 오브제에도
+            </button>
+            <p className="mm-easy-note">
+              고른 오브제의 움직임 · 효과 · 가리기를 나머지 전부에 똑같이 넣습니다. 그림과 크기와
+              자리는 그대로입니다.
+            </p>
+          </div>
+        ) : null}
 
         {/*
           모션이 프레임을 벗어날 때 무엇을 지킬 것인가.

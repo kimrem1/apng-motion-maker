@@ -10,7 +10,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { charInSpanOf, getTrack, isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
 import { assetRegistry } from '@/state/assets.ts'
 import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
-import type { AssetRef, MotionProject } from '@/core/types.ts'
+import { MOTION_REPEAT_MAX, type AssetRef, type MotionProject } from '@/core/types.ts'
+import { ALL_MOTION_PARTS } from '@/motions/transfer.ts'
 
 function baseDoc(): MotionProject {
   resetIdCounter()
@@ -251,6 +252,224 @@ describe('이펙트', () => {
     expect(s().doc.layers[0]!.effects[0]!.holdFrames).toBe(1)
     s().setEffectHold(L, id, 99)
     expect(s().doc.layers[0]!.effects[0]!.holdFrames).toBe(12)
+  })
+})
+
+describe('모션 옮기기', () => {
+  /** 레이어를 한 장 더 만들고 그 id 를 돌려준다. */
+  function addLayer(n: number): string {
+    const ref: AssetRef = {
+      id: `a${n}`,
+      name: `x${n}`,
+      storeKey: `k${n}`,
+      naturalW: 100,
+      naturalH: 100,
+      hasAlpha: true,
+    }
+    s().replaceDocument({
+      ...s().doc,
+      assets: [...s().doc.assets, ref],
+      layers: [...s().doc.layers, createImageLayer(ref, n)],
+    })
+    return s().doc.layers[s().doc.layers.length - 1]!.id
+  }
+
+  /** 첫 레이어에 옮길 거리를 만들어 둔다. */
+  function seedMotion(): void {
+    s().applyPresetTracks({
+      layerId: L,
+      presetId: 'zoom.pop',
+      tracks: [
+        {
+          id: '',
+          prop: 'scale',
+          unit: 'ratio',
+          keys: [
+            { f: 0, v: 0.8, interp: 'bezier' },
+            { f: 12, v: 1, interp: 'bezier' },
+          ],
+        },
+      ],
+      modifiers: [],
+      macro: { speed: 1, strength: 0.5 },
+    })
+    s().addEffect(L, 'fx.grain', { strength: 0.4 })
+    s().setLayerMotionRepeat(L, 3)
+  }
+
+  const find = (id: string) => s().doc.layers.find((l) => l.id === id)!
+
+  it('움직임과 효과가 대상에 생기고 원본에도 남는다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    const report = s().transferMotion({
+      fromLayerId: L,
+      toLayerIds: [B],
+      parts: ALL_MOTION_PARTS,
+    })
+    expect(report.moved).toBe(1)
+
+    expect(find(B).tracks.map((t) => t.prop)).toEqual(find(L).tracks.map((t) => t.prop))
+    expect(find(B).effects.map((e) => e.type)).toEqual(find(L).effects.map((e) => e.type))
+    expect(find(B).motionRepeat).toBe(3)
+    // 원본은 그대로다. 복사이지 이동이 아니다.
+    expect(find(L).tracks).toHaveLength(1)
+    expect(find(L).effects).toHaveLength(1)
+  })
+
+  it('트랙과 이펙트 id 를 새로 발급한다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    s().transferMotion({ fromLayerId: L, toLayerIds: [B], parts: ALL_MOTION_PARTS })
+    expect(find(B).tracks[0]!.id).not.toBe(find(L).tracks[0]!.id)
+    expect(find(B).effects[0]!.id).not.toBe(find(L).effects[0]!.id)
+  })
+
+  it('시드는 그대로 따라간다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    s().transferMotion({ fromLayerId: L, toLayerIds: [B], parts: ALL_MOTION_PARTS })
+    // 패턴이 달라지면 "같은 모션" 이 아니다.
+    expect(find(B).effects[0]!.seed).toBe(find(L).effects[0]!.seed)
+  })
+
+  it('여러 레이어에 보내도 실행취소 한 칸이다', () => {
+    const B = addLayer(2)
+    const C = addLayer(3)
+    seedMotion()
+    s().clearHistory()
+    s().transferMotion({ fromLayerId: L, toLayerIds: [B, C], parts: ALL_MOTION_PARTS })
+    expect(s().past).toHaveLength(1)
+    expect(find(B).tracks).toHaveLength(1)
+    expect(find(C).tracks).toHaveLength(1)
+  })
+
+  it('자기 자신에게 보내면 아무 일도 하지 않는다', () => {
+    seedMotion()
+    s().clearHistory()
+    const report = s().transferMotion({
+      fromLayerId: L,
+      toLayerIds: [L],
+      parts: ALL_MOTION_PARTS,
+    })
+    expect(report.moved).toBe(0)
+    expect(s().past).toHaveLength(0)
+  })
+
+  it('잠긴 레이어는 건너뛴다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    s().setLayerFlag(B, 'locked', true)
+    const report = s().transferMotion({
+      fromLayerId: L,
+      toLayerIds: [B],
+      parts: ALL_MOTION_PARTS,
+    })
+    expect(report.moved).toBe(0)
+    expect(report.skipped).toBe(1)
+    expect(find(B).tracks).toHaveLength(0)
+  })
+
+  it('갈래를 고르면 그 갈래만 간다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    s().transferMotion({
+      fromLayerId: L,
+      toLayerIds: [B],
+      parts: { tracks: false, effects: true, shaping: false },
+    })
+    expect(find(B).effects).toHaveLength(1)
+    expect(find(B).tracks).toHaveLength(0)
+  })
+
+  it('이름과 맞춤과 구간은 따라가지 않는다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    s().setLayerFit(L, 'contain')
+    s().setLayerRange([B], { inFrame: 3, outFrame: 9 })
+    const name = find(B).name
+    const fit = find(B).fit
+    s().transferMotion({ fromLayerId: L, toLayerIds: [B], parts: ALL_MOTION_PARTS })
+    expect(find(B).name).toBe(name)
+    expect(find(B).fit).toBe(fit)
+    expect(find(B).inFrame).toBe(3)
+    expect(find(B).outFrame).toBe(9)
+  })
+
+  it('담기 배율은 대상에서 지운다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    s().transferMotion({ fromLayerId: L, toLayerIds: [B], parts: ALL_MOTION_PARTS })
+    expect('containScale' in find(B)).toBe(false)
+  })
+
+  it('옮기기는 원본에서 빼고 presetRef 도 지운다', () => {
+    const B = addLayer(2)
+    seedMotion()
+    expect(s().doc.presetRef?.layerId).toBe(L)
+    s().transferMotion({
+      fromLayerId: L,
+      toLayerIds: [B],
+      parts: ALL_MOTION_PARTS,
+      move: true,
+    })
+    expect(find(L).tracks).toHaveLength(0)
+    expect(find(L).effects).toHaveLength(0)
+    expect('motionRepeat' in find(L)).toBe(false)
+    expect(s().doc.presetRef).toBeUndefined()
+    expect(find(B).tracks).toHaveLength(1)
+  })
+
+  it('옮길 것이 없으면 대상의 모션을 지우지 않는다', () => {
+    const B = addLayer(2)
+    // 원본은 비어 있고 대상에만 모션이 있다.
+    s().applyPresetTracks({
+      layerId: B,
+      presetId: 'zoom.pop',
+      tracks: [
+        { id: '', prop: 'scale', unit: 'ratio', keys: [{ f: 0, v: 1, interp: 'bezier' }] },
+      ],
+      modifiers: [],
+      macro: { speed: 1, strength: 0.5 },
+    })
+    const report = s().transferMotion({
+      fromLayerId: L,
+      toLayerIds: [B],
+      parts: ALL_MOTION_PARTS,
+    })
+    expect(report.moved).toBe(0)
+    expect(find(B).tracks).toHaveLength(1)
+  })
+})
+
+describe('레이어 모션 배수', () => {
+  it('1 이면 키를 만들지 않는다', () => {
+    s().setLayerMotionRepeat(L, 1)
+    expect('motionRepeat' in s().doc.layers[0]!).toBe(false)
+  })
+
+  it('올렸다 1 로 되돌리면 키가 사라진다', () => {
+    s().setLayerMotionRepeat(L, 4)
+    expect(s().doc.layers[0]!.motionRepeat).toBe(4)
+    s().setLayerMotionRepeat(L, 1)
+    expect('motionRepeat' in s().doc.layers[0]!).toBe(false)
+  })
+
+  it('범위 밖은 클램프한다', () => {
+    s().setLayerMotionRepeat(L, 999)
+    expect(s().doc.layers[0]!.motionRepeat).toBe(MOTION_REPEAT_MAX)
+  })
+
+  it('소수는 반올림한다', () => {
+    s().setLayerMotionRepeat(L, 2.6)
+    expect(s().doc.layers[0]!.motionRepeat).toBe(3)
+  })
+
+  it('실행취소로 되돌아간다', () => {
+    s().clearHistory()
+    s().setLayerMotionRepeat(L, 4)
+    s().undo()
+    expect('motionRepeat' in s().doc.layers[0]!).toBe(false)
   })
 })
 

@@ -150,12 +150,52 @@ function writeChannel(
   }
 }
 
+/**
+ * 이 레이어가 실제로 돌 배수.
+ *
+ * 문서에 적힌 값을 그대로 쓰지 않고 두 번 조인다.
+ *   - 주기 하나가 2프레임보다 짧아지면 정수 프레임 격자에서 모션이 뭉개진다.
+ *     24프레임 문서에 12배를 걸면 주기가 2프레임이고, 그 아래는 의미가 없다.
+ *   - 정수가 아니면 마지막 주기가 잘려 반복 이음새에 값 도약이 새로 생긴다
+ *     (core/types.ts Layer.motionRepeat 주석).
+ *
+ * 값이 없거나 1 이면 1 이다. 그때는 아래 매핑이 항등이라 옛 문서의 픽셀이 바뀌지 않는다.
+ */
+export function effectiveRepeat(layer: Layer, durationFrames: number): number {
+  const raw = layer.motionRepeat
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 1
+  const wanted = Math.floor(raw)
+  if (wanted <= 1) return 1
+  const cap = Math.floor(durationFrames / 2)
+  return Math.max(1, Math.min(wanted, cap))
+}
+
 export function resolveLayerTransform(
   layer: Layer,
   frame: number,
   canvas: CanvasConfig,
   durationFrames = 1,
 ): ResolvedTransform {
+  /*
+   * 레이어 로컬 시간.
+   *
+   *   period     = durationFrames / repeat   (한 주기의 문서 프레임 수)
+   *   localFrame = (frame % period) * repeat
+   *
+   * 이 매핑은 한 주기를 트랙의 전 구간 [0, durationFrames] 로 정확히 펼친다.
+   * 프리셋은 이음새 없는 모션의 마지막 키를 durationFrames 에 둔다 (presets/shared.ts
+   * lastFrame). 그래서 주기 끝에서 트랙이 첫 키의 값으로 정확히 돌아오고, 새 이음새가
+   * 생기지 않는다.
+   *
+   * 모디파이어는 프레임이 아니라 durationFrames 쪽을 줄여서 넘긴다. 그쪽은 t 를
+   * `(effectiveFrame(frame, hold) % duration) / duration` 으로 만드는데(generators.ts),
+   * 홀드 클럭은 문서 시간에 있어야 한다. 프레임에 배수를 곱하면 자글자글의 "2컷,
+   * 3컷" 이 배수를 따라 잘아져서 홀드 정렬 검사(core/loopSeam.ts)가 거짓이 된다.
+   */
+  const repeat = effectiveRepeat(layer, durationFrames)
+  const period = repeat > 1 ? durationFrames / repeat : durationFrames
+  const localFrame = repeat > 1 ? (frame % period) * repeat : frame
+
   const t = identityTransform()
   t.anchorX = layer.anchor[0]
   t.anchorY = layer.anchor[1]
@@ -168,7 +208,7 @@ export function resolveLayerTransform(
   }
 
   for (const track of layer.tracks) {
-    const raw = evalTrackAt(track, frame)
+    const raw = evalTrackAt(track, localFrame)
     if (raw === undefined) continue
     const value = convertUnit(raw, track.prop, track.unit, canvas)
     writeChannel(t, track.prop, value, track.composite ?? DEFAULT_COMPOSITE[track.prop])
@@ -180,7 +220,7 @@ export function resolveLayerTransform(
   for (const m of layer.modifiers) {
     const value = evalModifier(m, {
       frame,
-      durationFrames,
+      durationFrames: period,
       projectSeed: PROJECT_SEED,
       nodeId: layer.id,
     })
