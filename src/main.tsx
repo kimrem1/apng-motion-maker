@@ -10,14 +10,18 @@ import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 
 import App from '@/ui/App.tsx'
+import AccessGate from '@/ui/shell/AccessGate.tsx'
 import '@/ui/tokens.css'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root 를 찾지 못했습니다.')
 
+// 게이트가 App 바깥에 있어야 통과 전에는 자동 저장이나 단축키가 아예 안 걸린다.
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <AccessGate>
+      <App />
+    </AccessGate>
   </StrictMode>,
 )
 
