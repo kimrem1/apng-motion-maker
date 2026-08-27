@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { charInSpanOf, getTrack, isAnimated, readStaticValue, useDocumentStore } from '@/state/document.ts'
 import { assetRegistry } from '@/state/assets.ts'
 import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
+import { createShapeSpec } from '@/core/shape.ts'
 import { MOTION_REPEAT_MAX, type AssetRef, type MotionProject } from '@/core/types.ts'
 import { ALL_MOTION_PARTS } from '@/motions/transfer.ts'
 
@@ -904,6 +905,46 @@ describe('히스토리와 에셋 재동기화', () => {
 
     assetRegistry.delete(a.assetId)
     assetRegistry.delete(b.assetId)
+  })
+})
+
+/**
+ * 캔버스는 맨 처음 넣은 이미지 크기로 고정된다.
+ *
+ * 첫 장이 액자를 정한 뒤에는 더 큰 이미지를 넣어도 캔버스가 따라 커지지 않는다.
+ * 커지면 이미 잡아 둔 결과물 해상도가 통째로 바뀐다.
+ */
+describe('캔버스는 첫 이미지 크기로 고정', () => {
+  const fakeBitmap = (w: number, h: number): ImageBitmap =>
+    ({ width: w, height: h, close() {} }) as unknown as ImageBitmap
+
+  it('첫 이미지가 캔버스를 정하고 더 큰 이미지가 와도 커지지 않는다', () => {
+    resetIdCounter()
+    s().replaceDocument(createEmptyProject())
+
+    const a = s().addImage({ name: 'first.png', bitmap: fakeBitmap(300, 240), hasAlpha: true })
+    expect(s().doc.canvas.w).toBe(300)
+    expect(s().doc.canvas.h).toBe(240)
+
+    const b = s().addImage({ name: 'big.png', bitmap: fakeBitmap(1600, 1200), hasAlpha: true })
+    expect(s().doc.canvas.w).toBe(300)
+    expect(s().doc.canvas.h).toBe(240)
+
+    assetRegistry.delete(a.assetId)
+    assetRegistry.delete(b.assetId)
+  })
+
+  it('도형을 먼저 만든 문서에서도 첫 이미지가 액자를 정한다', () => {
+    resetIdCounter()
+    s().replaceDocument(createEmptyProject())
+    s().addShape({ name: '사각형', shape: createShapeSpec('rect') })
+    expect(s().doc.canvas.w).toBe(512) // 도형은 기본 캔버스를 건드리지 않는다
+
+    const a = s().addImage({ name: 'first.png', bitmap: fakeBitmap(640, 360), hasAlpha: true })
+    expect(s().doc.canvas.w).toBe(640)
+    expect(s().doc.canvas.h).toBe(360)
+
+    assetRegistry.delete(a.assetId)
   })
 })
 

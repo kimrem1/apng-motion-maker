@@ -961,27 +961,33 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
 
       let layerId = ''
       mutateDoc('이미지 추가', (d) => {
+        /*
+         * 캔버스는 **맨 처음 넣은 이미지** 크기로 잡고 그 뒤로는 고정한다.
+         *
+         * 예전에는 들어온 이미지 중 가장 큰 것에 맞춰 캔버스를 넓혔다. 그러면
+         * 첫 장으로 화면을 잡아 둔 뒤 큰 참고 이미지를 한 장 얹는 순간 결과물
+         * 해상도가 통째로 바뀌었다. 캔버스는 작업의 액자라서, 처음 정해진 뒤에는
+         * 사용자가 직접 바꿀 때(setCanvasSize, 자르기)만 움직여야 한다.
+         *
+         * 첫 판정은 "이미지 레이어가 하나도 없는가" 다. 레이어 수로 재지 않는
+         * 이유는 도형이나 글자를 먼저 만들어 둔 문서에서도 첫 이미지가 액자를
+         * 정해야 하기 때문이다. 도형에는 원본 픽셀이 없어 기준이 못 된다.
+         *
+         * 이후에 더 큰 이미지를 넣으면 기본값(fit: none)에서는 캔버스 밖으로
+         * 넘친 부분이 잘려 보인다. 액자를 지키는 대가이고, 담기/배율로 줄이는
+         * 것은 사용자의 몫이다. 상한은 CANVAS_MAX(4000) 하나뿐이다.
+         */
+        const firstImage = !d.layers.some((l) => l.type === 'image')
+
         d.assets.push(ref)
         const layer = createImageLayer(ref, d.layers.length)
         layerId = layer.id
         d.layers.push(layer)
 
-        /*
-         * 캔버스를 들어온 이미지 중 **가장 큰 것**에 맞춘다.
-         *
-         * 첫 장은 그대로 받고, 이후에는 폭과 높이를 각각 큰 쪽으로만 넓힌다.
-         * 여러 장을 한 번에 떨어뜨리면 addImage 가 장당 한 번씩 불리므로, 이 규칙이
-         * 곧 "그 묶음에서 가장 큰 크기" 가 된다. 줄이지는 않는다. 나중에 작은 그림을
-         * 한 장 더 넣었다고 이미 잡아 둔 캔버스가 쪼그라들면 안 된다.
-         *
-         * 축소하지 않는 이유는 레이어 기본값이 '원본 크기 그대로'(fit: none,
-         * keepInside: false)이기 때문이다. 캔버스만 줄이면 넣은 그림이 곧바로 잘린다.
-         * 상한은 CANVAS_MAX(4000) 하나뿐이다.
-         */
-        const w = d.layers.length === 1 ? bitmap.width : Math.max(d.canvas.w, bitmap.width)
-        const h = d.layers.length === 1 ? bitmap.height : Math.max(d.canvas.h, bitmap.height)
-        d.canvas.w = clamp(Math.round(w), CANVAS_MIN, CANVAS_MAX)
-        d.canvas.h = clamp(Math.round(h), CANVAS_MIN, CANVAS_MAX)
+        if (firstImage) {
+          d.canvas.w = clamp(Math.round(bitmap.width), CANVAS_MIN, CANVAS_MAX)
+          d.canvas.h = clamp(Math.round(bitmap.height), CANVAS_MIN, CANVAS_MAX)
+        }
       })
 
       return { assetId, layerId }
