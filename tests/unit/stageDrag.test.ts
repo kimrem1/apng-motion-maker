@@ -111,6 +111,21 @@ describe('무엇을 잡았는가', () => {
     expect(pointInQuad(quad, 0, 5)).toBe(true)
   })
 
+  it('점이나 선으로 붕괴한 사각형은 아무것도 잡지 않는다', () => {
+    // pop-in 애니메이션의 scale 0 프레임에서 quad 가 한 점이 된다. 그때 모든 클릭을
+    // 삼키면 보이지도 않는 레이어가 맨 위에서 아래 레이어 선택을 전부 막는다.
+    const point = Array.from({ length: 4 }, () => ({ x: 5, y: 5 }))
+    expect(pointInQuad(point, 5, 5)).toBe(false)
+    expect(pointInQuad(point, 100, 100)).toBe(false)
+    const line = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 0 },
+      { x: 0, y: 0 },
+    ]
+    expect(pointInQuad(line, 5, 5)).toBe(false)
+  })
+
   it('원본 크기 그대로면 캔버스 한가운데를 차지한다', () => {
     const doc = baseDoc()
     imageLayer(doc)

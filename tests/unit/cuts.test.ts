@@ -20,11 +20,11 @@ import {
 } from '@/core/cuts.ts'
 import { resolveComposition } from '@/core/evaluate.ts'
 import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
-import type { AssetRef, CutSpec, MotionProject } from '@/core/types.ts'
+import { FRAMES_MAX, type AssetRef, type CutSpec, type MotionProject } from '@/core/types.ts'
 import { migrateProject } from '@/project/migrate.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useLayerUiStore } from '@/state/layerUi.ts'
-import { addCut, assignToCut, cutRangesOf, cutsOf, removeCut, setCutCross } from '@/state/cutActions.ts'
+import { addCut, assignToCut, cutRangesOf, cutsOf, removeCut, setCutCross, setCutFrames } from '@/state/cutActions.ts'
 
 const s = () => useDocumentStore.getState()
 
@@ -227,6 +227,44 @@ describe('컷 액션', () => {
 
     expect(s().doc.layers.find((l) => l.id === layerId)!.inFade).toBe(5)
   })
+
+  it('컷 합계가 FRAMES_MAX 를 넘지 않는다 (넘치면 추가를 거부한다)', () => {
+    // 컷 구간이 duration 밖으로 넘치면 그 컷에 넣은 레이어가 재생에도
+    // 내보내기에도 영영 안 나온다. 예산 불변식이 그것을 막는다.
+    let added = 0
+    for (let i = 0; i < 20; i += 1) {
+      if (addCut() === null) break
+      added += 1
+    }
+    expect(added).toBeGreaterThan(0)
+    // 마지막 addCut 이 거부됐다: 남은 예산이 최소 컷 길이보다 작다.
+    expect(addCut()).toBeNull()
+    const ranges = cutRangesOf(s().doc)
+    const last = ranges[ranges.length - 1]!
+    expect(last.end + 1).toBeLessThanOrEqual(FRAMES_MAX)
+    expect(s().doc.timeline.durationFrames).toBe(last.end + 1)
+  })
+
+  it('컷 길이를 늘려도 합계가 예산 안에서 잘린다', () => {
+    addCut()
+    const ranges = cutRangesOf(s().doc)
+    setCutFrames(ranges[0]!.id, FRAMES_MAX)
+    const fresh = cutRangesOf(s().doc)
+    const last = fresh[fresh.length - 1]!
+    expect(last.end + 1).toBeLessThanOrEqual(FRAMES_MAX)
+    expect(s().doc.timeline.durationFrames).toBe(last.end + 1)
+    // 예산 초과분은 지금 만진 컷이 흡수한다. 다른 컷 길이는 그대로다.
+    expect(s().doc.cuts![1]!.frames).toBe(ranges[1]!.end - ranges[1]!.start + 1)
+  })
+
+  it('duration 밖 구간을 레이어에 쓸 수 없다 (setLayerRange 클램프)', () => {
+    const layerId = s().doc.layers[0]!.id
+    const last = s().doc.timeline.durationFrames - 1
+    s().setLayerRange([layerId], { inFrame: last + 30, outFrame: last + 60 })
+    const layer = s().doc.layers.find((l) => l.id === layerId)!
+    expect(layer.inFrame).toBe(last)
+    expect(layer.outFrame).toBe(last)
+  })
 })
 
 describe('컷 저장 왕복', () => {
@@ -261,6 +299,28 @@ describe('컷 저장 왕복', () => {
     const { doc } = migrateProject(JSON.parse(JSON.stringify(before)) as unknown)
     expect(doc.layers[0]).not.toHaveProperty('inFrame')
     expect(doc.layers[0]).not.toHaveProperty('outFade')
+  })
+
+  it('컷 id 가 겹치면 새로 매긴다', () => {
+    // 'cut2' 가 이미 있는데 두 번째 컷에 id 가 없으면 normalizeCut 이 같은
+    // 'cut2' 를 발급한다. 중복 id 는 길이 변경이 두 컷을 함께 바꾸고
+    // 삭제가 두 컷을 한꺼번에 지운다.
+    const before = docWithLayers(1) as unknown as Record<string, unknown>
+    before['cuts'] = [{ id: 'cut2', name: 'a', frames: 10, crossFrames: 0 }, { name: 'b', frames: 10 }]
+    const { doc } = migrateProject(JSON.parse(JSON.stringify(before)) as unknown)
+    const ids = (doc.cuts ?? []).map((c) => c.id)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('컷 합계가 상한을 넘는 파일은 뒤 컷을 줄여 duration 과 맞춘다', () => {
+    const before = docWithLayers(1) as unknown as Record<string, unknown>
+    before['cuts'] = [cut('a', 110), cut('b', 60)]
+    const { doc } = migrateProject(JSON.parse(JSON.stringify(before)) as unknown)
+    const ranges = cutRanges(doc.cuts ?? [])
+    const last = ranges[ranges.length - 1]!
+    expect(last.end + 1).toBeLessThanOrEqual(FRAMES_MAX)
+    // 컷 합계와 duration 이 일치해야 재생 불가 유령 구간이 없다.
+    expect(doc.timeline.durationFrames).toBe(last.end + 1)
   })
 })
 

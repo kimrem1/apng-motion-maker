@@ -89,6 +89,12 @@ export function useRenderer(): UseRendererResult {
   const loopRafRef = useRef(0)
   const startMsRef = useRef(0)
   const publishedAtRef = useRef(0)
+  /**
+   * 재생 루프가 스토어에 마지막으로 publish 한 프레임. 정지 시점에 스토어 값이
+   * 이것과 다르면, 정지와 같은 틱에 외부(스크럽/프레임 이동)가 쓴 값이라는 뜻이다.
+   * 그때 frameRef 로 덮어쓰면 사용자가 지정한 프레임이 소리 없이 사라진다.
+   */
+  const publishedFrameRef = useRef(-1)
 
   const renderAt = useCallback((frame: number) => {
     /*
@@ -308,8 +314,15 @@ export function useRenderer(): UseRendererResult {
         cancelAnimationFrame(loopRafRef.current)
         loopRafRef.current = 0
       }
-      // 재생 중 UI 반영은 throttle 되어 뒤처져 있다. 정지 시점에 정확히 맞춘다.
-      useUiStore.getState().setPlayheadFrame(frameRef.current)
+      const store = useUiStore.getState()
+      if (store.playheadFrame === publishedFrameRef.current) {
+        // 재생 중 UI 반영은 throttle 되어 뒤처져 있다. 정지 시점에 정확히 맞춘다.
+        store.setPlayheadFrame(frameRef.current)
+      } else {
+        // 정지와 같은 틱에 스크럽/프레임 이동이 쓴 값이다. 379행 구독은 그 시점에
+        // playingRef 가 아직 true 라 그 값을 버렸으므로, 여기서 받아들여 그린다.
+        frameRef.current = store.playheadFrame
+      }
       dirtyRef.current = true
       requestRender()
       return
@@ -322,6 +335,9 @@ export function useRenderer(): UseRendererResult {
     const d = docRef.current
     startMsRef.current = performance.now() - (frameRef.current / d.timeline.fps) * 1000
     publishedAtRef.current = 0
+    // 아직 publish 한 것이 없다. 시작 시점의 스토어 값을 기준으로 삼아야
+    // 짧은 재생(publish 전 정지)에서도 외부 쓰기를 구별할 수 있다.
+    publishedFrameRef.current = useUiStore.getState().playheadFrame
 
     const tick = (now: number): void => {
       loopRafRef.current = requestAnimationFrame(tick)
@@ -343,6 +359,7 @@ export function useRenderer(): UseRendererResult {
 
       if (now - publishedAtRef.current >= PUBLISH_INTERVAL_MS) {
         publishedAtRef.current = now
+        publishedFrameRef.current = frame
         useUiStore.getState().setPlayheadFrame(frame)
       }
     }
@@ -367,6 +384,9 @@ export function useRenderer(): UseRendererResult {
   useEffect(
     () =>
       subscribePreviewDoc(() => {
+        // 호버는 스토어를 안 건드려 리렌더가 없다. 81행 대입은 렌더 시점에만 돌므로
+        // 여기서 같은 식으로 갱신해야 재생 중 rAF 루프가 미리보기 문서를 본다.
+        docRef.current = getPreviewDoc() ?? useDocumentStore.getState().doc
         dirtyRef.current = true
         requestRender()
       }),

@@ -69,6 +69,12 @@ export function useImageDrop(): UseImageDropResult {
   // dragenter/dragleave 는 자식 요소를 지날 때마다 발생한다. 깊이를 세지 않으면 오버레이가 깜빡인다.
   const depthRef = useRef(0)
   const draggingRef = useRef(false)
+  /**
+   * 진행 중 배치 수. 큰 이미지를 드롭한 직후 붙여넣기를 하면 두 processFiles 가
+   * 병행 실행되는데, 개수를 안 세면 먼저 끝난 배치가 busy 를 내려 버리고
+   * 뒤 배치의 결과가 앞 배치의 오류 문구를 덮는다.
+   */
+  const inFlightRef = useRef(0)
 
   useEffect(() => {
     mountedRef.current = true
@@ -86,9 +92,14 @@ export function useImageDrop(): UseImageDropResult {
   const processFiles = useCallback(async (files: File[]): Promise<void> => {
     if (files.length === 0) return
 
+    inFlightRef.current += 1
     setBusy(true)
-    setError(null)
-    setWarning(null)
+    // 첫 배치가 시작될 때만 지운다. 병행 배치가 앞 배치의 실패 문구를 덮으면
+    // 사용자가 그 파일이 왜 안 들어왔는지 영영 모른다.
+    if (inFlightRef.current === 1) {
+      setError(null)
+      setWarning(null)
+    }
 
     const errors: string[] = []
     const warnings: string[] = []
@@ -114,11 +125,16 @@ export function useImageDrop(): UseImageDropResult {
       }
     }
 
+    inFlightRef.current = Math.max(0, inFlightRef.current - 1)
     // 처리 도중 언마운트되었으면 상태를 건드리지 않는다. 문서 변경은 이미 반영된 상태다.
     if (!mountedRef.current) return
-    setBusy(false)
-    setError(errors.length > 0 ? errors.join('\n') : null)
-    setWarning(warnings.length > 0 ? warnings.join('\n') : null)
+    // 다른 배치가 아직 디코드 중이면 busy 를 유지한다.
+    if (inFlightRef.current === 0) setBusy(false)
+    // 교체가 아니라 누적. 배치마다 결과가 갈려도 전부 보여야 한다.
+    if (errors.length > 0) setError((prev) => (prev ? `${prev}\n` : '') + errors.join('\n'))
+    if (warnings.length > 0) {
+      setWarning((prev) => (prev ? `${prev}\n` : '') + warnings.join('\n'))
+    }
   }, [])
 
   // 전역 붙여넣기. 텍스트 입력 중에는 가로채지 않는다.

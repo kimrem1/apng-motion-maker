@@ -59,10 +59,17 @@ export function MotionSpeedSection({ layer }: { layer: Layer }) {
         <SelectField
           label="이 오브제만 빠르게"
           value={String(stored)}
-          options={REPEAT_CHOICES.filter((r) => r === 1 || r <= Math.max(1, cap)).map((r) => ({
-            value: String(r),
-            label: r === 1 ? '보통 (1배)' : `${r}배`,
-          }))}
+          options={[
+            // 지금 값은 목록에 반드시 넣는다. 배수를 걸어 둔 채 길이를 줄이면 cap 이
+            // 내려가 저장값이 목록에서 빠지는데, controlled select 의 value 가 어떤
+            // option 과도 안 맞으면 빈 값으로 그려져 현재 배수를 읽을 수 없다.
+            ...new Set([...REPEAT_CHOICES.filter((r) => r === 1 || r <= Math.max(1, cap)), stored]),
+          ]
+            .sort((a, b) => a - b)
+            .map((r) => ({
+              value: String(r),
+              label: r === 1 ? '보통 (1배)' : `${r}배`,
+            }))}
           disabled={layer.locked || cap < 2}
           ariaLabel="이 레이어의 모션 배수"
           hint={

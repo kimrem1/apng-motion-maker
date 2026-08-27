@@ -136,6 +136,23 @@ describe('fps 자동 선택', () => {
     // 12초가 이 제품의 상한이다. 그 위는 프레임 상한에서 잘린다.
     expect(fpsForDuration(30, 25)).toBe(10)
   })
+
+  it('지금 fps 로 담기면 비정확 fps 라도 그대로 둔다', () => {
+    // 24/30 은 GIF 정확값이 아니지만 사용자가 고른 값이다. 담기는데도 강등하면
+    // 속도 1 로 프리셋을 적용하기만 해도 fps 가 소리 없이 바뀐다.
+    expect(fpsForDuration(1.2, 30)).toBe(30)
+    expect(fpsForDuration(2, 24)).toBe(24)
+    expect(fpsForDuration(4, 15)).toBe(15)
+    // 안 담기면 여전히 정확 사다리로 내려간다.
+    expect(fpsForDuration(6, 30)).toBe(20)
+  })
+
+  it('30fps 문서에 속도 1 프리셋을 적용해도 fps 가 유지된다', () => {
+    reset()
+    useDocumentStore.getState().setFps(30)
+    const r = applyAt('zoom.pop', 1)
+    expect(r.fps).toBe(30)
+  })
 })
 
 describe('기준선', () => {

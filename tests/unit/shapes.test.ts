@@ -84,6 +84,12 @@ describe('도형 값 규칙', () => {
     })
     expect(bad.kind).toBe('rect')
     expect(bad.color).toBe('#ffffffff')
+    // hex 형식이 아닌 이름 색은 기본색으로 대체된다. 'blue' 는 4글자라
+    // #rgba 축약형으로 잘못 해석되어 NaN 색이 셰이더로 들어간다.
+    expect(normalizeShapeSpec({ kind: 'rect', color: 'blue' }).color).toBe('#ffffffff')
+    expect(normalizeShapeSpec({ kind: 'rect', color: '#12x' }).color).toBe('#ffffffff')
+    expect(normalizeShapeSpec({ kind: 'rect', color: '#1a2b3c' }).color).toBe('#1a2b3c')
+    expect(normalizeShapeSpec({ kind: 'rect', color: '#FFEE00CC' }).color).toBe('#FFEE00CC')
     expect(bad.width).toBeGreaterThan(0)
     expect(bad.height).toBeGreaterThan(0)
     expect(bad.points).toBeLessThanOrEqual(SHAPE_LIMITS.points.max)

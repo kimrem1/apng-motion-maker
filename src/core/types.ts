@@ -829,6 +829,18 @@ export interface Layer {
    * 1 이면 키를 만들지 않는다. shape 과 같은 이유다 (JSON 왕복 결정론).
    */
   motionRepeat?: number
+  /**
+   * 앞 프리셋이 **이 레이어에** 심은 것의 기록 (motions/merge.ts 가 읽고 쓴다).
+   *
+   * 문서(presetRef)가 아니라 레이어에 두는 이유는 소유권이 레이어마다 다르기
+   * 때문이다. 문서에 한 벌만 두면 다른 레이어에 프리셋을 얹는 순간 이 레이어의
+   * 기록이 사라져서, 돌아와 프리셋을 갈아탈 때 앞 프리셋의 트랙과 이펙트가
+   * 사용자 것으로 오인되어 영구히 잔류한다 (A -> B -> A).
+   *
+   * 아무것도 소유하지 않으면 키를 만들지 않는다. shape 과 같은 이유다
+   * (JSON 왕복 결정론).
+   */
+  presetOwnership?: PresetOwnershipRecord
   tracks: Track[]
   modifiers: Modifier[]
   effects: EffectInstance[]
@@ -848,22 +860,16 @@ export const MOTION_REPEAT_MAX = 12
 // 프로젝트
 // ---------------------------------------------------------------------------
 
-export interface PresetRef {
-  id: string
-  macro: { speed: number; strength: number }
-  /**
-   * 이 프리셋이 실제로 얹힌 레이어.
-   *
-   * 세기 / 속도 슬라이더의 재적용 대상을 여기서 읽는다. "지금 고른 레이어" 로
-   * 추측하면 도형을 하나 넣어 선택이 옮겨간 뒤 슬라이더를 끌 때 엉뚱한 레이어에
-   * 모션이 심긴다. 트랙을 내지 않는 프리셋(흔들기 6 / 자글자글 5 / 지지직 8)은
-   * `props` 가 빈 배열이라 그쪽으로는 소유 레이어를 역추적할 수 없다.
-   *
-   * 없으면 옛 프로젝트다. 그때만 `props` 로 근사한다.
-   */
-  layerId?: string
-  /** PRO 에서 손대면 true. EASY 의 강도 슬라이더가 비활성화된다. */
-  dirty: boolean
+/**
+ * 앞 프리셋이 심어 둔 것의 목록. 다음 프리셋이 "내가 지워도 되는 것" 을 알아본다.
+ *
+ * 정본은 **레이어의 presetOwnership** 이다 (Layer 주석). 문서(presetRef)에 한 벌만
+ * 두면 마지막으로 프리셋을 받은 레이어의 기록만 남는다. A 에 "톡 튀며 등장" 을 걸고
+ * B 에 아무 프리셋을 걸면 A 의 기록이 통째로 덮여서, 다시 A 에 "한 바퀴 회전" 을
+ * 얹을 때 크기/투명도 트랙이 사용자 것으로 오인되어 회전하면서 계속 튀어오른다.
+ * PresetRef 가 같은 필드를 여전히 갖는 것은 옛 저장 파일을 읽기 위해서다.
+ */
+export interface PresetOwnershipRecord {
   /**
    * 이 프리셋이 만든 트랙의 속성 목록.
    *
@@ -901,6 +907,31 @@ export interface PresetRef {
    * 되돌릴 수 없기 때문이다.
    */
   ownsAnchor?: boolean
+}
+
+/**
+ * 소유권 필드(props / effectIds / owns*)는 **옛 저장 파일 전용**이다.
+ *
+ * 지금은 아무도 여기 쓰지 않는다. 적용은 레이어의 presetOwnership 에 기록하고,
+ * 마이그레이션이 옛 파일의 이 필드들을 layerId 레이어로 옮긴다 (project/migrate.ts).
+ * layerId 조차 없는 아주 옛 파일만 여기 남고, 그때는 ownershipFor 의 폴백이 읽는다.
+ */
+export interface PresetRef extends PresetOwnershipRecord {
+  id: string
+  macro: { speed: number; strength: number }
+  /**
+   * 이 프리셋이 실제로 얹힌 레이어.
+   *
+   * 세기 / 속도 슬라이더의 재적용 대상을 여기서 읽는다. "지금 고른 레이어" 로
+   * 추측하면 도형을 하나 넣어 선택이 옮겨간 뒤 슬라이더를 끌 때 엉뚱한 레이어에
+   * 모션이 심긴다. 트랙을 내지 않는 프리셋(흔들기 6 / 자글자글 5 / 지지직 8)은
+   * `props` 가 빈 배열이라 그쪽으로는 소유 레이어를 역추적할 수 없다.
+   *
+   * 없으면 옛 프로젝트다. 그때만 `props` 로 근사한다.
+   */
+  layerId?: string
+  /** PRO 에서 손대면 true. EASY 의 강도 슬라이더가 비활성화된다. */
+  dirty: boolean
   /**
    * 속도 1 일 때의 재생 시간(초). 속도 노브의 기준선이다.
    *

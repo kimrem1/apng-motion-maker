@@ -310,6 +310,12 @@ interface KeyDrag {
   startFrame: number
   items: { prop: TrackProp; orig: number; cur: number }[]
   applied: number
+  /**
+   * 이 드래그 한 번을 실행취소 한 칸으로 묶는 열쇠 (ClipDrag 와 같은 패턴).
+   * moveKeyframe 의 기본 coalesce 는 속성 단위라, 여러 속성의 키를 함께 끌면
+   * 스택에 A,B,A,B 로 번갈아 쌓여 병합이 전혀 안 된다.
+   */
+  key: string
 }
 
 interface ScrubDrag {
@@ -725,7 +731,7 @@ export function Timeline(): ReactNode {
       for (const it of ordered) {
         const to = it.orig + delta
         if (to === it.cur) continue
-        moveKeyframe(layerId, prop, it.cur, to)
+        moveKeyframe(layerId, prop, it.cur, to, drag.key)
         remapSelection(layerId, prop, it.cur, to)
         it.cur = to
       }
@@ -825,12 +831,14 @@ export function Timeline(): ReactNode {
       const items = base
         .filter((k) => k.layerId === layer.id)
         .map((k) => ({ prop: k.prop, orig: k.frame, cur: k.frame }))
+      dragSeq.current += 1
       dragRef.current = {
         kind: 'keys',
         pointerId: e.pointerId,
         startFrame: xToFrame(x, geo.axis),
         items,
         applied: 0,
+        key: `kfdrag:${dragSeq.current}`,
       }
       return
     }
@@ -1072,10 +1080,14 @@ export function Timeline(): ReactNode {
         return
       case 'Home':
         e.preventDefault()
+        // 화살표와 같은 이유로 먼저 멈춘다. 재생 중에는 useRenderer 의 구독이
+        // 이 값을 버리고 100ms 안에 재생 루프의 publish 가 도로 덮어쓴다.
+        setPlaying(false)
         setPlayheadFrame(0)
         return
       case 'End':
         e.preventDefault()
+        setPlaying(false)
         setPlayheadFrame(duration - 1)
         return
       default:

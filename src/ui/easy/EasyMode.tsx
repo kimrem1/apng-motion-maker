@@ -43,6 +43,7 @@ import { useDocumentStore } from '@/state/document.ts'
 import {
   applyPresetToDocument,
   commitMacroNow,
+  macroReapplyPending,
   reapplyAppliedPresetSoon,
   resolveTargetLayerId,
 } from '@/state/presetActions.ts'
@@ -258,10 +259,21 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
   useEffect(() => {
     if (!presetRef) return
     const ui = usePresetUiStore.getState()
-    if (ui.appliedId === presetRef.id) return
-    ui.setStrength(presetRef.macro.strength)
-    ui.setSpeed(presetRef.macro.speed)
-    ui.markApplied(presetRef.id)
+    if (ui.appliedId !== presetRef.id) {
+      ui.setStrength(presetRef.macro.strength)
+      ui.setSpeed(presetRef.macro.speed)
+      ui.markApplied(presetRef.id)
+      return
+    }
+    /*
+     * 같은 프리셋이라도 실행취소로 문서 macro 만 되돌아간 경우가 있다. 그대로 두면
+     * 슬라이더는 1.0 을 가리키는데 실제 모션은 0.5 라 표시가 거짓이 되고, 살짝만
+     * 건드려도 옛 값으로 재적용돼 모션이 확 튄다. 단 드래그로 인한 재적용 대기 중
+     * (노브가 문서보다 앞서 있는 정상 상태)에는 되돌리면 손과 싸우므로 건너뛴다.
+     */
+    if (macroReapplyPending()) return
+    if (ui.strength !== presetRef.macro.strength) ui.setStrength(presetRef.macro.strength)
+    if (ui.speed !== presetRef.macro.speed) ui.setSpeed(presetRef.macro.speed)
   }, [presetRef])
 
   /**
@@ -696,11 +708,19 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
                 if (targetLayerId) setLayerMotionRepeat(targetLayerId, Number(e.target.value))
               }}
             >
-              {EASY_REPEAT_CHOICES.filter((r) => r === 1 || r <= repeatCap).map((r) => (
-                <option key={r} value={String(r)}>
-                  {r === 1 ? '보통 (1배)' : `${r}배`}
-                </option>
-              ))}
+              {/*
+                지금 값은 목록에 반드시 넣는다 (아래 크기 셀렉트와 같은 규칙).
+                배수 8 을 걸어 둔 채 길이를 줄이면 cap 이 내려가 8 이 목록에서
+                빠지는데, controlled select 의 value 가 어떤 option 과도 안 맞으면
+                셀렉트가 빈 값으로 그려져 현재 배수를 읽을 수 없다.
+              */}
+              {[...new Set([...EASY_REPEAT_CHOICES.filter((r) => r === 1 || r <= repeatCap), targetLayer?.motionRepeat ?? 1])]
+                .sort((a, b) => a - b)
+                .map((r) => (
+                  <option key={r} value={String(r)}>
+                    {r === 1 ? '보통 (1배)' : `${r}배`}
+                  </option>
+                ))}
             </select>
             <p className="mm-easy-note">
               {repeatCap < 2

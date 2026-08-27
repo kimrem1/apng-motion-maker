@@ -256,7 +256,9 @@ export function loopCountToRepeat(loopCount: number): number {
   const n = Math.trunc(loopCount)
   if (n <= 0) return 0 // 무한
   if (n === 1) return -1 // 1회: 확장 자체를 생략
-  return n - 1 // n회 재생 = 추가 반복 n-1 회
+  // NETSCAPE 값은 uint16 이다. 클램프하지 않으면 65537회 요청이 하위 16비트만
+  // 남아 0(무한 반복)으로 랩된다. WebP 쪽 mapLoop 의 상한과 대칭이다.
+  return Math.min(0xffff, n - 1) // n회 재생 = 추가 반복 n-1 회
 }
 
 /**

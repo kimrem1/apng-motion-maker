@@ -6,7 +6,7 @@
  * 100ms 마다 반영하므로, 이 컴포넌트가 rAF 마다 리렌더되지 않는다.
  */
 
-import type { ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 
 import { FPS_CHOICES, FRAMES_MAX, type LoopMode } from '@/core/types.ts'
 import { frameToSec, isGifExactFps } from '@/core/time.ts'
@@ -119,6 +119,55 @@ function PauseIcon(): ReactNode {
   )
 }
 
+/**
+ * 길이(프레임) 입력. GraphEditor 의 NumInput 과 같은 초안 패턴이다.
+ *
+ * 완전 제어 입력에 스토어 값을 바로 되꽂으면 clamp 와 싸운다. '15' 를 치려고
+ * '1' 을 누르는 순간 스토어가 2 로 clamp 해 칸이 '2' 가 되고, 이어 '5' 를 치면
+ * '25' 가 된다. 편집 중에는 초안을 보여 주고, 유효한 숫자만 위로 올리며,
+ * 스토어 값 동기화는 비편집 상태에서만 한다. 재생 중 100ms 리렌더가 입력을
+ * 되돌리는 문제도 같은 이유로 함께 사라진다.
+ */
+function DurationInput({
+  value,
+  onCommit,
+}: {
+  value: number
+  onCommit(next: number): void
+}): ReactNode {
+  const shown = String(value)
+  const [draft, setDraft] = useState(shown)
+  const [editing, setEditing] = useState(false)
+  const lastRef = useRef(shown)
+  if (!editing && lastRef.current !== shown) {
+    lastRef.current = shown
+    if (draft !== shown) setDraft(shown)
+  }
+  return (
+    <input
+      className="mm-input transport__frames"
+      type="number"
+      min={2}
+      max={FRAMES_MAX}
+      step={1}
+      value={draft}
+      onFocus={() => setEditing(true)}
+      onBlur={() => {
+        setEditing(false)
+        setDraft(shown)
+        lastRef.current = shown
+      }}
+      onChange={(e) => {
+        const raw = e.target.value
+        setDraft(raw)
+        if (raw.trim() === '') return
+        const n = Number(raw)
+        if (Number.isFinite(n)) onCommit(n)
+      }}
+    />
+  )
+}
+
 /** 00:01.20 형식. 1/100초 단위까지 보여준다(GIF 격자와 같은 단위다). */
 function formatClock(sec: number): string {
   const centis = Math.max(0, Math.round(sec * 100))
@@ -192,22 +241,7 @@ export function TransportBar(): ReactNode {
 
         <label className="transport__field">
           <span className="mm-field-label">길이</span>
-          <input
-            className="mm-input transport__frames"
-            type="number"
-            min={2}
-            max={FRAMES_MAX}
-            step={1}
-            value={durationFrames}
-            onChange={(e) => {
-              // Number('') 은 NaN 이 아니라 0 이다. 빈 문자열을 그냥 넘기면
-              // 스토어의 clamp 가 2 로 만들어 사용자가 지우던 값이 파괴된다.
-              const raw = e.target.value.trim()
-              if (raw === '') return
-              const n = Number(raw)
-              if (Number.isFinite(n)) setDurationFrames(n)
-            }}
-          />
+          <DurationInput value={durationFrames} onCommit={setDurationFrames} />
           <span className="mm-field-label">프레임</span>
         </label>
 

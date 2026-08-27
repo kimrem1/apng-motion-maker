@@ -67,7 +67,7 @@ import {
   mergePresetReveal,
   mergePresetTracks,
   ownershipFor,
-  ownershipOf,
+  presetOwnershipRecord,
 } from '@/motions/merge.ts'
 import {
   applyMotionBundle,
@@ -328,9 +328,9 @@ interface DocumentState {
   /**
    * 지금 걸려 있는 모션 프리셋을 걷어낸다.
    *
-   * 프리셋이 심은 것만 지운다. 소유권 목록(presetRef)이 그대로 답이다. 사용자가
-   * 인스펙터에서 직접 만든 트랙과 이펙트, 가리기, 글자 등장은 살아남는다.
-   * 같은 카드를 한 번 더 눌러 끄는 경로가 이것을 쓴다.
+   * 프리셋이 심은 것만 지운다. 소유권 기록(레이어의 presetOwnership)이 그대로
+   * 답이다. 사용자가 인스펙터에서 직접 만든 트랙과 이펙트, 가리기, 글자 등장은
+   * 살아남는다. 같은 카드를 한 번 더 눌러 끄는 경로가 이것을 쓴다.
    */
   clearPreset(): void
 
@@ -445,7 +445,18 @@ interface DocumentState {
   toggleAnimated(layerId: string, prop: TrackProp, frame: number): void
   addKeyframe(layerId: string, prop: TrackProp, frame: number): void
   removeKeyframe(layerId: string, prop: TrackProp, frame: number): void
-  moveKeyframe(layerId: string, prop: TrackProp, fromFrame: number, toFrame: number): void
+  /**
+   * 여러 키프레임을 한 번의 실행취소로 지운다. 다중 선택 삭제가 removeKeyframe 을
+   * 하나씩 부르면 키 N개가 히스토리 N칸이 된다 (레이어 삭제의 removeLayers 와 같은 이유).
+   */
+  removeKeyframes(refs: readonly { layerId: string; prop: TrackProp; frame: number }[]): void
+  moveKeyframe(
+    layerId: string,
+    prop: TrackProp,
+    fromFrame: number,
+    toFrame: number,
+    coalesceKey?: string,
+  ): void
   setKeyframeEasing(layerId: string, prop: TrackProp, frame: number, presetId: string): void
   setKeyframeHandles(
     layerId: string,
@@ -1280,7 +1291,6 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       mutateDoc('모션 프리셋 해제', (d) => {
         const ref = d.presetRef
         if (!ref) return
-        const owned = ownershipOf(ref)
         const layer = ref.layerId ? findLayer(d, ref.layerId) : undefined
 
         if (layer) {
@@ -1288,6 +1298,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
            * 소유권 병합 헬퍼를 그대로 쓴다. "새 프리셋이 아무것도 내지 않는다" 와
            * 정확히 같은 상황이므로 규칙을 다시 적을 이유가 없다 (motions/merge.ts).
            */
+          const owned = ownershipFor(d, layer.id)
           const drop = new Set<TrackProp>(owned.props)
           layer.tracks = layer.tracks.filter((t) => !drop.has(t.prop))
           layer.effects = mergePresetEffects(layer.effects, undefined, owned)
@@ -1306,6 +1317,9 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           // 프리셋이 켠 것이므로 함께 내린다. 켜진 채 남으면 담기 솔버가 계속 비켜선다.
           layer.motionExitsFrame = false
           delete layer.containScale
+          // 프리셋이 없어졌으니 기록도 걷는다. 남으면 사용자가 나중에 같은 prop 의
+          // 트랙을 손으로 만들었을 때 다음 프리셋이 그것을 프리셋 것으로 오인한다.
+          delete layer.presetOwnership
         }
 
         delete d.presetRef
@@ -1605,9 +1619,10 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
 
         // 소유권 규칙은 motions/merge.ts 한 곳에만 둔다. 호버 미리보기도 같은 헬퍼를 쓴다.
         // 규칙이 두 벌이면 미리보기와 클릭 결과가 갈린다.
-        // ownershipOf 가 아니라 ownershipFor 다. 앞 프리셋이 다른 레이어에 걸려 있었으면
-        // 그 소유권으로 이 레이어의 수동 편집을 걷어내면 안 된다.
-        const owned = ownershipFor(d.presetRef, layerId)
+        // 소유권은 이 레이어 자신의 기록에서 읽는다. 앞 프리셋이 다른 레이어에 걸려
+        // 있었어도 이 레이어의 기록은 남아 있으므로 앞 프리셋의 잔재를 걷어낼 수 있고,
+        // 다른 레이어의 소유권으로 이 레이어의 수동 편집을 걷어내는 일도 없다.
+        const owned = ownershipFor(d, layerId)
         const nextTracks = tracks.map((t) => ({ ...t, id: t.id || nextId('t') }))
         const nextFx = (effects ?? []).map((e) => ({ ...e, id: e.id || nextId('e') }))
 
@@ -1653,20 +1668,31 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         // 아무것도 안 고른 상태가 되고, GIF 정확도 판정(100/13)도 깨진다.
         if (fps !== undefined) d.timeline.fps = snapFps(fps)
 
+        /*
+         * 소유권은 **이 레이어에** 기록한다. 다음 프리셋이 "이건 내가 지워도 되는
+         * 것" 을 알아보는 표식이다. 문서(presetRef)에 두면 다른 레이어에 프리셋을
+         * 얹는 순간 이 기록이 덮여서, A -> B -> A 에서 A 의 앞 프리셋 트랙이
+         * 영구히 잔류한다 (motions/merge.ts ownershipFor). 다른 레이어의 기록은
+         * 여기서 건드리지 않는다.
+         */
+        const record = presetOwnershipRecord({
+          tracks: nextTracks,
+          effectIds: nextFx.map((e) => e.id),
+          reveal,
+          charAnim,
+          perspective,
+          anchor,
+        })
+        if (record) layer.presetOwnership = record
+        else delete layer.presetOwnership
+
         d.presetRef = {
           id: presetId,
           // 재적용 대상을 추측하지 않고 기록한다. 트랙을 내지 않는 프리셋
-          // (흔들기/자글자글/지지직)은 props 가 비어 소유 레이어를 역추적할 수 없다.
+          // (흔들기/자글자글/지지직)은 소유 기록으로는 레이어를 역추적할 수 없다.
           layerId,
           macro: { ...macro },
           dirty: false,
-          props: tracks.map((t) => t.prop),
-          effectIds: nextFx.map((e) => e.id),
-          // 다음 프리셋이 "이건 내가 지워도 되는 것" 을 알아보는 표식이다.
-          ...(reveal && reveal.mode !== 'none' ? { ownsReveal: true } : {}),
-          ...(charAnim && charAnim.mode !== 'none' ? { ownsCharAnim: true } : {}),
-          ...(perspective !== undefined ? { ownsPerspective: true } : {}),
-          ...(anchor ? { ownsAnchor: true } : {}),
           // 요청한 기준선을 그대로 보관한다. 지금 durationFrames 는 프리셋이 홀드
           // 배수로 스냅한 결과라, 그걸 되먹이면 속도를 왕복할 때마다 길이가 늘어난다.
           ...(baseSec !== undefined ? { baseSec } : {}),
@@ -1706,11 +1732,24 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       mutateDoc(move ? '모션 옮기기' : '모션 보내기', (d) => {
         for (const id of targets) {
           const target = findLayer(d, id)
-          if (target) applyMotionBundle(target, bundle, parts, mint)
+          if (!target) continue
+          applyMotionBundle(target, bundle, parts, mint)
+          /*
+           * 전송은 고른 갈래를 통째로 대체한다 (transfer.ts 계약). 대상에 남아 있던
+           * 프리셋 소유권 기록은 이제 전송 결과(사용자 것)를 가리키므로, 남겨 두면
+           * 다음 프리셋이 방금 보낸 모션을 앞 프리셋 것으로 오인해 걷어간다.
+           * 갈래별로 쪼개 남기지 않고 통째로 지운다. 지우는 쪽은 "사용자 것으로
+           * 승격" 이라 잘못돼도 남을 뿐이지만, 남기는 쪽은 말없이 지운다.
+           */
+          delete target.presetOwnership
         }
         if (move === true) {
           const origin = findLayer(d, fromLayerId)
-          if (origin) clearMotion(origin, parts)
+          if (origin) {
+            clearMotion(origin, parts)
+            // 걷어낸 트랙/이펙트를 가리키던 기록이다. 대상과 같은 이유로 지운다.
+            delete origin.presetOwnership
+          }
           // 프리셋이 이 레이어에 걸려 있었다면 그 기록도 함께 지운다 (선언부 주석).
           if (d.presetRef?.layerId === fromLayerId) delete d.presetRef
         } else {
@@ -1720,6 +1759,15 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
            * 대상에서는 "사용자가 만든 것" 으로 살아남는다 (motions/merge.ts).
            */
         }
+        /*
+         * 대상이 프리셋 레이어면 원본 move 와 대칭으로 기록을 지운다. 전송은 대상의
+         * 갈래를 통째로 대체하므로(transfer.ts 계약) 프리셋이 심은 상태는 이미
+         * 사라졌는데, 기록이 남으면 EASY 슬라이더를 스치는 재적용이 옛 프리셋
+         * 모션을 전송 결과 위에 도로 심는다. dirty 로만 올리면 "프리셋으로 리셋"
+         * 버튼이 같은 파괴를 되살릴 길이 남아 삭제가 일관적이다.
+         */
+        const ownerId = d.presetRef?.layerId
+        if (ownerId !== undefined && targets.includes(ownerId)) delete d.presetRef
       })
 
       return { moved: targets.length, skipped }
@@ -1810,6 +1858,9 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           const value = evalTrack(track, frame) ?? TRACK_DEFAULTS[prop].identity
           track.animated = false
           track.keys = [{ f: 0, v: value, interp: 'bezier' }]
+          // 스톱워치로 굳힌 것도 PRO 편집이다. 표시를 안 남기면 EASY 슬라이더의
+          // 재적용이 방금 정지시킨 애니메이션을 소리 없이 되살린다.
+          markPresetDirty(d)
           return
         }
 
@@ -1820,6 +1871,10 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         if (track) {
           track.animated = true
           track.keys = [{ f: frame, v: current, interp: 'bezier' }]
+          // 기존 키들을 리셋했으므로 끄기와 같은 이유로 표시를 남긴다.
+          // 새 트랙을 만드는 아래 분기는 프리셋 트랙을 안 건드리므로 제외한다
+          // (setValueAtFrame 의 새 트랙 분기와 같은 관례).
+          markPresetDirty(d)
         } else {
           const created = createStaticTrack(prop, TRACK_DEFAULTS[prop].unit, current)
           created.animated = true
@@ -1876,7 +1931,25 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
     },
 
-    moveKeyframe(layerId, prop, fromFrame, toFrame) {
+    removeKeyframes(refs) {
+      if (refs.length === 0) return
+      mutateDoc('키프레임 삭제', (d) => {
+        for (const ref of refs) {
+          const layer = findLayer(d, ref.layerId)
+          if (!layer) continue
+          const track = findTrack(layer, ref.prop)
+          // 마지막 키는 지우지 않는다 (removeKeyframe 과 같은 규칙). 같은 트랙의
+          // 키 여러 개를 골랐어도 순서대로 지우다 하나 남으면 거기서 멈춘다.
+          if (!track || track.keys.length <= 1) continue
+          const i = track.keys.findIndex((k) => k.f === ref.frame)
+          if (i < 0) continue
+          track.keys.splice(i, 1)
+          markPresetDirty(d)
+        }
+      })
+    },
+
+    moveKeyframe(layerId, prop, fromFrame, toFrame, coalesceKey) {
       mutateDoc('키프레임 이동', (d) => {
         const layer = findLayer(d, layerId)
         if (!layer) return
@@ -1891,8 +1964,10 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         markPresetDirty(d)
         // coalesce 키에 fromFrame 을 넣으면 안 된다. 드래그하는 동안 매 스텝 키가 달라져
         // 10프레임 드래그가 undo 스택을 9칸 먹는다. 트랙 단위로 묶어 한 번의 드래그가
-        // 한 번의 실행취소가 되게 한다.
-      }, `kfmove:${layerId}:${prop}`)
+        // 한 번의 실행취소가 되게 한다. 여러 속성의 키를 함께 끄는 드래그는 속성 단위
+        // 키로는 A,B,A,B 로 번갈아 쌓여 병합이 안 되므로(스택 최상단만 비교한다),
+        // 호출자가 드래그 세션 단위 키를 넘겨 덮을 수 있다 (clipDrag 와 같은 패턴).
+      }, coalesceKey ?? `kfmove:${layerId}:${prop}`)
     },
 
     setKeyframeEasing(layerId, prop, frame, presetId) {
@@ -2056,6 +2131,9 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
     setLayerRange(layerIds, range) {
       const ids = new Set(layerIds)
       mutateDoc(range ? '컷에 넣기' : '구간 해제', (d) => {
+        // 재생과 내보내기는 duration 안만 돈다. 구간이 그 밖에 있으면 레이어가
+        // 어디에도 안 보인다 (setLayerRanges 와 같은 클램프).
+        const last = Math.max(0, d.timeline.durationFrames - 1)
         for (const layer of d.layers) {
           if (!ids.has(layer.id)) continue
           if (!range) {
@@ -2065,8 +2143,8 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
             delete layer.outFade
             continue
           }
-          layer.inFrame = Math.max(0, Math.round(range.inFrame))
-          layer.outFrame = Math.max(layer.inFrame, Math.round(range.outFrame))
+          layer.inFrame = clamp(Math.round(range.inFrame), 0, last)
+          layer.outFrame = clamp(Math.round(range.outFrame), layer.inFrame, last)
           // 0 이면 키를 남기지 않는다. 아무 일도 하지 않는 값이 저장 파일에 남으면
           // 왕복 JSON 이 달라진다 (도형 / 가리기와 같은 규칙).
           if (range.inFade && range.inFade > 0) layer.inFade = Math.round(range.inFade)

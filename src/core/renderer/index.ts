@@ -22,7 +22,8 @@ import { resolveComposition } from '../evaluate.ts'
 import { solveOverscan, type OverscanMap } from '../overscan.ts'
 import { buildLayerMatrix, canvasToClip, mat3Multiply, type Mat3 } from '../transform.ts'
 import { applyFolderMatrix, buildFolderMatrices } from '../group.ts'
-import { clipGroups, subtreeEnds } from '../clip.ts'
+import { clipGroups, subtreeEnds, type ClipGroup } from '../clip.ts'
+import { glyphInkCenterX, renderStepsForRange } from './renderPlan.ts'
 import { CLIP_FS } from './shaders/clip.ts'
 import { secToFrame } from '../time.ts'
 import { setPremultipliedBlend, type GlCapabilities } from './gl.ts'
@@ -187,16 +188,6 @@ export class Renderer {
     const groups = clipGroups(layers)
     const subtreeEnd = subtreeEnds(layers)
     const groupByBase = new Map(groups.map((g) => [g.base, g]))
-    /*
-     * 덩어리가 이미 그린 번호들. 폴더가 붙는 쪽이면 그 안쪽까지 전부 들어간다.
-     * 빠뜨리면 폴더 식구가 잘린 그림 위에 한 번 더 그려져 마스크가 무의미해진다.
-     */
-    const clippedIndexes = new Set<number>()
-    for (const g of groups) {
-      for (const m of g.members) {
-        for (let k = m; k <= (subtreeEnd[m] ?? m); k += 1) clippedIndexes.add(k)
-      }
-    }
 
     // 레이어별 이펙트가 있으면 그 레이어를 따로 그려 체인을 태워야 하고,
     // 혼합 모드가 있으면 배경을 읽어야 한다. 둘 다 오프스크린을 요구한다.
@@ -206,7 +197,14 @@ export class Renderer {
         l.visible &&
         (l.blend !== 'normal' || hasActiveEffects(l.effects, frame)),
     )
-    const needsOffscreen = layerNeedsPass.some(Boolean) || groups.length > 0
+    /*
+     * 혼합 모드가 걸린 보이는 폴더는 서브트리를 한 장에 담아 폴더의 blend 로
+     * 얹어야 한다. 이 판정이 빠지면 빠른 경로로 빠져 폴더 혼합이 조용히 무시된다.
+     */
+    const hasFolderBlend = layers.some(
+      (l) => !!l.isFolder && l.visible && l.blend !== 'normal',
+    )
+    const needsOffscreen = layerNeedsPass.some(Boolean) || groups.length > 0 || hasFolderBlend
 
     gl.bindVertexArray(this.emptyVao)
 
@@ -253,12 +251,6 @@ export class Renderer {
       gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fbo)
       gl.viewport(0, 0, w, h)
       this.clearBackground(doc)
-
-      // 자르기가 있을 때만 빌린다. 옛 문서에서는 버퍼 세 장을 만들지 않는다.
-      const maskBuf = groups.length > 0 ? borrow() : null
-      const groupBuf = groups.length > 0 ? borrow() : null
-      /** 폴더 하나를 통째로 담는 자리. 폴더가 자르기에 참여할 때만 쓴다. */
-      const subBuf = groups.length > 0 ? borrow() : null
 
       /** 레이어 한 장을 layerBuf 에 그리고 이펙트까지 태운 결과. */
       const renderLayerAlone = (layer: ResolvedLayer): PooledTarget => {
@@ -314,11 +306,114 @@ export class Renderer {
       }
 
       /**
-       * from..to 를 한 장에 담는다. 폴더 하나를 통째로 그릴 때 쓴다.
+       * 재귀 한 단계 동안만 쓰는 대여. 절차가 끝나면 즉시 반납한다.
        *
-       * 안에서는 노멀 합성이다. 폴더 식구의 혼합 모드를 살리려면 배경 버퍼를 한 장
-       * 더 떠야 하는데, 자르기에 들어간 폴더 안에서 그 조합은 거의 나오지 않는다.
-       * 이펙트는 레이어마다 그대로 걸린다. 그쪽은 흔하기 때문이다.
+       * 자르기 덩어리 안에 또 자르기 덩어리가 있을 수 있다(자르기에 참여한 폴더
+       * 안의 자르기). 마스크와 덩어리 버퍼를 공유하면 안쪽 덩어리가 바깥 덩어리의
+       * 마스크를 덮는다. 그래서 덩어리마다 새로 빌리고 나가면서 바로 돌려줘,
+       * 살아 있는 버퍼가 중첩 깊이만큼만 늘어난다. acquire 가 던져도 finally 가
+       * 이 단계에서 빌린 것을 돌려주므로 inUse 로 굳는 항목이 없다.
+       */
+      const scoped = <T,>(fn: (borrowLocal: () => PooledTarget) => T): T => {
+        const local: PooledTarget[] = []
+        try {
+          return fn(() => {
+            const t = this.targets.acquire(w, h, 'rgba8')
+            local.push(t)
+            return t
+          })
+        } finally {
+          for (const t of local) this.targets.release(t)
+        }
+      }
+
+      /**
+       * dest 위에 source 를 혼합 모드로 얹는다.
+       *
+       * 누산기(compose)와 달리 스왑하지 않는다. 재귀 안에서 스왑하면 빌린 버퍼의
+       * 소유가 호출자와 어긋난다. 대신 임시 한 장에 섞은 뒤 dest 로 되돌려
+       * 복사한다. 복사 한 번이 더 들지만 폴더 안 혼합 모드는 드문 경로다.
+       */
+      const composeOnto = (dest: PooledTarget, source: PooledTarget, blend: BlendMode): void => {
+        if (blend === 'normal') {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
+          gl.viewport(0, 0, w, h)
+          setPremultipliedBlend(gl)
+          this.composePass(source)
+          return
+        }
+        scoped((borrowLocal) => {
+          const tmp = borrowLocal()
+          this.blendPass(dest, source, tmp, blend)
+          this.copyPass(tmp, { gl, width: w, height: h, fbo: dest.fbo })
+        })
+      }
+
+      /**
+       * 자르기 덩어리 하나.
+       *
+       *   1. 밑판을 혼자 그린다. 그 알파가 곧 마스크다.
+       *   2. 같은 그림을 덩어리 버퍼에도 깔아 둔다.
+       *   3. 위에 붙는 레이어를 하나씩 그려 마스크로 깎아 덩어리에 얹는다.
+       *   4. 덩어리를 밑판의 혼합 모드로 얹는다. 어디에 얹는지는 composeFn 이
+       *      정한다 — 최상위는 누산기(스왑), 재귀에서는 담고 있는 범위의 버퍼다.
+       *
+       * 밑판도 붙는 쪽도 폴더일 수 있다. 그때는 폴더 안쪽 전체가 한 장으로
+       * 그려진 뒤 그 한 장이 마스크가 되거나 잘린다. 도형 여러 장으로 만든
+       * 모양 안에만 사진을 채우는 것이 이 경로다. 그 안쪽에 또 자르기가 있으면
+       * renderRange 가 이 함수를 다시 부르므로 버퍼는 공유하지 않고
+       * 덩어리마다 빌린다(scoped 주석).
+       *
+       * 밑판을 먼저 복사해 두고 식구를 그린다. 폴더 경로가 unitBuf 를
+       * 공유하므로, 복사 전에 식구를 그리면 마스크가 덮인다.
+       */
+      const renderClipGroup = (
+        group: ClipGroup,
+        composeFn: (source: PooledTarget, blend: BlendMode) => void,
+      ): void => {
+        scoped((borrowLocal) => {
+          const mask = borrowLocal()
+          const grp = borrowLocal()
+          /** 폴더 하나를 통째로 담는 자리. 폴더가 자르기에 참여할 때만 빌린다. */
+          let unitBuf: PooledTarget | null = null
+          /** 자르기에 참여하는 한 덩이. 폴더면 안쪽까지, 아니면 자기 한 장이다. */
+          const unit = (index: number, end: number): PooledTarget => {
+            if (end > index) {
+              if (!unitBuf) unitBuf = borrowLocal()
+              // 폴더 자신은 아무것도 그리지 않는다. 식구부터 담는다.
+              return renderRange(unitBuf, index + 1, end)
+            }
+            return renderLayerAlone(layers[index]!)
+          }
+
+          const baseSource = unit(group.base, group.baseEnd)
+          this.copyPass(baseSource, { gl, width: w, height: h, fbo: mask.fbo })
+          this.copyPass(baseSource, { gl, width: w, height: h, fbo: grp.fbo })
+
+          for (const m of group.members) {
+            const source = unit(m, subtreeEnd[m] ?? m)
+            this.clipPass(grp, source, mask)
+          }
+
+          composeFn(grp, layers[group.base]!.blend)
+        })
+      }
+
+      /**
+       * from..to 를 dest 한 장에 담는다. 폴더 하나를 통째로 그릴 때 쓴다.
+       *
+       * 순회 규칙은 최상위 루프와 같다(renderPlan.renderStepsForRange). 그래서
+       * 범위 안의 자르기 덩어리와 혼합 모드 폴더도 여기서 그대로 처리된다.
+       * 예전에는 평면 노멀 합성만 해서, 자르기에 참여한 폴더 안의 중첩 자르기가
+       * 통째로 무시됐다.
+       *
+       * 안에서의 혼합 모드는 dest 한 장을 배경으로 읽는다(고립 그룹). 바깥
+       * 배경까지 읽게 하려면 배경을 한 장 더 떠야 하는데, 폴더가 통째로
+       * 마스크가 되거나 잘리거나 혼합되는 자리에서는 바깥 배경이 어차피
+       * 정의되지 않는다. 이펙트는 레이어마다 그대로 걸린다.
+       *
+       * 재귀는 범위가 반드시 줄어들므로(폴더 식구는 폴더 뒤에 붙는다) 폴더
+       * 중첩 상한(group.ts MAX_FOLDER_DEPTH) 이상 내려가지 않는다.
        */
       const renderRange = (dest: PooledTarget, from: number, to: number): PooledTarget => {
         gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
@@ -326,81 +421,55 @@ export class Renderer {
         gl.clearColor(0, 0, 0, 0)
         gl.clear(gl.COLOR_BUFFER_BIT)
 
-        for (let k = from; k <= to; k += 1) {
-          const inner = layers[k]!
-          if (!inner.visible) continue
-          if (!layerNeedsPass[k]) {
+        for (const step of renderStepsForRange(layers, groupByBase, subtreeEnd, from, to)) {
+          if (step.kind === 'clipGroup') {
+            renderClipGroup(step.group, (source, blend) => composeOnto(dest, source, blend))
+            continue
+          }
+          if (step.kind === 'folderBlend') {
+            scoped((borrowLocal) => {
+              const sub = borrowLocal()
+              renderRange(sub, step.index + 1, step.end)
+              composeOnto(dest, sub, layers[step.index]!.blend)
+            })
+            continue
+          }
+          const inner = layers[step.index]!
+          if (!layerNeedsPass[step.index]) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
             gl.viewport(0, 0, w, h)
             setPremultipliedBlend(gl)
             this.drawLayer(doc, inner, assets)
             continue
           }
-          const source = renderLayerAlone(inner)
-          gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
-          gl.viewport(0, 0, w, h)
-          setPremultipliedBlend(gl)
-          this.composePass(source)
+          // 이펙트나 혼합 모드가 있는 레이어. 따로 그린 뒤 자기 blend 로 얹는다.
+          composeOnto(dest, renderLayerAlone(inner), inner.blend)
         }
         return dest
       }
 
-      /**
-       * 자르기에 참여하는 한 덩이. 폴더면 안쪽까지, 아니면 자기 한 장이다.
-       * 폴더 경로만 subBuf 를 쓰므로, 밑판을 복사해 둔 뒤에 식구를 그려야 한다.
-       */
-      const renderUnit = (index: number, end: number): PooledTarget => {
-        if (end > index && subBuf) return renderRange(subBuf, index, end)
-        return renderLayerAlone(layers[index]!)
-      }
-
-      for (let i = 0; i < layers.length; i += 1) {
-        const layer = layers[i]!
-
-        // 덩어리에 속한 레이어(와 그 폴더 식구)는 밑판 차례에 이미 그렸다.
-        if (clippedIndexes.has(i)) continue
-
-        const group = groupByBase.get(i)
-
-        if (group && maskBuf && groupBuf) {
-          /*
-           * 자르기 덩어리.
-           *
-           *   1. 밑판을 혼자 그린다. 그 알파가 곧 마스크다.
-           *   2. 같은 그림을 덩어리 버퍼에도 깔아 둔다.
-           *   3. 위에 붙는 레이어를 하나씩 그려 마스크로 깎아 덩어리에 얹는다.
-           *   4. 덩어리를 밑판의 혼합 모드로 누산기에 얹는다.
-           *
-           * 밑판도 붙는 쪽도 폴더일 수 있다. 그때는 폴더 안쪽 전체가 한 장으로
-           * 그려진 뒤 그 한 장이 마스크가 되거나 잘린다. 도형 여러 장으로 만든
-           * 모양 안에만 사진을 채우는 것이 이 경로다.
-           *
-           * 밑판을 먼저 복사해 두고 식구를 그린다. 폴더 경로가 subBuf 를
-           * 공유하므로, 복사 전에 식구를 그리면 마스크가 덮인다.
-           */
-          const baseSource = renderUnit(group.base, group.baseEnd)
-          this.copyPass(baseSource, { gl, width: w, height: h, fbo: maskBuf.fbo })
-          this.copyPass(baseSource, { gl, width: w, height: h, fbo: groupBuf.fbo })
-
-          for (const m of group.members) {
-            const source = renderUnit(m, subtreeEnd[m] ?? m)
-            this.clipPass(groupBuf, source, maskBuf)
-          }
-
-          compose(groupBuf, layer.blend)
-          // 밑판이 폴더면 그 식구들까지 이 차례에 끝났다.
-          i = Math.max(i, group.baseEnd)
+      for (const step of renderStepsForRange(layers, groupByBase, subtreeEnd, 0, layers.length - 1)) {
+        if (step.kind === 'clipGroup') {
+          renderClipGroup(step.group, compose)
           continue
         }
-
-        if (!layerNeedsPass[i]) {
+        if (step.kind === 'folderBlend') {
+          // 폴더 서브트리를 한 장에 담아 폴더의 혼합 모드로 누산기에 얹는다.
+          scoped((borrowLocal) => {
+            const sub = borrowLocal()
+            renderRange(sub, step.index + 1, step.end)
+            compose(sub, layers[step.index]!.blend)
+          })
+          continue
+        }
+        const layer = layers[step.index]!
+        if (!layerNeedsPass[step.index]) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fbo)
           gl.viewport(0, 0, w, h)
           setPremultipliedBlend(gl)
           this.drawLayer(doc, layer, assets)
           continue
         }
-
         compose(renderLayerAlone(layer), layer.blend)
       }
 
@@ -745,8 +814,13 @@ export class Renderer {
       let slot = drawn
       drawn += 1
 
-      // 글자 칸의 한가운데. 배치가 정한 자리를 그대로 쓴다.
-      const cx = glyph.x + glyph.w / 2
+      /*
+       * 잉크의 가로 중심. 자간 포함 폭(glyph.w)의 중심이 아니다 — 거기에 놓으면
+       * 모든 글자가 +자간/2 만큼 밀리고 마지막 글자가 상자를 벗어난다.
+       * 근거는 renderPlan.glyphInkCenterX 주석에 있다. u_box 도 같은 cx 를 쓰므로
+       * 가리기 경계도 함께 맞는다.
+       */
+      const cx = glyphInkCenterX(glyph.x, glyph.w, spec.letterSpacing)
       const cy = glyph.y + glyph.h / 2
 
       let tx = 0

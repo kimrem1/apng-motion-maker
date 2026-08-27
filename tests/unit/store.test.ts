@@ -166,6 +166,31 @@ describe('키프레임 편집', () => {
     expect(getTrack(s().doc.layers[0]!, 'translateX')!.keys).toHaveLength(1)
   })
 
+  it('여러 키를 한 번에 지우면 실행취소도 한 칸이다', () => {
+    // 하나씩 지우면 키 다섯 개 삭제가 Ctrl+Z 다섯 번이 된다 (removeLayers 와 같은 이유).
+    for (const f of [0, 5, 10, 15, 20]) s().setValueAtFrame(L, 'translateX', f, f)
+    s().clearHistory()
+    s().removeKeyframes([
+      { layerId: L, prop: 'translateX', frame: 5 },
+      { layerId: L, prop: 'translateX', frame: 10 },
+      { layerId: L, prop: 'translateX', frame: 15 },
+    ])
+    expect(getTrack(s().doc.layers[0]!, 'translateX')!.keys.map((k) => k.f)).toEqual([0, 20])
+    expect(s().past).toHaveLength(1)
+    s().undo()
+    expect(getTrack(s().doc.layers[0]!, 'translateX')!.keys).toHaveLength(5)
+  })
+
+  it('일괄 삭제도 트랙의 마지막 키는 남긴다', () => {
+    s().setValueAtFrame(L, 'translateX', 0, 0)
+    s().setValueAtFrame(L, 'translateX', 10, 1)
+    s().removeKeyframes([
+      { layerId: L, prop: 'translateX', frame: 0 },
+      { layerId: L, prop: 'translateX', frame: 10 },
+    ])
+    expect(getTrack(s().doc.layers[0]!, 'translateX')!.keys).toHaveLength(1)
+  })
+
   it('이징 프리셋 id 가 키에 남는다', () => {
     s().setValueAtFrame(L, 'scale', 0, 1)
     s().setValueAtFrame(L, 'scale', 20, 2)
@@ -440,6 +465,58 @@ describe('모션 옮기기', () => {
     expect(report.moved).toBe(0)
     expect(find(B).tracks).toHaveLength(1)
   })
+
+  it('대상이 프리셋 레이어면 presetRef 를 지운다 (복사)', () => {
+    // 전송이 대상의 갈래를 통째로 대체했는데 presetRef 가 남으면, EASY 슬라이더를
+    // 스치는 재적용이 옛 프리셋 모션을 전송 결과 위에 도로 심는다.
+    const B = addLayer(2)
+    seedMotion()
+    // B 에도 프리셋을 적용해 presetRef 소유를 B 로 넘긴다.
+    s().applyPresetTracks({
+      layerId: B,
+      presetId: 'zoom.pop',
+      tracks: [
+        { id: '', prop: 'scale', unit: 'ratio', keys: [{ f: 0, v: 1, interp: 'bezier' }] },
+      ],
+      modifiers: [],
+      macro: { speed: 1, strength: 0.5 },
+    })
+    expect(s().doc.presetRef?.layerId).toBe(B)
+    s().transferMotion({ fromLayerId: L, toLayerIds: [B], parts: ALL_MOTION_PARTS })
+    expect(s().doc.presetRef).toBeUndefined()
+  })
+
+  it('대상이 프리셋 레이어면 presetRef 를 지운다 (이동)', () => {
+    const B = addLayer(2)
+    seedMotion()
+    s().applyPresetTracks({
+      layerId: B,
+      presetId: 'zoom.pop',
+      tracks: [
+        { id: '', prop: 'scale', unit: 'ratio', keys: [{ f: 0, v: 1, interp: 'bezier' }] },
+      ],
+      modifiers: [],
+      macro: { speed: 1, strength: 0.5 },
+    })
+    s().transferMotion({ fromLayerId: L, toLayerIds: [B], parts: ALL_MOTION_PARTS, move: true })
+    expect(s().doc.presetRef).toBeUndefined()
+  })
+
+  it('기준점·원근만 있는 모션도 가리기 갈래로 보낼 수 있다', () => {
+    // bundleIsEmpty 가 reveal/charAnim 만 보면 '경첩 열리며 등장' 처럼 기준점과
+    // 원근만 심는 모션이 "보낼 것이 없습니다" 로 부당하게 막힌다.
+    const B = addLayer(2)
+    s().setLayerAnchor(L, 0.5, 0)
+    s().setLayerPerspective(L, 8)
+    const report = s().transferMotion({
+      fromLayerId: L,
+      toLayerIds: [B],
+      parts: { tracks: false, effects: false, shaping: true },
+    })
+    expect(report.moved).toBe(1)
+    expect(find(B).anchor).toEqual([0.5, 0])
+    expect(find(B).perspective).toBe(8)
+  })
 })
 
 describe('그림 갈아끼우기', () => {
@@ -644,7 +721,9 @@ describe('프리셋 적용', () => {
     })
     expect(s().past).toHaveLength(1)
     expect(s().doc.presetRef?.id).toBe('zoom.pop')
-    expect(s().doc.presetRef?.props).toEqual(['scale'])
+    // 소유권은 문서가 아니라 레이어에 남는다. 문서에 한 벌만 두면 다른 레이어에
+    // 프리셋을 얹는 순간 이 기록이 덮인다 (motions/merge.ts ownershipFor).
+    expect(s().doc.layers[0]!.presetOwnership?.props).toEqual(['scale'])
   })
 
   it('다음 프리셋이 이전 프리셋의 트랙을 걷어낸다', () => {
@@ -713,13 +792,13 @@ describe('프리셋 이펙트 소유권', () => {
     expect(left[0]!.id).toBe(mine)
   })
 
-  it('presetRef 에 소유한 이펙트 id 가 남는다', () => {
+  it('레이어의 소유권 기록에 이펙트 id 가 남는다', () => {
     s().applyPresetTracks({
       layerId: L, presetId: 'glitch.vhs', tracks: [], modifiers: [],
       effects: [fx('v1', 'glitch.rgbShift'), fx('v2', 'fx.scanline')],
       macro: { speed: 1, strength: 0.5 },
     })
-    expect(s().doc.presetRef?.effectIds).toEqual(['v1', 'v2'])
+    expect(s().doc.layers[0]!.presetOwnership?.effectIds).toEqual(['v1', 'v2'])
   })
 })
 
@@ -939,7 +1018,8 @@ describe('presetRef 기록', () => {
       macro: { speed: 1, strength: 0.5 },
     })
     expect(s().doc.presetRef?.layerId).toBe(L)
-    expect(s().doc.presetRef?.props).toEqual([])
+    // 아무것도 소유하지 않으면 기록 키 자체를 만들지 않는다 (JSON 왕복 결정론).
+    expect(s().doc.layers[0]!.presetOwnership).toBeUndefined()
   })
 
   it('기존 키 값만 바꿔도 손댄 것으로 표시한다', () => {
@@ -987,6 +1067,31 @@ describe('presetRef 기록', () => {
       s().addKeyframe(L, 'scale', frame)
       expect(getTrack(s().doc.layers[0]!, 'scale')!.keys.some((k) => k.f === frame), where).toBe(true)
       expect(s().doc.presetRef?.dirty, where).toBe(true)
+    }
+  })
+
+  /**
+   * 스톱워치(toggleAnimated)도 트랙을 갈아엎는 PRO 편집이다. dirty 를 안 남기면
+   * EASY 슬라이더를 스치는 재적용이 방금 정지시킨 애니메이션을 소리 없이 되살린다.
+   */
+  it('스톱워치로 끄거나 켜도 손댄 것으로 표시한다', () => {
+    for (const [dir, times] of [['끄기', 1], ['켜기', 2]] as const) {
+      s().applyPresetTracks({
+        layerId: L,
+        presetId: 'zoom.pop',
+        tracks: [
+          { id: '', prop: 'scale', unit: 'ratio', keys: [
+            { f: 0, v: 0.86, interp: 'bezier' },
+            { f: 10, v: 1, interp: 'bezier' },
+          ] },
+        ],
+        modifiers: [],
+        macro: { speed: 1, strength: 0.5 },
+      })
+      expect(s().doc.presetRef?.dirty, dir).toBe(false)
+      // 켜기 방향은 먼저 꺼서 기존 트랙을 상수로 만든 뒤 다시 켠다.
+      for (let i = 0; i < times; i += 1) s().toggleAnimated(L, 'scale', 0)
+      expect(s().doc.presetRef?.dirty, dir).toBe(true)
     }
   })
 })

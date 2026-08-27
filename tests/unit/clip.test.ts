@@ -10,7 +10,8 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { clipBaseIndexes, clipGroups } from '@/core/clip.ts'
+import { clipBaseIndexes, clipGroups, subtreeEnds, type ClipInput } from '@/core/clip.ts'
+import { renderStepsForRange, type PlanLayer } from '@/core/renderer/renderPlan.ts'
 import { resolveComposition } from '@/core/evaluate.ts'
 import { createEmptyProject, createImageLayer, resetIdCounter } from '@/core/factory.ts'
 import type { AssetRef, MotionProject } from '@/core/types.ts'
@@ -100,6 +101,93 @@ describe('밑판 찾기', () => {
 
   it('자르기가 없으면 덩어리도 없다', () => {
     expect(clipGroups([L(), L(), L()])).toEqual([])
+  })
+})
+
+describe('렌더 절차', () => {
+  /** 렌더러(renderer/index.ts)가 최상위 루프와 renderRange 에서 부르는 그대로다. */
+  const steps = (layers: (ClipInput & PlanLayer)[], from = 0, to = layers.length - 1) => {
+    const groups = clipGroups(layers)
+    return renderStepsForRange(
+      layers,
+      new Map(groups.map((g) => [g.base, g])),
+      subtreeEnds(layers),
+      from,
+      to,
+    )
+  }
+
+  it('자르기가 없으면 레이어 단계뿐이다', () => {
+    expect(steps([L(), L(), L()])).toEqual([
+      { kind: 'layer', index: 0 },
+      { kind: 'layer', index: 1 },
+      { kind: 'layer', index: 2 },
+    ])
+  })
+
+  it('덩어리 멤버와 그 폴더 식구는 밑판 차례에 끝난다', () => {
+    // [X, F(자르기), F식구, F식구] — F 서브트리 전체가 덩어리 단계 하나에 들어간다.
+    const got = steps([L(), F('f1', true), L(undefined, 'f1'), L(undefined, 'f1')])
+    expect(got).toHaveLength(1)
+    expect(got[0]!.kind).toBe('clipGroup')
+  })
+
+  it('자르기에 참여한 폴더 안의 중첩 자르기가 서브트리 절차에 나타난다', () => {
+    /*
+     * 버그였던 재현: 최상위 도형 X, 그 위 폴더 F(자르기 켬), F 안에 도형 A 와
+     * A 를 밑판으로 자르는 이미지 B. 예전 서브트리 순회(renderRange)는 평면
+     * 노멀 합성만 해서 B 가 A 모양으로 잘리지 않았다. 절차가 한 곳에 있으면
+     * 서브트리에서도 안쪽 덩어리가 반드시 나온다.
+     */
+    const layers = [L(), F('f1', true), L(undefined, 'f1'), L(true, 'f1')]
+    // 최상위: 바깥 덩어리 하나뿐이다.
+    const top = steps(layers)
+    expect(top).toHaveLength(1)
+    expect(top[0]).toMatchObject({ kind: 'clipGroup', group: { base: 0, members: [1] } })
+    // 폴더 서브트리(F 식구 범위): 안쪽 덩어리가 절차로 나온다.
+    const sub = steps(layers, 2, 3)
+    expect(sub).toHaveLength(1)
+    expect(sub[0]).toMatchObject({ kind: 'clipGroup', group: { base: 2, members: [3] } })
+  })
+
+  it('밑판 폴더 안의 중첩 자르기도 나타난다', () => {
+    // [F1, A, B(A를 자름), C(F1을 자름)] — 밑판이 폴더인 경우다.
+    const layers = [F('f1'), L(undefined, 'f1'), L(true, 'f1'), L(true)]
+    const top = steps(layers)
+    expect(top).toHaveLength(1)
+    expect(top[0]).toMatchObject({ kind: 'clipGroup', group: { base: 0, baseEnd: 2 } })
+    const inner = steps(layers, 1, 2)
+    expect(inner).toHaveLength(1)
+    expect(inner[0]).toMatchObject({ kind: 'clipGroup', group: { base: 1, members: [2] } })
+  })
+
+  it('혼합 모드가 걸린 폴더는 서브트리를 한 장에 담는 단계가 된다', () => {
+    const layers = [L(), { ...F('f1'), blend: 'multiply' }, L(undefined, 'f1'), L(undefined, 'f1')]
+    expect(steps(layers)).toEqual([
+      { kind: 'layer', index: 0 },
+      { kind: 'folderBlend', index: 1, end: 3 },
+    ])
+  })
+
+  it('노멀 폴더는 단계를 만들지 않고 식구가 각자 그려진다', () => {
+    expect(steps([F('f1'), L(undefined, 'f1'), L(undefined, 'f1')])).toEqual([
+      { kind: 'layer', index: 1 },
+      { kind: 'layer', index: 2 },
+    ])
+  })
+
+  it('밑판이 안 보여도 덩어리는 만들어진다', () => {
+    /*
+     * 밑판만 건너뛰면 멤버가 안 잘린 채 그대로 그려진다. 덩어리를 만들어
+     * 빈 마스크에 깎이는 편이 맞다. 안 보이는 밑판에 잘리면 아무것도 안 보인다.
+     */
+    const got = steps([L(undefined, undefined, false), L(true)])
+    expect(got).toHaveLength(1)
+    expect(got[0]!.kind).toBe('clipGroup')
+  })
+
+  it('보이지 않는 레이어는 단계를 만들지 않는다', () => {
+    expect(steps([L(), L(undefined, undefined, false)])).toEqual([{ kind: 'layer', index: 0 }])
   })
 })
 

@@ -57,6 +57,20 @@ describe('evalTrack', () => {
     expect(evalTrack(t, 10)).toBe(9)
   })
 
+  it('hold 중간 키의 값은 자기 프레임에 바로 나온다', () => {
+    // 닫힌 구간 매칭이면 evalTrack(5) 가 앞 세그먼트의 hold 로 떨어져 1 이 나오고,
+    // fade.flicker 처럼 hold 키를 쌓은 트랙의 값 전환이 전부 한 프레임 밀린다.
+    const t = track([
+      { f: 0, v: 1, interp: 'hold' },
+      { f: 5, v: 0.3, interp: 'hold' },
+      { f: 10, v: 1, interp: 'hold' },
+    ])
+    expect(evalTrack(t, 4)).toBe(1)
+    expect(evalTrack(t, 5)).toBe(0.3)
+    expect(evalTrack(t, 6)).toBe(0.3)
+    expect(evalTrack(t, 10)).toBe(1)
+  })
+
   it('스프링 세그먼트가 오버슈트한다', () => {
     const t = track([
       { f: 0, v: 0, interp: 'spring', spring: springSpec },
@@ -170,6 +184,42 @@ describe('키프레임 삽입 (de Casteljau)', () => {
     expect(insertKeyframe(a, b, 0)).toBeNull()
     expect(insertKeyframe(a, b, 10)).toBeNull()
     expect(insertKeyframe(a, b, 15)).toBeNull()
+  })
+
+  it('linear 세그먼트에 키를 넣어도 직선이 보존된다', () => {
+    // 프리셋의 등속 트랙(rotate.spin360 등)은 키 하나만 끼워도 S-곡선이 되면
+    // 이음새가 벌어진다. 삽입 키는 직선 위의 값이어야 하고 전 구간이 그대로여야 한다.
+    const a: Keyframe = { f: 0, v: 0, interp: 'linear' }
+    const b: Keyframe = { f: 40, v: 360, interp: 'linear' }
+    const before = track([a, b])
+    const split = insertKeyframe(a, b, 10)!
+    expect(split.mid.v).toBeCloseTo(90, 9)
+    expect(split.mid.interp).toBe('linear')
+    const after = track([split.a, split.mid, split.b])
+    for (let f = 0; f <= 40; f += 1) {
+      expect(Math.abs(evalTrack(after, f)! - evalTrack(before, f)!), `frame ${f}`).toBeLessThan(1e-6)
+    }
+  })
+
+  it('스프링 세그먼트에 넣은 키의 값이 정본 곡선 위에 있다', () => {
+    const a: Keyframe = { f: 0, v: 0, interp: 'spring', spring: springSpec }
+    const b: Keyframe = { f: 20, v: 100, interp: 'spring' }
+    const original = evalTrack(track([a, b]), 7)!
+    const split = insertKeyframe(a, b, 7)!
+    expect(split.mid.v).toBeCloseTo(original, 6)
+    // 정본이 하위 구간에 다시 적용되는 이중 왜곡이 없어야 한다.
+    expect(split.a.spring).toBeUndefined()
+    const after = track([split.a, split.mid, split.b])
+    expect(evalTrack(after, 7)!).toBeCloseTo(original, 6)
+  })
+
+  it('정본 강제 프리셋(bounce) 세그먼트에 넣은 키의 값이 정본 곡선 위에 있다', () => {
+    const a: Keyframe = { f: 0, v: 0, interp: 'bezier', easingPreset: 'easeOutBounce', out: { x: 0.34, y: 1.56 } }
+    const b: Keyframe = { f: 30, v: 100, interp: 'bezier', in: { x: 0.64, y: 1 } }
+    const original = evalTrack(track([a, b]), 11)!
+    const split = insertKeyframe(a, b, 11)!
+    expect(split.mid.v).toBeCloseTo(original, 6)
+    expect(split.a.easingPreset).toBeUndefined()
   })
 })
 

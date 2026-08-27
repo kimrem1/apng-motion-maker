@@ -92,6 +92,20 @@ describe('채널 결합 규칙', () => {
     expect(t.translateY).toBeCloseTo(40, 10) // 400 * 0.10
   })
 
+  it('anchor 트랙의 norm 단위는 캔버스로 환산하지 않는다 (항등값 0.5 는 항등이다)', () => {
+    const doc = createEmptyProject()
+    doc.canvas.w = 512
+    doc.canvas.h = 200
+    const layer = createImageLayer(makeAsset('a1'), 0)
+    layer.tracks = [
+      createStaticTrack('anchorX', 'norm', 0.5),
+      createStaticTrack('anchorY', 'norm', 0.5),
+    ]
+    const t = resolveLayerTransform(layer, 0, doc.canvas)
+    expect(t.anchorX).toBeCloseTo(0.5, 10)
+    expect(t.anchorY).toBeCloseTo(0.5, 10)
+  })
+
   it('트랙이 없으면 항등 변환이다', () => {
     const doc = createEmptyProject()
     const layer = createImageLayer(makeAsset('a1'), 0)

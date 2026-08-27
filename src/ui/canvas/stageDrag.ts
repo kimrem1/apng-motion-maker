@@ -179,7 +179,10 @@ export function pointInQuad(quad: readonly StagePoint[], x: number, y: number): 
     else if (cross < -1e-9) negative = true
     if (positive && negative) return false
   }
-  return true
+  // 모든 외적이 0 이면 사각형이 점이나 선으로 붕괴한 것이다 (pop-in 의 scale 0 프레임).
+  // 그때 true 를 돌려주면 보이지도 않는 레이어가 캔버스의 모든 클릭을 삼켜
+  // 아래 레이어를 고를 수 없게 된다. 변 위의 점(한쪽 부호 + 0)은 지금처럼 안이다.
+  return positive || negative
 }
 
 /** 그 자리의 맨 위 레이어. 잠긴 레이어는 건너뛴다(아래 것을 잡을 수 있어야 한다). */

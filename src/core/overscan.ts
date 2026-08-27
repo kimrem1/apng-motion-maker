@@ -8,6 +8,16 @@
  * 그 상태가 "이미지가 캔버스를 최소로 덮는" 지점이다. 그래서 안전 판정이
  * "전 구간 k >= 1" 이라는 한 줄로 끝난다.
  *
+ * 채우기 / 담기 모두 렌더러의 buildLayerMatrix 를 그대로 다시 만들어 재는
+ * **매트릭스 기반**이다 (coverScaleAt / containScaleAt). 렌더러는 기준점(anchor)을
+ * 축으로 회전 / 배율을 걸기 때문에 (transform.ts), "회전이 이미지 중심을 돈다" 고
+ * 가정한 닫힌 AABB 식은 기준점이 중앙을 벗어난 순간 이미지 중심의 이동항
+ * (I - c·R)·S_base·q 를 통째로 놓친다 (기준점 (0,0) + 45도 회전에서 보정 후에도
+ * 캔버스 꼭짓점이 500px 비는 실측). 매트릭스를 다시 만들면 렌더러와 어긋날 수
+ * 없다. 배율 채널만 0 으로 둔 매트릭스에서는 네 꼭짓점이 기준점 자리 한 점으로
+ * 붕괴하므로 꼭짓점 = p0 + c·D 라는 배율 c 의 1차식이 성립하고, 두 솔버 모두
+ * 이분 탐색 없이 닫힌 형태로 풀린다.
+ *
  * 세 가지를 특히 조심한다.
  *
  * 1. 키프레임 값만 검사하면 틀린다. back / spring / elastic 이징은 값이 [v0, v1] 밖으로
@@ -57,6 +67,15 @@ export const UPSCALE_SUGGEST_THRESHOLD = 1.05
  */
 const CONTAIN_MIN_SCALE = 0.2
 
+/**
+ * 채우기 배율 보정의 상한. 담기의 CONTAIN_MIN_SCALE 과 거울상이다.
+ *
+ * 원근이 판을 모서리에 가깝게 눕히면 필요 배율이 발산한다. 무한대를 물릴 수는
+ * 없으니 여기서 끊고 clipped 로 진단한다. 20 은 옛 닫힌 식이 쓰던 원근 발산 바닥
+ * (perspectiveShrink 의 최소 특이값 0.05 = 최대 20배)을 승계한 값이다.
+ */
+const COVER_MAX_RATIO = 20
+
 export interface OverscanNeed {
   /**
    * 이 레이어에 어떤 솔버가 걸렸는가.
@@ -65,7 +84,13 @@ export interface OverscanNeed {
    *   none    아무도 개입하지 않는다. correction === 1
    */
   mode: 'cover' | 'contain' | 'none'
-  /** 담기가 하한에 걸려 여전히 잘리는가. contain 일 때만 의미가 있다. */
+  /**
+   * 보정이 한계에 걸려 목표를 다 못 이뤘는가.
+   *   cover   기하적으로 못 덮는 방향이 있거나(기준점이 이미지 가장자리에 붙은 채
+   *           도는 경우) 필요 배율이 상한(COVER_MAX_RATIO)을 넘어, 보정 후에도
+   *           비는 프레임이 남는다.
+   *   contain 하한(CONTAIN_MIN_SCALE)에 걸려 여전히 잘린다.
+   */
   clipped: boolean
   /** 캔버스를 채우기 위해 필요한 절대 배율의 최댓값 */
   sRequired: number
@@ -86,7 +111,13 @@ export interface OverscanNeed {
 }
 
 /**
- * 한 시점의 변환에서 캔버스를 덮는 데 필요한 절대 배율.
+ * 한 시점의 변환에서 캔버스를 덮는 데 필요한 절대 배율의 **중심 기준점 근사**.
+ *
+ * 회전 / 배율이 이미지 중심을 축으로 돈다고 가정한 닫힌 식이다. 렌더러는
+ * 기준점(anchor)을 축으로 돌기 때문에 (transform.ts buildLayerMatrix), 기준점이
+ * 중앙(0.5, 0.5)일 때만 정확하다. 그래서 솔버는 이 함수 대신 렌더러와 같은
+ * 매트릭스로 재는 coverScaleAt 을 쓴다. 이 함수는 기준점이 중앙인 상황의 빠른
+ * 추정과 테스트 대조용으로만 남긴다.
  *
  * 회전이 있으면 이미지 로컬 좌표계로 넘어가 캔버스를 -θ 회전시킨 AABB 를 쓴다.
  *   W' = |W cosθ| + |H sinθ|,  H' = |W sinθ| + |H cosθ|
@@ -365,6 +396,176 @@ function containScaleAt(
 }
 
 /**
+ * 한 시점에서 캔버스를 덮으려면 배율 채널에 얼마를 곱해야 하는가.
+ * c 가 1 이하면 이미 덮고 있다는 뜻이다. containScaleAt 의 거울상이다.
+ *
+ * 같은 요령으로 매트릭스를 두 번 만들어 꼭짓점 = p0 + c·D 라는 1차식을 얻는다.
+ * 배율 채널이 0 이면 네 꼭짓점이 전부 기준점 자리(p0) 한 점으로 붕괴하므로,
+ * D 는 "기준점에서 그 꼭짓점으로 자라는 방향" 이다. 회전 / 기울임 / 기준점 보정 /
+ * fit 기준 배율을 여기서 다시 계산하지 않으므로 렌더러와 어긋날 수 없다.
+ *
+ * 담기와 다른 점은 부등식의 방향뿐이다. 담기는 "이미지 꼭짓점이 캔버스(축 정렬
+ * 사각형) 안", 채우기는 "캔버스 꼭짓점 Q 가 이미지(볼록 사각형) 안" 이다. 이미지
+ * 변은 축에 정렬돼 있지 않지만 변 벡터가 c·(D_j - D_i) 로 c 에 비례하므로,
+ * 점-내부 외적 판정에서 c 하나를 나누면
+ *   cross(D_j - D_i, Q - p0) - c·cross(D_j, D_i)  (감김 방향 부호를 곱해) >= 0
+ * 이라는 변마다의 1차 부등식이 남는다. cover 가 필요한 c 의 하한은 이 부등식들의
+ * max 로 닫힌 형태로 나온다. 이분 탐색이 필요 없다.
+ *
+ * 원근 나눗셈이 c 와 무관한 이유는 containScaleAt 과 같다. 원근은 배율보다
+ * 안쪽에 곱해지므로 (transform.ts buildLayerMatrix) 꼭짓점의 w 가 c 와 무관하고,
+ * 나눈 뒤에도 좌표는 여전히 c 의 1차식이다.
+ *
+ * blocked: 배율을 아무리 키워도 못 덮는 방향이 있는가.
+ *
+ * cross(D_j, D_i) 는 기준점(D 좌표계의 원점)과 변이 이루는 삼각형의 넓이라,
+ * 기준점이 이미지 안쪽이면 항상 하한 쪽 부호다. 기준점이 이미지 가장자리에 정확히
+ * 붙어 있으면(예: anchor 0,0) 그 항이 0 이 되어 부등식에서 c 가 사라진다. 이미지가
+ * 기준점을 꼭짓점으로 하는 부채꼴로만 자라기 때문에, 부채꼴 밖의 캔버스 꼭짓점은
+ * 어떤 배율로도 못 덮는다는 뜻이다. 그때는 덮을 수 있는 방향만 마저 채우는 하한을
+ * 돌려주고 blocked 로 알린다. 담기가 "점으로 사라지는 것보다 조금 잘리는 편이
+ * 낫다" 고 하한을 두는 것과 같은 원칙이다. 한없이 키워 봐야 화질만 잃는다.
+ *
+ * 폴더 항이 없는 이유: 채우기는 움직이는 폴더 안에서 개입하지 않는다
+ * (solveLayerOverscan 의 주석).
+ */
+function coverScaleAt(
+  canvasW: number,
+  canvasH: number,
+  imageW: number,
+  imageH: number,
+  t: ResolvedTransform,
+  fit: FitMode,
+): { c: number; blocked: boolean } {
+  // fit 과 baseScale 을 미리 곱해 넘기면 안 되는 이유도 containScaleAt 과 같다.
+  const full = buildLayerMatrix(t, fit, canvasW, canvasH, imageW, imageH)
+  const origin = buildLayerMatrix(
+    { ...t, scaleX: 0, scaleY: 0 },
+    fit,
+    canvasW,
+    canvasH,
+    imageW,
+    imageH,
+  )
+
+  /*
+   * p0: 배율 채널이 0 인 매트릭스는 위 두 행이 마지막 행의 상수배가 되므로,
+   * 원근 나눗셈 후에는 (u,v) 와 무관하게 같은 점이 나온다. 한 번만 읽으면 된다.
+   */
+  const w0 = origin[8]!
+  if (!(w0 > 1e-9)) return { c: 0, blocked: true }
+  const p0x = origin[6]! / w0
+  const p0y = origin[7]! / w0
+
+  /*
+   * 유닛 사각형의 네 꼭짓점을 **둘레 순서**로 돈다. containScaleAt 은 꼭짓점을
+   * 독립으로 보므로 순서가 상관없지만, 여기는 변(외적) 판정이라 순서가 전제다.
+   */
+  const corners: [number, number][] = [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+  ]
+  const dx = [0, 0, 0, 0]
+  const dy = [0, 0, 0, 0]
+  let r2 = 0
+  for (let i = 0; i < 4; i += 1) {
+    const [u, v] = corners[i]!
+    // 두 매트릭스의 마지막 행은 같다. 배율은 원근 나눗셈에 영향을 주지 않는다.
+    const w = full[2]! * u + full[5]! * v + full[8]!
+    // 꼭짓점이 카메라 뒤로 넘어갔다. 어떤 배율로도 덮이지 않는다.
+    if (!(w > 1e-9)) return { c: 0, blocked: true }
+    const x = (full[0]! * u + full[3]! * v + full[6]!) / w - p0x
+    const y = (full[1]! * u + full[4]! * v + full[7]!) / w - p0y
+    dx[i] = x
+    dy[i] = y
+    r2 = Math.max(r2, x * x + y * y)
+  }
+
+  // 부호 있는 넓이로 감김 방향을 읽는다. 뒤집힘(음수 배율)도 이 부호가 흡수한다.
+  let area2 = 0
+  for (let i = 0; i < 4; i += 1) {
+    const j = (i + 1) % 4
+    area2 += dx[i]! * dy[j]! - dy[i]! * dx[j]!
+  }
+  // 판이 모서리로만 보인다(90도 원근, 배율 0). 키워 봐야 선분이라 못 덮는다.
+  if (r2 <= 0 || Math.abs(area2) <= 1e-6 * r2) return { c: 0, blocked: true }
+  const sign = area2 > 0 ? 1 : -1
+
+  // 매트릭스가 Float32 라 상대 오차 1e-6 아래는 0 으로 취급한다. 여기서 아슬하게
+  // 갈리는 경우는 어차피 발산 직전이라, 어느 쪽으로 판정해도 blocked 로 수렴한다.
+  const scaleRef = Math.sqrt(r2)
+  const epsB = 1e-6 * r2
+  const epsA = 1e-6 * scaleRef * (canvasW + canvasH + Math.hypot(p0x, p0y))
+
+  const halfW = canvasW / 2
+  const halfH = canvasH / 2
+  const quadX = [-halfW, halfW, halfW, -halfW]
+  const quadY = [-halfH, -halfH, halfH, halfH]
+
+  let cLo = 0
+  let cHi = Infinity
+  let blocked = false
+  for (let i = 0; i < 4; i += 1) {
+    const j = (i + 1) % 4
+    const ex = dx[j]! - dx[i]!
+    const ey = dy[j]! - dy[i]!
+    const b = sign * (dx[j]! * dy[i]! - dy[j]! * dx[i]!)
+    for (let q = 0; q < 4; q += 1) {
+      const qx = quadX[q]! - p0x
+      const qy = quadY[q]! - p0y
+      const a = sign * (ex * qy - ey * qx)
+      if (b < -epsB) {
+        // a - c·b >= 0 에서 b < 0 이므로 부등호가 뒤집혀 c 의 하한이 된다.
+        const lb = a / b
+        if (lb > cLo) cLo = lb
+      } else if (b > epsB) {
+        // 기준점이 이미지 밖(0..1 밖). 키울수록 이 변이 Q 에서 멀어지므로 상한이다.
+        const ub = a / b
+        if (ub < cHi) cHi = ub
+      } else if (a < -epsA) {
+        // 변이 기준점을 지난다. 부채꼴 밖의 꼭짓점은 어떤 배율로도 못 덮는다.
+        // 덮을 수 있는 나머지 방향의 하한은 계속 모은다.
+        blocked = true
+      }
+    }
+  }
+
+  // 하한이 상한을 넘으면(기준점이 이미지 밖일 때만 생긴다) 전부 덮는 c 는 없다.
+  if (cHi < cLo) blocked = true
+  return { c: cLo, blocked }
+}
+
+/**
+ * 모디파이어 이동 여유분의 검사 후보. 부호를 보존한 양 끝 두 점이다.
+ *
+ * 고정 회전에서 필요 배율은 이동의 볼록 함수(변마다 1차 부등식의 max)라,
+ * [값-여유, 값+여유] 구간의 최댓값이 끝점에서 나온다. 가운데는 볼 필요가 없다.
+ */
+function offsetCandidates(value: number, headroom: number): number[] {
+  return headroom > 0 ? [value - headroom, value + headroom] : [value]
+}
+
+/**
+ * 모디파이어 회전 여유분의 검사 후보.
+ *
+ * 이동과 달리 회전은 끝점만 보면 안 된다. 필요 배율이 회전각의 45도(mod 90)
+ * 근처에서 꼭대기를 이루므로, 구간 [값-여유, 값+여유] 이 그 지점을 지나면
+ * 한가운데가 끝점보다 나쁘다. 옛 절댓값 접기(|rot|+여유)도 이걸 놓쳤다.
+ * 지나는 45도 지점을 후보에 더한다. 여유가 아무리 커도 지점 수는 구간 길이에
+ * 비례해 유한하고, 실제 여유(흔들림 몇 도)에서는 최대 하나다.
+ */
+function rotationCandidates(rotate: number, headroom: number): number[] {
+  if (headroom <= 0) return [rotate]
+  const out = [rotate - headroom, rotate + headroom]
+  for (let k = Math.ceil((rotate - headroom - 45) / 90); 45 + 90 * k <= rotate + headroom; k += 1) {
+    out.push(45 + 90 * k)
+  }
+  return out
+}
+
+/**
  * 이 레이어를 담고 있는 폴더들의 누적 매트릭스. 폴더가 없으면 undefined 다.
  *
  * core/group.ts 의 buildFolderMatrices 와 같은 곱셈 순서여야 한다. 저쪽은
@@ -525,10 +726,11 @@ export function solveLayerOverscan(
   /*
    * 움직이는 폴더 안에서는 채우기를 끈다.
    *
-   * 채우기 solver 는 매트릭스가 아니라 닫힌 식(requiredScaleAt)으로 "캔버스를 덮는
-   * 배율" 을 푼다. 폴더가 그룹째로 움직이거나 줄이면 그 식이 답할 수 없는 문제가
-   * 되고, 그대로 두면 틀린 배율로 개입한다. 개입하지 않는 편이 낫다. 담기 쪽은
-   * 매트릭스 기반이라 폴더를 그대로 반영한다.
+   * 솔버 자체는 이제 매트릭스 기반이라 폴더 항을 곱해 풀 수도 있다 (담기가 그렇게
+   * 한다). 그래도 개입하지 않는 이유는 결과 해석 쪽이다. sRequired / kMax / 권장
+   * 원본 같은 진단이 전부 "레이어 자신의 배율" 기준으로 정의되어 있어서, 폴더가
+   * 그룹째로 줄이거나 움직이면 그 수치가 실제 화면과 다른 이야기를 하게 된다.
+   * 틀린 진단으로 개입하는 것보다 개입하지 않는 편이 낫다.
    *
    * 정리용으로만 쓰는(움직이지 않는) 폴더에서는 예전과 똑같이 동작해야 한다.
    * 그래서 "폴더가 있다" 가 아니라 "폴더가 실제로 기하를 바꾼다" 로 가른다.
@@ -543,8 +745,10 @@ export function solveLayerOverscan(
   let sRequired = 0
   let kMax = 0
   let worstFrame = 0
+  let clipped = false
   /**
-   * 프레임마다 "필요 배율 / 실제 배율" 을 재고 그 최댓값을 쓴다.
+   * 프레임마다 "필요 배율 / 실제 배율" 비율을 재고 그 최댓값을 쓴다.
+   * coverScaleAt 이 돌려주는 c 가 바로 그 비율이다.
    *
    * 전역 최댓값끼리 나누면(sRequired / kMax) 틀린다. 필요 배율이 가장 큰 프레임과
    * 실제 배율이 가장 큰 프레임이 다르면 보정이 모자란다. 예를 들어 숨쉬기 흔들림은
@@ -558,28 +762,53 @@ export function solveLayerOverscan(
     // 자기 트랙만 보면 패럴랙스 레이어가 실제보다 덜 움직이는 것으로 계산된다.
     const t = resolveLayerTransformWithParents(doc, layer, f)
 
-    // 모디파이어 여유분을 최악으로 더한다.
-    const probe: ResolvedTransform = {
-      ...t,
-      translateX: Math.abs(t.translateX) + headroom.translate,
-      translateY: Math.abs(t.translateY) + headroom.translate,
-      rotate: Math.abs(t.rotate) + headroom.rotateDeg,
-    }
-
-    const need = requiredScaleAt(canvasW, canvasH, imageW, imageH, probe)
-    if (need > sRequired) {
-      sRequired = need
-      worstFrame = f
-    }
     // 실제 배율은 축별로 다를 수 있다. 작은 쪽이 빈 곳을 만든다.
     const actual = Math.min(base.sx * t.scaleX, base.sy * t.scaleY)
+    /*
+     * 배율이 0 을 지나는 프레임(등장 프리셋)은 어떤 유한 배수를 곱해도 0 이라
+     * 못 채운다. 상수 보정에 이 프레임을 물리면 보정이 상한까지 치솟아 나머지
+     * 전 구간의 화질만 망가진다. 그래서 비율 계산에서 건너뛴다.
+     */
+    if (actual <= 1e-9) continue
+
+    /*
+     * 모디파이어 여유분은 **부호를 보존한 채** 양 끝(±)에서 잰다.
+     *
+     * 절댓값으로 접으면 안 된다. 회전이 90도를 넘으면 이동의 로컬 성분 부호가
+     * 뒤집혀서, |tx| 로 접은 값은 실제와 다른 자리를 잰다 (비정사각 원본 100x1000
+     * + 회전 135도 + 이동 (100,-100) 에서 필요 배율 9.90 을 7.07 로 29% 과소
+     * 계산해 빈 띠가 생기는 실측). 고정 회전에서 필요 배율은 이동의 볼록 함수라
+     * 최댓값이 (±,±) 상자의 꼭짓점에서 나온다. 회전 여유는 양 끝에 더해, 구간이
+     * 45도(mod 90) 꼭대기를 지나면 그 지점도 본다 (rotationCandidates).
+     *
+     * 여유분이 없으면 후보가 그 프레임 값 하나뿐이라 표본당 상수 시간이 유지된다.
+     */
+    let cNeed = 0
+    for (const rot of rotationCandidates(t.rotate, headroom.rotateDeg)) {
+      for (const tx of offsetCandidates(t.translateX, headroom.translate)) {
+        for (const ty of offsetCandidates(t.translateY, headroom.translate)) {
+          const probe: ResolvedTransform = { ...t, translateX: tx, translateY: ty, rotate: rot }
+          const res = coverScaleAt(canvasW, canvasH, imageW, imageH, probe, layer.fit)
+          if (res.blocked) clipped = true
+          if (res.c > cNeed) cNeed = res.c
+        }
+      }
+    }
+
+    // NaN 방어를 겸한다. 상한 초과는 못 채우는 것으로 진단하고 여기서 끊는다.
+    if (!(cNeed <= COVER_MAX_RATIO)) {
+      clipped = true
+      cNeed = COVER_MAX_RATIO
+    }
+
+    const sNeed = cNeed * actual
+    if (sNeed > sRequired) {
+      sRequired = sNeed
+      worstFrame = f
+    }
     const k = s0 > 0 ? actual / s0 : 1
     if (k > kMax) kMax = k
-
-    if (actual > 1e-9) {
-      const ratio = need / actual
-      if (ratio > maxRatio) maxRatio = ratio
-    }
+    if (cNeed > maxRatio) maxRatio = cNeed
   }
 
   if (sRequired <= 0) return idle
@@ -593,7 +822,7 @@ export function solveLayerOverscan(
 
   return {
     mode: 'cover',
-    clipped: false,
+    clipped,
     sRequired,
     kRequired,
     kMax,

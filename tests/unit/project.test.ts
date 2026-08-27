@@ -164,6 +164,31 @@ describe('프로젝트 파일 왕복', () => {
     expect('motionRepeat' in bundle.doc.layers[0]!).toBe(false)
   })
 
+  it('레이어의 프리셋 소유권 기록도 한 글자도 안 바뀐다', () => {
+    // 소유권의 정본은 레이어의 presetOwnership 이다. 왕복에서 사라지면 앞 프리셋의
+    // 트랙이 사용자 것으로 승격되어, 다음 프리셋을 얹을 때 모션이 겹쳐 재생된다.
+    const doc = sampleDoc()
+    doc.layers[0]!.presetOwnership = { props: ['scale'], effectIds: ['e1'], ownsAnchor: true }
+    doc.presetRef = {
+      id: 'pop-in',
+      macro: { speed: 1, strength: 1 },
+      layerId: doc.layers[0]!.id,
+      dirty: false,
+    }
+    const before = JSON.stringify(doc)
+
+    const bundle = deserializeProject(
+      serializeProject({ doc, assets: new Map([['a1', dummyPng(256)]]) }),
+    )
+
+    expect(JSON.stringify(bundle.doc)).toBe(before)
+    expect(bundle.doc.layers[0]!.presetOwnership).toEqual({
+      props: ['scale'],
+      effectIds: ['e1'],
+      ownsAnchor: true,
+    })
+  })
+
   it('빈 문서도 그대로 돌아온다', () => {
     resetIdCounter()
     const doc = createEmptyProject()
@@ -431,6 +456,66 @@ describe('migrateProject', () => {
     const ids = result.doc.layers.map((l) => l.id)
     expect(new Set(ids).size).toBe(3)
     expect(ids[0]).toBe('l1')
+  })
+
+  /**
+   * 옛 파일은 소유권을 presetRef 가 들고 있었다. 문서에 한 벌뿐이라 A -> B -> A 로
+   * 레이어를 오가면 A 의 기록이 덮여 앞 프리셋의 트랙이 영구히 잔류했다.
+   * 마이그레이션이 layerId 레이어의 기록으로 옮겨 새 형태로 맞춘다.
+   */
+  it('옛 presetRef 의 소유권 필드를 layerId 레이어로 옮긴다', () => {
+    const doc = sampleDoc()
+    doc.presetRef = {
+      id: 'pop-in',
+      macro: { speed: 1, strength: 1 },
+      layerId: doc.layers[0]!.id,
+      dirty: false,
+      props: ['scale'],
+      effectIds: ['e1'],
+      ownsAnchor: true,
+    }
+
+    const result = migrateProject(JSON.parse(JSON.stringify(doc)) as unknown)
+
+    expect(result.doc.layers[0]!.presetOwnership).toEqual({
+      props: ['scale'],
+      effectIds: ['e1'],
+      ownsAnchor: true,
+    })
+    const ref = result.doc.presetRef!
+    expect(ref.layerId).toBe(doc.layers[0]!.id)
+    // 옛 필드가 남으면 같은 정보가 두 벌이 되어 다음 저장에도 계속 실린다.
+    expect('props' in ref).toBe(false)
+    expect('effectIds' in ref).toBe(false)
+    expect('ownsAnchor' in ref).toBe(false)
+  })
+
+  it('이전된 문서는 다시 왕복해도 그대로다', () => {
+    // 이전은 한 번뿐이어야 한다. 열 때마다 JSON 이 달라지면 "바뀐 게 없다" 를
+    // 파일 비교로 알 수 없게 된다.
+    const doc = sampleDoc()
+    doc.presetRef = {
+      id: 'pop-in',
+      macro: { speed: 1, strength: 1 },
+      layerId: doc.layers[0]!.id,
+      dirty: false,
+      props: ['scale'],
+      effectIds: ['e1'],
+    }
+    const migrated = migrateProject(JSON.parse(JSON.stringify(doc)) as unknown).doc
+    const again = deserializeProject(
+      serializeProject({ doc: migrated, assets: new Map([['a1', dummyPng(64)]]) }),
+    )
+    expect(JSON.stringify(again.doc)).toBe(JSON.stringify(migrated))
+  })
+
+  it('layerId 를 모르는 옛 문서의 소유권은 presetRef 에 남는다', () => {
+    // 지어내서 아무 레이어에 붙이면 그 레이어의 수동 편집이 다음 프리셋에 지워질
+    // 수 있다. 옮길 곳을 모르면 그대로 두고 폴백이 읽는다 (motions/merge.ts).
+    const doc = sampleDoc() // presetRef 에 layerId 가 없다
+    const result = migrateProject(JSON.parse(JSON.stringify(doc)) as unknown)
+    expect(result.doc.presetRef?.props).toEqual(['scale'])
+    expect(result.doc.layers[0]!.presetOwnership).toBeUndefined()
   })
 
   it('식별자 없는 에셋만 버린다', () => {

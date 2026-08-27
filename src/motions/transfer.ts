@@ -107,10 +107,27 @@ export interface MotionBundle {
  * 빈 레이어에서 떼어낸 꾸러미를 붙이면 대상의 모션이 조용히 지워진다. 그 조작에는
  * 이름이 없으므로(사용자는 "보내기" 를 눌렀다) 호출부가 미리 막아야 한다.
  */
+/** 기준점이 기본값(가운데)에서 벗어나 있는가. shaping 갈래의 판정과 요약이 함께 쓴다. */
+function anchorIsCustom(bundle: MotionBundle): boolean {
+  return bundle.anchor[0] !== 0.5 || bundle.anchor[1] !== 0.5
+}
+
 export function bundleIsEmpty(bundle: MotionBundle, parts: MotionParts): boolean {
   if (parts.tracks && (bundle.tracks.length > 0 || bundle.modifiers.length > 0)) return false
+  // shaping 갈래는 가리기/등장만이 아니라 기준점/원근/프레임 이탈 표식도 함께 옮긴다
+  // (applyMotionBundle). 여기서 그 셋을 빼먹으면 '경첩 열리며 등장' 처럼 기준점과
+  // 원근만 심는 모션이 "보낼 것이 없습니다" 로 부당하게 막힌다.
   if (parts.effects && bundle.effects.length > 0) return false
-  if (parts.shaping && (bundle.reveal !== undefined || bundle.charAnim !== undefined)) return false
+  if (
+    parts.shaping &&
+    (bundle.reveal !== undefined ||
+      bundle.charAnim !== undefined ||
+      bundle.perspective !== undefined ||
+      bundle.motionExitsFrame ||
+      anchorIsCustom(bundle))
+  ) {
+    return false
+  }
   return true
 }
 
@@ -128,6 +145,11 @@ export function describeBundle(bundle: MotionBundle, parts: MotionParts): string
   if (parts.shaping) {
     if (bundle.reveal) out.push('가리기')
     if (bundle.charAnim) out.push('등장')
+    // bundleIsEmpty 의 shaping 판정과 짝. 요약에 없는 것이 판정에만 있으면
+    // "보낼 것" 문구와 실제 전송 내용이 어긋난다.
+    if (anchorIsCustom(bundle)) out.push('기준점')
+    if (bundle.perspective !== undefined) out.push('원근')
+    if (bundle.motionExitsFrame) out.push('프레임 이탈')
   }
   return out
 }

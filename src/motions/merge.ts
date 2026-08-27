@@ -16,7 +16,9 @@
  *
  * 규칙
  *
- * 소유권은 doc.presetRef 가 기록한다. 앞 프리셋이 심은 트랙의 prop 과 이펙트 id 다.
+ * 소유권은 **레이어의 presetOwnership** 이 기록한다. 앞 프리셋이 심은 트랙의 prop 과
+ * 이펙트 id 다. 문서(presetRef)에 한 벌만 두면 다른 레이어에 프리셋을 얹는 순간
+ * 이 레이어의 기록이 덮여 사라진다 (ownershipFor 주석의 A -> B -> A).
  *   트랙   : 새 프리셋이 내는 prop + 앞 프리셋이 심은 prop 을 걷어내고 새 트랙을 넣는다.
  *   이펙트 : 앞 프리셋이 심은 id 를 걷어내고 새 이펙트를 뒤에 붙인다.
  * 두 목록 어디에도 없는 것은 사용자가 직접 만든 것이므로 살아남는다.
@@ -25,13 +27,15 @@
 import type {
   CharAnimSpec,
   EffectInstance,
+  MotionProject,
+  PresetOwnershipRecord,
   PresetRef,
   RevealSpec,
   Track,
   TrackProp,
 } from '@/core/types.ts'
 
-/** 앞 프리셋이 심어 둔 것의 목록. doc.presetRef 에서 그대로 읽는다. */
+/** 앞 프리셋이 심어 둔 것의 목록. 레이어의 presetOwnership 에서 그대로 읽는다. */
 export interface PresetOwnership {
   props: readonly TrackProp[]
   effectIds: readonly string[]
@@ -48,8 +52,10 @@ export interface PresetOwnership {
 /** 기준점의 기본값. 프리셋이 옮긴 것을 걷어낼 때 이 자리로 되돌린다. */
 export const ANCHOR_DEFAULT: readonly [number, number] = [0.5, 0.5]
 
-/** presetRef 가 없으면(프리셋을 한 번도 안 썼으면) 아무것도 소유하지 않는다. */
-export function ownershipOf(ref: PresetRef | undefined): PresetOwnership {
+/** 기록이 없으면(프리셋을 한 번도 안 썼으면) 아무것도 소유하지 않는다. */
+export function ownershipOf(
+  ref: PresetRef | PresetOwnershipRecord | undefined,
+): PresetOwnership {
   return {
     props: ref?.props ?? [],
     effectIds: ref?.effectIds ?? [],
@@ -63,18 +69,54 @@ export function ownershipOf(ref: PresetRef | undefined): PresetOwnership {
 /**
  * **이 레이어에 대한** 소유권. 프리셋을 얹을 때는 언제나 이쪽을 쓴다.
  *
- * presetRef 는 문서에 하나뿐인데 소유권은 레이어마다 다르다. 그 둘을 안 맞추면
- * 이렇게 된다. 이미지 A 에 '한 바퀴 회전' 을 걸어 두면 presetRef.props 에 rotate 가
- * 남는다. 그 뒤 도형 B 를 골라 회전 키를 **손으로** 찍고 B 에 '톡 튀며 등장'
- * (회전을 안 내는 프리셋)을 누르면, A 의 소유권 목록으로 B 의 회전 트랙을 걷어낸다.
- * 사용자가 만든 것을 살린다는 이 파일의 계약이 레이어가 바뀌는 순간 깨진다.
- * 기준점 / 가리기 / 글자 등장 / 원근도 같은 길로 사라진다.
+ * 정본은 레이어의 presetOwnership 이다. 소유권은 레이어마다 다른데 문서(presetRef)에
+ * 한 벌만 두면 이렇게 된다. A 에 '톡 튀며 등장'(크기+투명도)을 걸고 B 에 아무
+ * 프리셋을 걸면 A 의 기록이 B 것으로 덮인다. 다시 A 에 '한 바퀴 회전'(회전만)을
+ * 얹으면 걷어낼 목록에 크기/투명도가 없어서, 앞 프리셋의 트랙이 사용자 것으로
+ * 오인되어 잔류한다. 회전하면서 계속 튀어오르는, 이 파일이 막겠다고 한 바로 그
+ * 증상이 레이어를 오가는 것만으로 되살아난다. 이펙트도 같은 길로 잔류한다.
  *
- * layerId 가 없으면 옛 프로젝트다. 그때는 대조할 방법이 없으므로 지금까지처럼 본다.
+ * 레이어에 기록이 없으면 presetRef 폴백이다. layerId 를 아는 옛 파일은
+ * 마이그레이션이 이미 레이어로 옮겼으므로(project/migrate.ts), 폴백에 걸리는 것은
+ * layerId 조차 없는 아주 옛 문서뿐이다. 그때는 대조할 방법이 없으므로 지금까지처럼
+ * 본다. 다른 레이어를 가리키는 presetRef 의 소유권으로 이 레이어의 수동 편집을
+ * 걷어내지 않는 것도 그대로다.
  */
-export function ownershipFor(ref: PresetRef | undefined, layerId: string): PresetOwnership {
+export function ownershipFor(
+  doc: Pick<MotionProject, 'layers' | 'presetRef'>,
+  layerId: string,
+): PresetOwnership {
+  const layer = doc.layers.find((l) => l.id === layerId)
+  if (layer?.presetOwnership) return ownershipOf(layer.presetOwnership)
+  const ref = doc.presetRef
   if (ref?.layerId !== undefined && ref.layerId !== layerId) return ownershipOf(undefined)
   return ownershipOf(ref)
+}
+
+/**
+ * 프리셋 한 번의 적용이 심은 것을 레이어 기록으로 만든다.
+ *
+ * 확정 적용(state/document.ts applyPresetTracks)과 미리보기(motions/apply.ts
+ * withPresetApplied)가 같은 함수를 써야 두 문서가 갈리지 않는다. 아무것도
+ * 소유하지 않으면 undefined 를 돌려 키 자체를 만들지 않는다 (JSON 왕복 결정론).
+ */
+export function presetOwnershipRecord(args: {
+  tracks: readonly Track[]
+  effectIds: readonly string[]
+  reveal?: RevealSpec | undefined
+  charAnim?: CharAnimSpec | undefined
+  perspective?: number | undefined
+  anchor?: readonly [number, number] | undefined
+}): PresetOwnershipRecord | undefined {
+  const record: PresetOwnershipRecord = {
+    ...(args.tracks.length > 0 ? { props: args.tracks.map((t) => t.prop) } : {}),
+    ...(args.effectIds.length > 0 ? { effectIds: [...args.effectIds] } : {}),
+    ...(args.reveal && args.reveal.mode !== 'none' ? { ownsReveal: true } : {}),
+    ...(args.charAnim && args.charAnim.mode !== 'none' ? { ownsCharAnim: true } : {}),
+    ...(args.perspective !== undefined ? { ownsPerspective: true } : {}),
+    ...(args.anchor ? { ownsAnchor: true } : {}),
+  }
+  return Object.keys(record).length > 0 ? record : undefined
 }
 
 /**

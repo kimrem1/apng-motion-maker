@@ -34,11 +34,12 @@ import {
   DEFAULT_IN,
   DEFAULT_OUT,
   displacementBudget,
+  segmentEasing,
   segmentSpeed,
+  segmentUsesCanonical,
   speedToHandles,
   STEP_ALLOWANCE,
 } from '@/easing/curve.ts'
-import { createSpringEasing } from '@/easing/spring.ts'
 import { CHIP_PRESETS } from '@/easing/presets.ts'
 import { getTrack, useDocumentStore } from '@/state/document.ts'
 import { useTimelineUiStore, type GraphTab } from '@/state/timelineUi.ts'
@@ -267,28 +268,6 @@ const GRAPH_CSS = `
 // 세그먼트 수학
 // ---------------------------------------------------------------------------
 
-/** 세그먼트의 정규화 이징. 값 = a.v + (b.v - a.v) * ease(p) 다. */
-function segmentEase(a: Keyframe, b: Keyframe): (p: number) => number {
-  switch (a.interp) {
-    case 'hold':
-      return () => 0
-    case 'linear':
-      return (p) => p
-    case 'spring': {
-      if (!a.spring) return (p) => p
-      return createSpringEasing(a.spring)
-    }
-    case 'samples':
-      return (p) => p
-    case 'bezier':
-    default: {
-      const o = a.out ?? DEFAULT_OUT
-      const i = b.in ?? DEFAULT_IN
-      return getBezierEasing(o.x, o.y, i.x, i.y)
-    }
-  }
-}
-
 /** 정규화 속도. 1 이 평균 속도다. 중앙차분이면 끝점 편향이 생기지 않는다. */
 function speedAt(ease: (p: number) => number, p: number): number {
   const h = 1 / 1024
@@ -298,8 +277,13 @@ function speedAt(ease: (p: number) => number, p: number): number {
   return (ease(hi) - ease(lo)) / (hi - lo)
 }
 
-/** 핸들을 만질 수 있는 세그먼트인가. 스프링과 홀드는 곡선이 파라미터에서 나온다. */
+/**
+ * 핸들을 만질 수 있는 세그먼트인가. 스프링과 홀드는 곡선이 파라미터에서 나오고,
+ * 정본 강제 프리셋(bounce/elastic)은 핸들이 표시용 근사일 뿐이라 만지게 두면
+ * 그려진 곡선과 무관한 핸들을 끌게 된다.
+ */
 function isEditable(a: Keyframe): boolean {
+  if (segmentUsesCanonical(a)) return false
   return a.interp === 'bezier' || a.interp === 'linear' || a.interp === 'samples'
 }
 
@@ -466,7 +450,7 @@ export function GraphEditor({ layerId: layerIdProp, prop: propProp }: GraphEdito
   const out: Handle = a?.out ?? DEFAULT_OUT
   const inH: Handle = b?.in ?? DEFAULT_IN
 
-  const ease = useMemo(() => (a && b ? segmentEase(a, b) : (p: number) => p), [a, b])
+  const ease = useMemo(() => (a && b ? segmentEasing(a, b) : (p: number) => p), [a, b])
 
   const [allowanceKey, setAllowanceKey] =
     useState<keyof typeof STEP_ALLOWANCE>('sharpEdge')

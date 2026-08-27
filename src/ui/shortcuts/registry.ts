@@ -388,11 +388,9 @@ function clearAllSelection(): void {
 function deleteSelection(): void {
   const timeline = timelineStore()
   if (timeline.selectedKeys.length > 0) {
-    const store = docStore()
-    // 배열 복사 후 지운다. 액션이 스토어를 바꾸는 동안 원본을 순회하면 안 된다.
-    for (const key of [...timeline.selectedKeys]) {
-      store.removeKeyframe(key.layerId, key.prop, key.frame)
-    }
+    // 한 번에 지운다. 한 개씩 부르면 키 다섯 개 지운 것이 Ctrl+Z 다섯 번이 된다
+    // (아래 레이어 삭제의 removeLayers 와 같은 이유).
+    docStore().removeKeyframes([...timeline.selectedKeys])
     timelineStore().clearSelection()
     return
   }

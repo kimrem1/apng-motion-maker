@@ -202,6 +202,9 @@ export function StageOverlay({ scale }: StageOverlayProps) {
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
     if (e.button !== 0) return
+    // 이미 한 손가락이 끌고 있으면 두 번째 손가락은 무시한다. 세션을 덮어쓰면
+    // 첫 드래그가 통째로 사라진다 (Timeline 의 endDrag 와 같은 규칙).
+    if (dragRef.current) return
 
     const ui = useUiStore.getState()
     /*
@@ -292,6 +295,9 @@ export function StageOverlay({ scale }: StageOverlayProps) {
 
   function handlePointerUp(e: ReactPointerEvent<HTMLDivElement>): void {
     const drag = dragRef.current
+    // 다른 손가락의 up 이 진행 중인 드래그를 끊으면 안 된다. 빈 곳을 두드린
+    // 두 번째 손가락이 떨어지는 순간 첫 손가락의 레이어가 멈춰 버린다.
+    if (drag && drag.pointerId !== e.pointerId) return
     dragRef.current = null
     try {
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {

@@ -241,7 +241,13 @@ void main() {
       }
       banded = true;
     } else {
-      d = sdPie(p / ext, min(u_sweep * 0.5, MM_PI - 1e-3), 1.0) * minExt;
+      if (u_sweep >= 2.0 * MM_PI - 1e-3) {
+        // 테두리 경로와 같은 이유. 전각 부채꼴을 sdPie 로 두면 6시 방향
+        // 반직선 위 픽셀이 바깥 판정되어 채움 한가운데 세로 이음선이 남는다.
+        d = sdEllipse(p, ext);
+      } else {
+        d = sdPie(p / ext, min(u_sweep * 0.5, MM_PI - 1e-3), 1.0) * minExt;
+      }
     }
   } else if (u_kind == 7) {
     // 살 굵기가 곧 u_stroke 다. 테두리처럼 안으로 물리면 원판이 굵기만큼 작아진다.

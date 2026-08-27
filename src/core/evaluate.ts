@@ -59,11 +59,15 @@ export const evalTrackAt = evalTrack
  * 여기 한 곳에서만 정의해 두면 두 방향이 어긋날 수 없다.
  */
 export function unitScale(prop: TrackProp, unit: TrackUnit, canvas: CanvasConfig): number {
+  // 캔버스 환산은 이동 계열에만 뜻이 있다. anchorX/anchorY 는 이미지 비율(0..1)이
+  // 그 자체로 렌더러 단위라(buildLayerMatrix 가 비율로 읽는다), 여기서 캔버스
+  // 크기를 곱하면 항등값 0.5 짜리 트랙이 레이어를 화면 밖으로 날려 버린다.
+  const stretches = prop === 'translateX' || prop === 'translateY'
   switch (unit) {
     case 'percentOfCanvas':
-      return (prop === 'translateY' ? canvas.h : canvas.w) / 100
+      return stretches ? (prop === 'translateY' ? canvas.h : canvas.w) / 100 : 1
     case 'norm':
-      return prop === 'translateY' ? canvas.h : canvas.w
+      return stretches ? (prop === 'translateY' ? canvas.h : canvas.w) : 1
     case 'px':
     case 'deg':
     case 'ratio':

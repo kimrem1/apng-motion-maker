@@ -253,7 +253,7 @@ describe('미리보기와 확정 적용이 같은 레이어를 만든다 (motion
 
   it('해제하면 프리셋이 만든 트랙이 사라진다', () => {
     commitToStore('zoom.pop')
-    const owned = s().doc.presetRef!.props ?? []
+    const owned = s().doc.layers[0]!.presetOwnership?.props ?? []
     expect(owned.length).toBeGreaterThan(0)
 
     s().clearPreset()
@@ -315,9 +315,9 @@ describe('프리셋 소유권과 레이어', () => {
   it('다른 레이어에 걸린 프리셋의 소유권으로 이 레이어의 수동 트랙을 지우지 않는다', () => {
     const [a, b] = s().doc.layers.map((l) => l.id) as [string, string]
 
-    // A 에 회전 프리셋. presetRef.props 에 rotate 가 남는다.
+    // A 에 회전 프리셋. A 의 소유권 기록에 rotate 가 남는다.
     commit(a, 'rotate.spin360')
-    expect(s().doc.presetRef?.props ?? []).toContain('rotate')
+    expect(s().doc.layers.find((l) => l.id === a)!.presetOwnership?.props ?? []).toContain('rotate')
     expect(s().doc.presetRef?.layerId).toBe(a)
 
     // B 에는 사용자가 직접 회전 키를 찍는다.
@@ -348,6 +348,60 @@ describe('프리셋 소유권과 레이어', () => {
     commit(a, 'zoom.pop')
     // 소유권이 살아 있으므로 회전은 사라진다. 이 계약까지 깨면 모션이 겹쳐 재생된다.
     expect(s().doc.layers.find((l) => l.id === a)!.tracks.map((t) => t.prop)).not.toContain('rotate')
+  })
+
+  /*
+   * 잔류 방향. 위의 보호 방향(다른 레이어 것을 지우지 않는다)과 쌍이다.
+   *
+   * 소유권이 문서에 한 벌뿐이던 시절의 버그다. B 에 프리셋을 얹는 순간 A 의 기록이
+   * 통째로 덮여서, 다시 A 에 회전만 내는 프리셋을 얹으면 걷어낼 목록에 크기/투명도가
+   * 없었다. 앞 프리셋의 트랙이 사용자 것으로 오인되어 회전하면서 계속 튀어올랐다.
+   */
+  it('A -> B -> A 로 돌아와도 앞 프리셋의 트랙이 잔류하지 않는다', () => {
+    const [a, b] = s().doc.layers.map((l) => l.id) as [string, string]
+    const layerA = () => s().doc.layers.find((l) => l.id === a)!
+    const propsOfA = () => layerA().tracks.map((t) => t.prop)
+
+    // A 에 크기+투명도를 내는 프리셋.
+    commit(a, 'zoom.pop')
+    expect(propsOfA()).toContain('scale')
+
+    // B 에 아무 프리셋. A 의 소유권 기록은 그대로 남아 있어야 한다.
+    commit(b, 'rotate.spin360')
+    expect(layerA().presetOwnership?.props ?? []).toContain('scale')
+
+    // 다시 A 에 회전만 내는 프리셋. 크기/투명도가 남으면 두 모션이 겹쳐 재생된다.
+    commit(a, 'rotate.spin360')
+    expect(propsOfA()).toContain('rotate')
+    expect(propsOfA()).not.toContain('scale')
+    expect(propsOfA()).not.toContain('opacity')
+  })
+
+  it('A -> B -> A 에서 앞 프리셋의 이펙트도 잔류하지 않는다', () => {
+    const [a, b] = s().doc.layers.map((l) => l.id) as [string, string]
+    const layerA = () => s().doc.layers.find((l) => l.id === a)!
+
+    // A 에 이펙트를 심는 프리셋.
+    commit(a, 'boil.hand')
+    expect(layerA().effects.length).toBeGreaterThan(0)
+
+    // B 를 거쳐 다시 A 에 이펙트를 정의하지 않는 프리셋. 워프가 남으면 안 된다.
+    commit(b, 'zoom.pop')
+    commit(a, 'shake.camera')
+    expect(layerA().effects).toHaveLength(0)
+  })
+
+  it('미리보기도 A -> B -> A 에서 같은 판단을 한다', () => {
+    const [a, b] = s().doc.layers.map((l) => l.id) as [string, string]
+    commit(a, 'zoom.pop')
+    commit(b, 'rotate.spin360')
+
+    const result = applyPresetToLayer({ doc: s().doc, layerId: a, presetId: 'rotate.spin360', strength: 0.5, speed: 1 })
+    const previewed = withPresetApplied(s().doc, a, result)
+    const props = previewed.layers.find((l) => l.id === a)!.tracks.map((t) => t.prop)
+    expect(props).toContain('rotate')
+    expect(props).not.toContain('scale')
+    expect(props).not.toContain('opacity')
   })
 })
 

@@ -286,6 +286,9 @@ export function QuickCrop({ open, assetId, onClose, onDone }: QuickCropProps) {
     setAspectId(id)
     // '자유' 는 지금 상자를 그대로 둔다. 비율만 풀린다.
     if (nextRatio === null) return
+    // 이미지 로드 전(natural 0)에는 bounds 가 0 크기라 {0,0,0,0} 상자가 생기고,
+    // 그대로 [이 영역으로 자르기] 를 누르면 1x1 픽셀로 잘린다 ([전체 선택]과 같은 가드).
+    if (natural.w === 0 || natural.h === 0) return
     setCropRect(fitRectToAspect(cropRect ?? bounds, nextRatio, bounds))
   }
 
@@ -294,6 +297,8 @@ export function QuickCrop({ open, assetId, onClose, onDone }: QuickCropProps) {
   const apply = useCallback(() => {
     const rect = cropRect
     if (!rect) return
+    // 0 크기 상자가 어떤 경로로든 남아 있으면 1x1 로 잘리는 사고가 된다.
+    if (rect.w < 1 || rect.h < 1) return
     setBusy('적용')
     setError(null)
     cropAssetTo(assetId, rect)

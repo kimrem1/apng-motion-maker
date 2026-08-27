@@ -151,6 +151,13 @@ describe('loopCountToRepeat', () => {
     // 여기가 뭉개지면 "반복 2회" GIF 가 1회만 재생된다. 1 과 2 는 반드시 갈려야 한다.
     expect(loopCountToRepeat(2)).not.toBe(loopCountToRepeat(1))
   })
+
+  it('uint16 을 넘는 요청은 상한으로 잘린다 (0=무한으로 랩되면 안 된다)', () => {
+    // 65537회 요청이 65536 이 되고 writeUInt16 에서 0 으로 랩되면 무한 반복 파일이 된다.
+    expect(loopCountToRepeat(65537)).toBe(0xffff)
+    expect(loopCountToRepeat(100000)).toBe(0xffff)
+    expect(loopCountToRepeat(65536)).toBe(0xffff)
+  })
 })
 
 describe('투명 옵션', () => {

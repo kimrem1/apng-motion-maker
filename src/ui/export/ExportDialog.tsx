@@ -216,6 +216,21 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
   if (open !== lastOpen) {
     setLastOpen(open)
     if (open) reset()
+    else {
+      /*
+       * 닫힐 때 용량 맞추기 계획도 버린다.
+       *
+       * 계획은 계산 시점의 fps / 프레임 수를 기준으로 하는데, settingsKey 무효화는
+       * 타임라인을 못 본다(ExportSettings 에 fps 가 없다). 닫힌 사이 길이나 속도를
+       * 바꾸고 다시 열면 낡은 계획이 그대로 떠 있고, 그대로 내보내면 applyTimeline 이
+       * 옛 fps / 프레임 수를 문서에 박아 늘려 둔 애니메이션이 소리 없이 잘려 나간다.
+       * 진행 중이던 계획 계산도 함께 중단한다 (결과가 닫힌 뒤에 setPlan 되지 않게).
+       */
+      if (plan) setPlan(null)
+      if (planError) setPlanError(null)
+      planAbortRef.current?.abort()
+      planAbortRef.current = null
+    }
   }
 
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -404,6 +419,9 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
   const handleReencode = (next: ExportSettings): void => {
     setPurposeId('custom')
     setCustom(next)
+    // 재인코딩 설정도 사용자의 것이다. 이 표시가 없으면 폼으로 돌아가 라디오를
+    // 왕복하는 순간 '처음 한 번 깔기' 분기가 줄여 둔 크기와 바꾼 포맷을 초기값으로 덮는다.
+    customTouchedRef.current = true
     setPlan(null)
     reset()
     void start(next)

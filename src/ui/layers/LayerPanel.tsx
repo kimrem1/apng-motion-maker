@@ -567,8 +567,18 @@ export function LayerPanel() {
         /*
          * 순서 이동. 드래그와 같은 규칙을 타야 하므로 경계 번호로 옮겨 계산한다.
          * 위로 한 칸 = 윗행 앞의 경계, 아래로 한 칸 = 아랫행 뒤의 경계다.
+         *
+         * 아래로 갈 때는 자기 서브트리의 표시 행부터 건너뛴다. 펼친 폴더에서
+         * di + 2 는 자기 첫 자식 뒤, 즉 자기 안쪽 경계라 dropTarget 을 거치고
+         * normalizeFolderOrder 가 되돌려 놓으면 순 효과가 무동작이 된다.
+         * (childCount 는 접힌 하위 폴더의 숨은 레이어까지 세므로 못 쓴다.)
          */
-        const boundary = step < 0 ? di - 1 : di + 2
+        let skip = 0
+        const myDepth = rows[di]?.depth ?? 0
+        while (di + 1 + skip < rows.length && (rows[di + 1 + skip]?.depth ?? 0) > myDepth) {
+          skip += 1
+        }
+        const boundary = step < 0 ? di - 1 : di + skip + 2
         const target = dropTarget(layers, rows, layer.id, boundary)
         if (target) moveLayerTo(layer.id, target.index, target.folderId)
         return

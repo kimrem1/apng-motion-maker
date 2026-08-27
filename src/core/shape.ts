@@ -91,6 +91,13 @@ export function createShapeSpec(kind: ShapeKind, overrides: Partial<ShapeSpec> =
  *
  * 저장된 파일과 손으로 만든 장면 정의가 같은 문을 통과한다. 던지지 않는다.
  */
+/**
+ * parseHexColor 가 받는 형식만 통과시킨다. 'blue' 같은 이름 색이 살아남으면
+ * 4글자 문자열이 #rgba 축약형으로 해석되어 NaN 성분이 생기고, premultiply 를
+ * 거쳐 NaN 유니폼이 WebGL 로 들어가 도형이 플랫폼마다 다르게 뭉개진다.
+ */
+const HEX_COLOR = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+
 export function normalizeShapeSpec(raw: Partial<ShapeSpec> & { kind?: unknown }): ShapeSpec {
   const kind = SHAPE_KIND_LIST.includes(raw.kind as ShapeKind) ? (raw.kind as ShapeKind) : 'rect'
   const num = (v: unknown, fallback: number, lo: number, hi: number): number =>
@@ -101,7 +108,7 @@ export function normalizeShapeSpec(raw: Partial<ShapeSpec> & { kind?: unknown })
 
   return {
     kind,
-    color: typeof raw.color === 'string' && raw.color.length > 0 ? raw.color : '#ffffffff',
+    color: typeof raw.color === 'string' && HEX_COLOR.test(raw.color) ? raw.color : '#ffffffff',
     width,
     height,
     // 테두리는 안쪽으로 물린다. 짧은 변의 절반을 넘으면 도형이 통째로 메워져

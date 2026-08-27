@@ -13,6 +13,7 @@
 
 import { useState } from 'react'
 
+import { FRAMES_MAX } from '@/core/types.ts'
 import { useDocumentStore } from '@/state/document.ts'
 import { useLayerUiStore } from '@/state/layerUi.ts'
 import { useUiStore } from '@/state/ui.ts'
@@ -47,7 +48,17 @@ export function CutPanel() {
   return (
     <div className="mm-cut-panel">
       <div className="mm-cut-head">
-        <button type="button" className="mm-btn mm-btn-primary" onClick={() => addCut()}>
+        <button
+          type="button"
+          className="mm-btn mm-btn-primary"
+          onClick={() => {
+            if (addCut() === null) {
+              setNotice(`전체 길이가 최대 ${FRAMES_MAX}프레임이라 컷을 더 넣을 자리가 없습니다.`)
+            } else {
+              setNotice(null)
+            }
+          }}
+        >
           컷 추가
         </button>
         <span className="mm-cut-total">
@@ -145,7 +156,10 @@ export function CutPanel() {
                 <button
                   type="button"
                   className="mm-btn"
-                  onClick={() => setPlayheadFrame(range.start)}
+                  onClick={() =>
+                    // 재생 범위 밖으로 헤드를 보내지 않는다 (옛 문서 방어).
+                    setPlayheadFrame(Math.min(range.start, doc.timeline.durationFrames - 1))
+                  }
                 >
                   {range.start} ~ {range.end} 로 이동
                 </button>

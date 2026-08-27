@@ -200,10 +200,16 @@ export async function applyBundle(bundle: ProjectBundle): Promise<ApplyBundleRes
     }
     try {
       const bitmap = await pngToBitmap(png)
-      decoded.set(
-        ref.id,
-        ref.prep?.bgRemove?.enabled === true ? await healTransparentColors(bitmap) : bitmap,
-      )
+      if (ref.prep?.bgRemove?.enabled === true) {
+        const healed = await healTransparentColors(bitmap)
+        // 성공하면 새 비트맵이 돌아온다. 중간 비트맵을 닫지 않으면 파일을 열 때마다
+        // 에셋당 전체 해상도 한 장이 GC 까지 메모리를 물고 있는다 (4000px 이면 64MB).
+        // 실패 경로는 원본을 그대로 돌려주므로 동일 객체 비교가 필요하다.
+        if (healed !== bitmap) bitmap.close()
+        decoded.set(ref.id, healed)
+      } else {
+        decoded.set(ref.id, bitmap)
+      }
     } catch {
       missingAssetIds.push(ref.id)
     }

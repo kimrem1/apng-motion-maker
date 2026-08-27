@@ -57,7 +57,7 @@ import { useDocumentStore } from '@/state/document.ts'
 import { useUiStore } from '@/state/ui.ts'
 import { NumberField } from '@/ui/widgets/Field.tsx'
 import { canvasForCrop } from './trimAsset.ts'
-import { ensurePrepOriginal, setPrepBase } from './prepOriginals.ts'
+import { ensurePrepOriginal, getPrepOriginalCanvas, setPrepBase } from './prepOriginals.ts'
 
 import './prep.css'
 
@@ -300,7 +300,35 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
 
         if (!alive) return
         setNatural({ w: original.width, h: original.height })
-        setSettings({ enabled: false, keyColor: key, tolerance, featherPx: 1, contiguous: true })
+
+        /*
+         * 문서에 남은 다듬기 기록을 초기값으로 되살린다.
+         *
+         * 이게 없으면 [적용] 이 항상 "자르기 없음 + 배경 제거 없음" 에서 출발해,
+         * EASY 에서 이미 자른 에셋에 배경 제거만 켜고 [적용] 해도 자르기가
+         * 소리 없이 취소된다 (buildResult 가 자르기 전 원본에서 시작하므로).
+         * 기록을 시드해 두면 [적용] 은 언제나 지금 상태의 재현이 된다.
+         * crop 기록은 원본 좌표계라 ensurePrepOriginal 크기와 그대로 맞는다.
+         */
+        const prep = asset.prep
+        if (prep?.crop) {
+          const [cx, cy, cw, ch] = prep.crop
+          setCropRect(
+            roundRect(
+              { x: cx, y: cy, w: cw, h: ch },
+              original.width,
+              original.height,
+            ),
+          )
+        }
+        const saved = prep?.bgRemove
+        setSettings({
+          enabled: saved?.enabled === true,
+          keyColor: (saved ? fromHex(saved.keyColor) : null) ?? key,
+          tolerance: saved?.tolerance ?? tolerance,
+          featherPx: saved?.featherPx ?? 1,
+          contiguous: saved?.contiguous ?? true,
+        })
         replacePreviewOut(null)
         setSourceRev((v) => v + 1)
       } catch (err) {
@@ -627,11 +655,13 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
         // 그려지고 있다. 원본 크기로 잡으면 잘라낸 그림이 프레임 일부만 채운다.
         const canvas = canvasForCrop(asset.id, result.width, result.height)
         store.setCanvasSize(canvas.w, canvas.h)
-      } else if (!cropRect && canvasBeforeRef.current) {
+      } else if (!cropRect) {
         // [자르기 해제] 후 [적용] 은 곧 자르기 취소다. 픽셀이 원본 크기로 돌아갔으니
         // 캔버스도 자르기 전으로 함께 되돌린다. 안 그러면 큰 그림이 작은 프레임에 잘린다.
-        const before = canvasBeforeRef.current
-        store.setCanvasSize(before.w, before.h)
+        // canvasBeforeRef 는 이 마운트의 [적용] 만 기억하므로, EASY 자르기가 줄인
+        // 캔버스는 prepOriginals 의 스냅샷에서 찾는다 (trimAsset 의 복구와 같은 출처).
+        const before = canvasBeforeRef.current ?? getPrepOriginalCanvas(asset.id)
+        if (before) store.setCanvasSize(before.w, before.h)
         canvasBeforeRef.current = null
       }
       // 크롭은 있는데 fitCanvas 만 끈 경우는 기억을 유지한다. 지우면 [되돌리기] 가
@@ -654,8 +684,10 @@ function PrepEditor({ asset }: { asset: AssetRef }) {
         height: original.height,
         hasAlpha,
       })
-      // 적용할 때 캔버스를 같이 바꿨으면 그것도 돌려놓는다.
-      const before = canvasBeforeRef.current
+      // 적용할 때 캔버스를 같이 바꿨으면 그것도 돌려놓는다. EASY 자르기가 줄인
+      // 캔버스는 이 패널이 기억하지 못하므로 prepOriginals 스냅샷으로 되돌린다
+      // (trimAsset.restoreAssetOriginal 과 같은 출처. 두 되돌리기가 갈리면 안 된다).
+      const before = canvasBeforeRef.current ?? getPrepOriginalCanvas(asset.id)
       if (before) {
         store.setCanvasSize(before.w, before.h)
         canvasBeforeRef.current = null

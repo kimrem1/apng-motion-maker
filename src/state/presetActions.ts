@@ -422,6 +422,18 @@ export function reapplyAppliedPresetSoon(): void {
 }
 
 /**
+ * 노브 재적용이 아직 문서를 따라잡지 못한 상태인가.
+ *
+ * EasyMode 의 문서→노브 동기화가 이걸 확인해야 한다. 드래그 중 스로틀 대기
+ * 구간에서는 노브가 문서보다 앞서 있는 것이 정상인데, 그때 문서 값으로 되돌리면
+ * 드래그가 손과 싸운다. 반대로 대기가 없는데 둘이 다르면 실행취소로 문서만
+ * 되돌아간 것이므로 문서가 진실이다.
+ */
+export function macroReapplyPending(): boolean {
+  return livePending || liveTimer !== null
+}
+
+/**
  * 드래그가 끝났을 때(포인터업/키업/블러) 부른다. 대기 중인 재적용을 지금 확정한다.
  * 노브가 실제로 움직인 적이 없으면(livePending false) 아무것도 하지 않는다.
  */

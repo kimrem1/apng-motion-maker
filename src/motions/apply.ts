@@ -42,6 +42,7 @@ import {
   mergePresetReveal,
   mergePresetTracks,
   ownershipFor,
+  presetOwnershipRecord,
 } from './merge.ts'
 
 // ---------------------------------------------------------------------------
@@ -358,6 +359,10 @@ export function baselineFps(doc: MotionProject): number {
  */
 export function fpsForDuration(sec: number, currentFps: number): number {
   const cap = currentFps > 0 ? currentFps : 25
+  // 지금 fps 로 담기면 그대로 둔다. 후보를 GIF 정확값에서만 고르면 24/30 같은
+  // 비정확 fps 는 절대 반환되지 않아서, 속도 1 로 프리셋을 적용하기만 해도
+  // 사용자가 고른 fps 가 소리 없이 강등된다. 내려야 할 때만 정확 사다리를 탄다.
+  if (Math.round(sec * cap) <= FRAMES_MAX) return cap
   let best = 0
   for (const f of GIF_EXACT_FPS) {
     if (f > cap + 1e-9) continue
@@ -555,23 +560,7 @@ function containReferenceScale(args: {
    *
    * 병합 규칙은 여기서 다시 적지 않는다. 확정 적용과 같은 헬퍼를 쓴다(merge.ts).
    */
-  /*
-   * 잴 레이어는 **적용이 끝난 뒤의 모습**이어야 한다.
-   *
-   * 예전에는 트랙과 모디파이어만 갈아끼우고 기준점 / 글자등장 / 가리기 / 원근은
-   * `...layer` 로 앞 프리셋이 남긴 값을 그대로 들고 쟀다. 그런데 바로 그 값들을
-   * 같은 적용의 뒷단(state/document.ts applyPresetTracks)이 새 프리셋 것으로 덮거나
-   * 기본값으로 되돌린다. 즉 적용이 끝나면 존재하지 않을 상태에서 기준 배율을 재고,
-   * 그 값이 Layer.containScale 로 문서에 남았다.
-   *
-   * 그래서 「경첩 열리며 등장」(기준점을 변으로 옮긴다) 다음에 「한 바퀴 회전」을
-   * 누르면, 기준점은 한가운데로 돌아가는데 담기 배율만 변에서 돈 원 기준(0.6)으로
-   * 박혀 그림이 60% 로 줄어든 채 돌았다. 깨끗한 레이어에 같은 프리셋만 누르면
-   * 100% 다. A -> B -> A 가 원래 값으로 안 돌아오는 자리이기도 하다.
-   *
-   * 병합 규칙은 여기서 다시 적지 않는다. 확정 적용과 같은 헬퍼를 쓴다(merge.ts).
-   */
-  const owned = ownershipFor(doc.presetRef, layer.id)
+  const owned = ownershipFor(doc, layer.id)
   const probeReveal = mergePresetReveal(layer.reveal, read.reveal, owned)
   const probeCharAnim = mergePresetCharAnim(layer.charAnim, read.charAnim, owned)
   const probePerspective = mergePresetPerspective(layer.perspective, read.perspective, owned)
@@ -670,7 +659,17 @@ export function withPresetApplied(
   result: PresetApplyResult,
 ): MotionProject {
   // 확정 적용(document.ts applyPresetTracks)과 같은 헬퍼여야 미리보기와 결과가 갈리지 않는다.
-  const owned = ownershipFor(doc.presetRef, layerId)
+  const owned = ownershipFor(doc, layerId)
+  // 소유권 기록도 확정 적용과 같은 함수로 만든다. 임시 문서가 "적용이 끝난 뒤의
+  // 문서" 와 같은 모양이어야 그 위에서 하는 어떤 판단도 갈리지 않는다.
+  const ownership = presetOwnershipRecord({
+    tracks: result.tracks,
+    effectIds: (result.effects ?? []).map((e) => e.id),
+    reveal: result.reveal,
+    charAnim: result.charAnim,
+    perspective: result.perspective,
+    anchor: result.anchor,
+  })
   const layers = doc.layers.map((layer) =>
     layer.id === layerId
       ? {
@@ -678,6 +677,7 @@ export function withPresetApplied(
           tracks: mergePresetTracks(layer.tracks, result.tracks, owned),
           modifiers: result.modifiers,
           effects: mergePresetEffects(layer.effects, result.effects, owned),
+          presetOwnership: ownership,
           // 담기 솔버가 미리보기와 확정 적용에서 같은 판단을 하도록 여기서도 심는다.
           // 빠뜨리면 슬라이드 사라짐이 호버 때만 가장자리에서 멈추고, 세기에 따라
           // 그림 크기가 미리보기에서만 달라진다.

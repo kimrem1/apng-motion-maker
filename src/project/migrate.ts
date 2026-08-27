@@ -44,6 +44,7 @@ import {
   type ModifierTarget,
   type ModifierType,
   type MotionProject,
+  type PresetOwnershipRecord,
   type RevealSpec,
   type SafeZonePolicy,
   type CharAnimSpec,
@@ -61,7 +62,7 @@ import { normalizeShapeSpec } from '@/core/shape.ts'
 import { normalizeRevealSpec } from '@/core/reveal.ts'
 import { normalizeTextSpec } from '@/core/text.ts'
 import { normalizeCharAnimSpec } from '@/core/charAnim.ts'
-import { normalizeCut } from '@/core/cuts.ts'
+import { CUT_FRAMES_MIN, cutRanges, cutsTotalFrames, normalizeCut } from '@/core/cuts.ts'
 import { EFFECT_BY_ID } from '@/effects/registry.ts'
 
 // ---------------------------------------------------------------------------
@@ -480,6 +481,43 @@ function collectIds(items: unknown[]): Set<string> {
   return out
 }
 
+/**
+ * 레이어의 프리셋 소유권 기록.
+ *
+ * 아무것도 소유하지 않는 기록은 통째로 지운다. 빈 기록이 저장 파일에 남으면
+ * 왕복 JSON 이 달라진다 (applyPresetTracks 는 빈 기록을 만들지 않는다).
+ * 목록의 잘못된 항목만 걸러 내고 모르는 하위 필드는 스프레드로 살려 둔다.
+ */
+function normalizePresetOwnership(raw: unknown): PresetOwnershipRecord | undefined {
+  if (!isRecord(raw)) return undefined
+  const rec = { ...raw } as PresetOwnershipRecord & RawRecord
+
+  if (Array.isArray(raw.props)) {
+    const props = raw.props.filter(
+      (p): p is TrackProp => typeof p === 'string' && (TRACK_PROPS as string[]).includes(p),
+    )
+    if (props.length > 0) rec.props = props
+    else delete rec.props
+  } else {
+    delete rec.props
+  }
+
+  if (Array.isArray(raw.effectIds)) {
+    const ids = raw.effectIds.filter((e): e is string => typeof e === 'string' && e.length > 0)
+    if (ids.length > 0) rec.effectIds = ids
+    else delete rec.effectIds
+  } else {
+    delete rec.effectIds
+  }
+
+  for (const key of ['ownsReveal', 'ownsPerspective', 'ownsCharAnim', 'ownsAnchor'] as const) {
+    if (raw[key] === true) rec[key] = true
+    else delete rec[key]
+  }
+
+  return Object.keys(rec).length > 0 ? rec : undefined
+}
+
 function normalizeLayer(
   raw: unknown,
   index: number,
@@ -673,6 +711,14 @@ function normalizeLayer(
     delete layer.text
   }
   /*
+   * 도형도 글자와 같은 규칙이다. `...raw` 가 살려 둔 문자열/불린 shape 가 남으면
+   * layerIntrinsicSize 가 undefined 크기를 돌려줘 담기 솔버와 변환 계산이 NaN 이
+   * 되고, 인스펙터와 렌더러가 그 레이어를 도형으로 취급한다.
+   */
+  if ('shape' in layer && !isRecord(layer.shape)) {
+    delete layer.shape
+  }
+  /*
    * 자르기는 참일 때만 남긴다.
    *
    * 객체가 ...raw 로 시작하므로 false 나 문자열이 그대로 살아남는다. 아무 일도 하지
@@ -697,6 +743,15 @@ function normalizeLayer(
   }
   if ('reveal' in layer && !isRecord(layer.reveal)) {
     delete layer.reveal
+  }
+  /*
+   * 프리셋 소유권 기록도 같은 규칙이다. `...raw` 가 살려 둔 값을 검증해서,
+   * 빈 기록이나 형식이 깨진 기록은 없는 것으로 돌린다.
+   */
+  if ('presetOwnership' in layer) {
+    const rec = normalizePresetOwnership(layer.presetOwnership)
+    if (rec) layer.presetOwnership = rec
+    else delete layer.presetOwnership
   }
 
   return layer
@@ -904,6 +959,47 @@ function normalizePresetRef(raw: unknown): MotionProject['presetRef'] | undefine
   return ref
 }
 
+/**
+ * presetRef 에 실려 온 소유권 필드(props / effectIds / owns*)를 레이어로 옮긴다.
+ *
+ * 소유권의 정본은 레이어의 presetOwnership 이다 (core/types.ts). 옛 저장 파일은
+ * presetRef 가 들고 있으므로, 어느 레이어의 것인지 아는 경우(layerId)에는 여기서
+ * 옮겨 새 형태로 맞춘다. 옮긴 뒤 presetRef 쪽을 지우지 않으면 같은 정보가 두 벌이
+ * 되어 다음 저장에도 옛 필드가 계속 남는다.
+ *
+ * layerId 를 모르는 아주 옛 문서는 옮길 곳이 없으므로 그대로 둔다. 지어내서
+ * 아무 레이어에 붙이면 그 레이어의 수동 편집이 다음 프리셋에 지워질 수 있다.
+ * 그쪽은 ownershipFor 의 폴백이 지금까지처럼 읽는다 (motions/merge.ts).
+ */
+function adoptLegacyOwnership(
+  ref: NonNullable<MotionProject['presetRef']>,
+  layers: Layer[],
+): void {
+  if (typeof ref.layerId !== 'string') return
+  const target = layers.find((l) => l.id === ref.layerId)
+  if (!target) return
+
+  // 새 형태의 저장본이 레이어 기록을 이미 들고 있으면 그쪽이 정본이다.
+  if (!target.presetOwnership) {
+    const record = normalizePresetOwnership({
+      props: ref.props,
+      effectIds: ref.effectIds,
+      ownsReveal: ref.ownsReveal,
+      ownsPerspective: ref.ownsPerspective,
+      ownsCharAnim: ref.ownsCharAnim,
+      ownsAnchor: ref.ownsAnchor,
+    })
+    if (record) target.presetOwnership = record
+  }
+
+  delete ref.props
+  delete ref.effectIds
+  delete ref.ownsReveal
+  delete ref.ownsPerspective
+  delete ref.ownsCharAnim
+  delete ref.ownsAnchor
+}
+
 function normalizeProject(raw: RawRecord, known: ReadonlySet<string>, bag: WarningBag): MotionProject {
   const base = createEmptyProject()
 
@@ -1000,14 +1096,73 @@ function normalizeProject(raw: RawRecord, known: ReadonlySet<string>, bag: Warni
    */
   const rawCuts = asArray(raw.cuts).filter(isRecord)
   if (rawCuts.length > 1) {
-    out.cuts = rawCuts.map((c, i) => normalizeCut(c as Partial<CutSpec>, i))
+    const cuts = rawCuts.map((c, i) => normalizeCut(c as Partial<CutSpec>, i))
+
+    /*
+     * id 중복을 가른다. 레이어/이펙트/에셋과 같은 규칙이다.
+     *
+     * normalizeCut 은 id 가 없으면 `cut${index+1}` 을 발급하므로, 파일에 이미
+     * 'cut2' 가 있고 두 번째 컷에 id 가 없으면 마이그레이션이 스스로 중복을 만든다.
+     * 중복 id 는 setCutFrames 가 두 컷을 함께 바꾸고 removeCut 이 두 컷을 한꺼번에
+     * 지우게 한다.
+     */
+    const reserved = new Set(cuts.map((c) => c.id))
+    const used = new Set<string>()
+    for (const cut of cuts) {
+      if (!used.has(cut.id)) {
+        used.add(cut.id)
+        continue
+      }
+      let n = cuts.length + 1
+      while (reserved.has(`cut${n}`) || used.has(`cut${n}`)) n += 1
+      bag.add('컷 이름표가 겹쳐 새로 매겼습니다.')
+      cut.id = `cut${n}`
+      used.add(cut.id)
+    }
+
+    /*
+     * 합계가 FRAMES_MAX 를 넘으면 끝 컷부터 줄인다 (state/cutActions.ts 의
+     * fitToBudget 과 같은 불변식). duration 은 아래에서 FRAMES_MAX 로 잘리는데
+     * 컷 구간이 그대로 남으면 뒤 컷이 재생도 내보내기도 도달하지 않는 유령
+     * 구간이 되고, 거기 배정된 레이어는 영영 안 보인다.
+     */
+    let trimmed = false
+    for (let guard = cuts.length; guard >= 0; guard -= 1) {
+      const ranges = cutRanges(cuts)
+      const last = ranges[ranges.length - 1]
+      const overflow = (last ? last.end + 1 : 0) - FRAMES_MAX
+      if (overflow <= 0) break
+      let idx = -1
+      for (let i = cuts.length - 1; i >= 0; i -= 1) {
+        if (cuts[i]!.frames > CUT_FRAMES_MIN) {
+          idx = i
+          break
+        }
+      }
+      if (idx < 0) break
+      const c = cuts[idx]!
+      c.frames = Math.max(CUT_FRAMES_MIN, c.frames - overflow)
+      c.crossFrames = Math.min(c.crossFrames, c.frames - 1)
+      trimmed = true
+    }
+    if (trimmed) bag.add('컷 길이 합계가 상한을 넘어 뒤쪽 컷을 줄였습니다.')
+
+    out.cuts = cuts
+    // 컷이 있는 문서의 duration 은 컷 합계가 정본이다. 어긋난 채 남으면
+    // 컷 패널의 길이 표시와 실제 재생 길이가 갈린다.
+    timeline.durationFrames = cutsTotalFrames(cuts)
   } else {
     delete out.cuts
   }
 
   const presetRef = normalizePresetRef(raw.presetRef)
-  if (presetRef) out.presetRef = presetRef
-  else delete out.presetRef
+  if (presetRef) {
+    // 옛 파일의 소유권 필드를 layerId 레이어의 기록으로 이전한다 (함수 주석).
+    adoptLegacyOwnership(presetRef, layers)
+    out.presetRef = presetRef
+  } else {
+    delete out.presetRef
+  }
 
   return out as unknown as MotionProject
 }

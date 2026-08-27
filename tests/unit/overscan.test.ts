@@ -18,7 +18,7 @@ import {
 } from '@/core/overscan.ts'
 import { resolveComposition } from '@/core/evaluate.ts'
 import { createEmptyProject, createImageLayer, createStaticTrack, resetIdCounter } from '@/core/factory.ts'
-import { identityTransform } from '@/core/transform.ts'
+import { buildLayerMatrix, identityTransform } from '@/core/transform.ts'
 import type { AssetRef, Layer, MotionProject, ResolvedTransform } from '@/core/types.ts'
 
 function setup(): { doc: MotionProject; layer: Layer } {
@@ -45,6 +45,58 @@ function setup(): { doc: MotionProject; layer: Layer } {
 }
 
 const tf = (patch: Partial<ResolvedTransform>): ResolvedTransform => ({ ...identityTransform(), ...patch })
+
+/**
+ * 렌더러와 같은 매트릭스로 이미지 사각형을 만들어 캔버스 네 꼭짓점이 전부 그 안에
+ * 들어오는지 본다(볼록 사각형 점-내부 판정).
+ *
+ * 일부러 솔버의 식을 재사용하지 않는다. 판정이 솔버 내부 식을 빌리면 솔버가 틀릴 때
+ * 판정도 같이 틀린다. 여기서는 buildLayerMatrix 의 투영 결과만 쓰므로, 솔버가 어떤
+ * 식으로 풀었든 이 판정을 통과해야만 "캔버스가 찬다" 고 말할 수 있다.
+ */
+function coversCanvas(
+  t: ResolvedTransform,
+  fit: Layer['fit'],
+  canvasW: number,
+  canvasH: number,
+  imageW: number,
+  imageH: number,
+): boolean {
+  const m = buildLayerMatrix(t, fit, canvasW, canvasH, imageW, imageH)
+  // 이미지 꼭짓점을 둘레 순서로 투영한다. 변(외적) 판정이 순서를 전제한다.
+  const px: number[] = []
+  const py: number[] = []
+  for (const [u, v] of [[0, 0], [1, 0], [1, 1], [0, 1]] as [number, number][]) {
+    const w = m[2]! * u + m[5]! * v + m[8]!
+    if (!(w > 0)) return false
+    px.push((m[0]! * u + m[3]! * v + m[6]!) / w)
+    py.push((m[1]! * u + m[4]! * v + m[7]!) / w)
+  }
+  // 감김 방향(부호 있는 넓이)을 곱해 두면 뒤집힌 배율에서도 판정이 뒤집히지 않는다.
+  let area2 = 0
+  for (let i = 0; i < 4; i += 1) {
+    const j = (i + 1) % 4
+    area2 += px[i]! * py[j]! - py[i]! * px[j]!
+  }
+  const sign = area2 > 0 ? 1 : -1
+  for (const [qx, qy] of [
+    [-canvasW / 2, -canvasH / 2],
+    [canvasW / 2, -canvasH / 2],
+    [canvasW / 2, canvasH / 2],
+    [-canvasW / 2, canvasH / 2],
+  ] as [number, number][]) {
+    for (let i = 0; i < 4; i += 1) {
+      const j = (i + 1) % 4
+      const ex = px[j]! - px[i]!
+      const ey = py[j]! - py[i]!
+      const cross = sign * (ex * (qy - py[i]!) - ey * (qx - px[i]!))
+      // cross / |변| = 변에서 점까지의 부호 있는 거리다. 매트릭스가 Float32 라
+      // 경계에 정확히 닿는 해에서 반올림이 생기므로 0.01px 여유를 둔다.
+      if (cross < -0.01 * Math.hypot(ex, ey)) return false
+    }
+  }
+  return true
+}
 
 describe('requiredScaleAt', () => {
   it('모션이 없으면 캔버스/이미지 비율 그대로다', () => {
@@ -346,5 +398,123 @@ describe('부모 이동 상속', () => {
     const need = solveLayerOverscan(doc, fg, 600, 600, { marginRatio: 0 })
     // 자기 트랙은 비었지만 부모가 12% 움직이므로 k 1.24 가 필요하다
     expect(need.kRequired).toBeCloseTo(1.24, 4)
+  })
+})
+
+describe('기준점(anchor) 회귀: 솔버는 렌더러의 회전축을 그대로 본다 (버그 1)', () => {
+  it('기준점 (0.25, 0.25) + 회전 45도: 중심 가정(sqrt2)의 두 배가 필요하다', () => {
+    const { doc, layer } = setup()
+    layer.anchor = [0.25, 0.25]
+    layer.tracks = [createStaticTrack('rotate', 'deg', 45)]
+    const need = solveLayerOverscan(doc, layer, 600, 600, { marginRatio: 0 })
+
+    /*
+     * 기하 근거: cover 기준 배율에서 이미지는 캔버스와 같은 500px 정사각형이다.
+     * 기준점 (0.25, 0.25) 는 화면 (-125, -125) 에 박힌 채 회전/배율의 축이 된다
+     * (buildLayerMatrix: 기준점은 축이지 배치 원점이 아니다). 45도에서 가장 먼
+     * 캔버스 꼭짓점 (250, -250) 은 축에서 로컬 -y 방향으로 353.55px 인데, 이미지가
+     * 축의 그쪽으로 뻗는 길이는 0.25 x 500c = 125c 뿐이다. 353.55 / 125 = 2*sqrt2.
+     * 회전이 이미지 중심을 돈다고 가정한 옛 식은 sqrt2 를 줘서 절반밖에 못 채웠다.
+     */
+    expect(need.correction).toBeCloseTo(2 * Math.SQRT2, 3)
+    expect(need.clipped).toBe(false)
+
+    // 판정: 보정을 실제로 곱한 변환이 전 프레임에서 캔버스를 덮는다.
+    const map = new Map([[layer.id, need]])
+    for (let f = 0; f < doc.timeline.durationFrames; f += 1) {
+      const t = resolveComposition(doc, f, map)[0]!.transform
+      expect(coversCanvas(t, layer.fit, 500, 500, 600, 600), `frame ${f}`).toBe(true)
+    }
+
+    // 대조: 옛 중심 가정 답(sqrt2)만 곱하면 여전히 빈다. 기대값 증가가 옳다는 증거다.
+    const raw = resolveComposition(doc, 0)[0]!.transform
+    expect(
+      coversCanvas({ ...raw, scaleX: Math.SQRT2, scaleY: Math.SQRT2 }, layer.fit, 500, 500, 600, 600),
+    ).toBe(false)
+  })
+
+  it('대조군: 중앙 기준점은 sqrt2 로 충분하고 실제로 덮인다', () => {
+    const { doc, layer } = setup()
+    layer.tracks = [createStaticTrack('rotate', 'deg', 45)]
+    const need = solveLayerOverscan(doc, layer, 600, 600, { marginRatio: 0 })
+    expect(need.correction).toBeCloseTo(Math.SQRT2, 3)
+    expect(need.clipped).toBe(false)
+
+    const map = new Map([[layer.id, need]])
+    for (let f = 0; f < doc.timeline.durationFrames; f += 1) {
+      const t = resolveComposition(doc, f, map)[0]!.transform
+      expect(coversCanvas(t, layer.fit, 500, 500, 600, 600), `frame ${f}`).toBe(true)
+    }
+  })
+
+  it('기준점 (0, 0) + 회전 45도는 어떤 배율로도 못 덮는다: clipped 로 알린다', () => {
+    const { doc, layer } = setup()
+    layer.anchor = [0, 0]
+    layer.tracks = [createStaticTrack('rotate', 'deg', 45)]
+    const need = solveLayerOverscan(doc, layer, 600, 600, { marginRatio: 0 })
+
+    /*
+     * 이 경우는 "보정 후 네 꼭짓점이 전부 덮인다" 가 기하적으로 성립할 수 없다.
+     *
+     * 기준점 (0, 0) 은 화면 (-250, -250), 즉 캔버스 왼쪽 위 꼭짓점에 정확히 박히고
+     * (cover 배율 5/6 x 0.5 x 600 = 250px), 이미지는 그 점을 꼭짓점으로 하는 90도
+     * 부채꼴로만 자란다. 45도 돌리면 부채꼴은 [45, 135]도 방향을 덮는데 캔버스는
+     * 같은 꼭짓점에서 [0, 90]도 를 차지한다. 배율은 부채꼴의 반지름만 키울 뿐 벌어진
+     * 각도를 못 바꾸므로 (250, -250) 쪽 꼭짓점은 영원히 빈다. 아래에서 배율 50 을
+     * 곱해도 안 덮이는 것으로 이 불가능성을 직접 입증한다 (판정 근거).
+     *
+     * 그래서 솔버의 옳은 답은 "덮을 수 있는 방향까지만 채우고 clipped 로 알린다" 다.
+     * 그 하한은 맞은편 꼭짓점 (250, 250) 이 주는 sqrt2 다. 옛 식은 같은 sqrt2 를
+     * 주고도 아무 진단이 없어서 캔버스 꼭짓점이 약 500px 빈 채 조용히 내보내졌다
+     * (버그 1 실측). 담기 솔버가 CONTAIN_MIN_SCALE 하한에 걸렸을 때 clipped 를
+     * 켜는 것과 같은 처리다.
+     */
+    expect(need.clipped).toBe(true)
+    expect(need.correction).toBeCloseTo(Math.SQRT2, 3)
+
+    const raw = resolveComposition(doc, 0)[0]!.transform
+    expect(coversCanvas({ ...raw, scaleX: 50, scaleY: 50 }, layer.fit, 500, 500, 600, 600)).toBe(false)
+  })
+})
+
+describe('비정사각 원본 + 90도 초과 회전: probe 부호 접기 회귀 (버그 2)', () => {
+  it('100x1000 원본, 회전 135도 + 이동 (100, -100) 에서 빈 띠가 없다', () => {
+    const { doc, layer } = setup()
+    doc.assets[0]!.naturalW = 100
+    doc.assets[0]!.naturalH = 1000
+    layer.tracks = [
+      createStaticTrack('rotate', 'deg', 135),
+      createStaticTrack('translateX', 'px', 100),
+      createStaticTrack('translateY', 'px', -100),
+    ]
+    const need = solveLayerOverscan(doc, layer, 100, 1000, { marginRatio: 0 })
+
+    /*
+     * 기하 근거: cover 기준 배율 5 에서 이미지는 500 x 5000. 좁은 축(로컬 x,
+     * 반폭 250c)이 지배한다. 캔버스 꼭짓점을 이미지 로컬로 되돌리면(-135도) 가장
+     * 먼 것이 (-250, 250) - (100, -100) = (-350, 350) 으로 |x_local| = 700/sqrt2
+     * = 494.97. 그래서 c = 494.97 / 250 = 1.9799 (절대 배율 9.899) 가 필요하다.
+     *
+     * 옛 probe 는 tx/ty/회전을 전부 절댓값으로 접었다. 135도에서 이동의 로컬 x
+     * 성분은 tx*cos + ty*sin = (-100 - 100)/sqrt2 로 부호가 맞물려 커지는데,
+     * (+100, +100, +135도) 로 접으면 두 항이 상쇄되어 0 이 된다. 그래서 회전만
+     * 있을 때 값인 7.071 로 29% 과소 계산했고 그만큼 빈 띠가 남았다 (실측).
+     */
+    expect(need.correction).toBeCloseTo(1.9799, 3)
+    expect(need.sRequired).toBeCloseTo(9.8995, 3)
+    expect(need.clipped).toBe(false)
+
+    // 판정: 보정을 실제로 곱한 변환이 전 프레임에서 캔버스를 덮는다.
+    const map = new Map([[layer.id, need]])
+    for (let f = 0; f < doc.timeline.durationFrames; f += 1) {
+      const t = resolveComposition(doc, f, map)[0]!.transform
+      expect(coversCanvas(t, layer.fit, 500, 500, 100, 1000), `frame ${f}`).toBe(true)
+    }
+
+    // 대조: 옛 probe 의 답(7.071 / 5)만 곱하면 여전히 빈 띠가 남는다.
+    const raw = resolveComposition(doc, 0)[0]!.transform
+    expect(
+      coversCanvas({ ...raw, scaleX: 7.071 / 5, scaleY: 7.071 / 5 }, layer.fit, 500, 500, 100, 1000),
+    ).toBe(false)
   })
 })

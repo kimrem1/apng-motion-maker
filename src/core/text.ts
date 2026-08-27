@@ -130,10 +130,11 @@ export function normalizeTextSpec(raw: Partial<TextSpec> & { align?: unknown }):
 
   // 줄바꿈은 살리고 나머지 제어문자는 버린다. 탭은 공백 하나로 본다.
   const rawContent = typeof raw.content === 'string' ? raw.content : ''
-  const content = stripControl(rawContent.replace(CRLF, '\n').replace(TABS, ' ')).slice(
-    0,
-    TEXT_LIMITS.chars,
-  )
+  // 상한은 코드포인트 단위로 자른다. 코드유닛 slice 는 경계에 걸린 서로게이트 쌍
+  // (이모지)을 반쪽 내고, 그 고아 서로게이트가 U+FFFD(깨진 글자)로 그려진다.
+  const content = Array.from(stripControl(rawContent.replace(CRLF, '\n').replace(TABS, ' ')))
+    .slice(0, TEXT_LIMITS.chars)
+    .join('')
 
   return {
     content,

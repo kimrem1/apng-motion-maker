@@ -29,21 +29,76 @@ function defaultFrames(cuts: readonly CutSpec[]): number {
 }
 
 /**
+ * 클램프 전 총 길이. cutsTotalFrames 는 FRAMES_MAX 로 잘라 돌려주므로 예산 검사에
+ * 못 쓴다. 잘린 값과 비교하면 초과분이 안 보인다.
+ */
+function rawTotalFrames(cuts: readonly CutSpec[]): number {
+  const ranges = cutRanges(cuts)
+  const last = ranges[ranges.length - 1]
+  return last ? last.end + 1 : 0
+}
+
+/**
+ * 총 길이가 FRAMES_MAX 를 넘으면 끝 컷부터 줄여서 예산 안에 맞춘다.
+ *
+ * duration 은 FRAMES_MAX 로 잘리는데 컷 구간은 그대로 남으면, 뒤 컷이 재생도
+ * 내보내기도 도달하지 않는 유령 구간이 되고 거기 넣은 레이어는 영영 안 보인다.
+ * 컷 목록과 duration 이 항상 일치해야 한다는 불변식을 여기 한 곳에서 지킨다.
+ */
+function fitToBudget(next: CutSpec[]): CutSpec[] {
+  let out = next
+  for (let guard = out.length; guard >= 0; guard -= 1) {
+    const overflow = rawTotalFrames(out) - FRAMES_MAX
+    if (overflow <= 0) return out
+    let idx = -1
+    for (let i = out.length - 1; i >= 0; i -= 1) {
+      if (out[i]!.frames > CUT_FRAMES_MIN) {
+        idx = i
+        break
+      }
+    }
+    // 전부 최소 길이면 더 줄일 수 없다. (addCut 이 예산을 지키므로 UI 로는 못 온다)
+    if (idx < 0) return out
+    const c = out[idx]!
+    const frames = Math.max(CUT_FRAMES_MIN, c.frames - overflow)
+    out = out.map((x, i) =>
+      i === idx ? { ...x, frames, crossFrames: Math.min(x.crossFrames, frames - 1) } : x,
+    )
+  }
+  return out
+}
+
+/**
  * 컷 목록을 통째로 갈아 끼우고 타임라인 길이를 맞춘다.
  *
  * 길이를 따로 세팅하면 실행취소가 두 칸 쌓이고 그 사이에 길이만 바뀐 문서가 남는다.
  */
 function writeCuts(label: string, next: CutSpec[], coalesceKey?: string): void {
-  useDocumentStore.getState().setCuts(next, cutsTotalFrames(next), label, coalesceKey)
+  const fitted = fitToBudget(next)
+  useDocumentStore.getState().setCuts(fitted, cutsTotalFrames(fitted), label, coalesceKey)
 }
 
-export function addCut(): string {
+let cutIdSeq = 0
+
+/**
+ * 컷을 하나 더한다. 예산(FRAMES_MAX)에 안 담기면 null 을 돌려주고 아무것도 하지
+ * 않는다. 호출부가 그 사실을 사용자에게 알려야 한다.
+ */
+export function addCut(): string | null {
   const doc = useDocumentStore.getState().doc
   const cuts = cutsOf(doc)
-  const id = `cut${Date.now().toString(36)}`
+  const remaining = FRAMES_MAX - rawTotalFrames(cuts)
+  if (remaining < CUT_FRAMES_MIN) return null
+  // Date.now 만으로는 같은 밀리초의 연속 추가가 같은 id 를 받는다. 카운터를 병기한다.
+  const id = `cut${Date.now().toString(36)}${(cutIdSeq++).toString(36)}`
   const next: CutSpec[] = [
     ...cuts,
-    { id, name: `컷 ${cuts.length + 1}`, frames: defaultFrames(cuts), crossFrames: 0 },
+    {
+      id,
+      name: `컷 ${cuts.length + 1}`,
+      frames: Math.min(defaultFrames(cuts), remaining),
+      crossFrames: 0,
+    },
   ]
   writeCuts('컷 추가', next)
   return id
@@ -62,22 +117,29 @@ export function removeCut(cutId: string): void {
 
 export function setCutFrames(cutId: string, frames: number): void {
   const doc = useDocumentStore.getState().doc
-  const next = cutsOf(doc).map((c) =>
-    c.id === cutId
-      ? { ...c, frames: Math.max(CUT_FRAMES_MIN, Math.min(FRAMES_MAX, Math.round(frames))) }
-      : c,
-  )
-  writeCuts('컷 길이 변경', next, `cutFrames:${cutId}`)
+  const cuts = cutsOf(doc)
+  const apply = (want: number): CutSpec[] =>
+    cuts.map((c) => (c.id === cutId ? { ...c, frames: want } : c))
+  let want = Math.max(CUT_FRAMES_MIN, Math.min(FRAMES_MAX, Math.round(frames)))
+  // 예산 초과분은 지금 만지는 컷이 흡수한다. writeCuts 의 안전망에 맡기면
+  // 1번 컷을 늘렸는데 마지막 컷이 줄어드는 이상한 일이 생긴다.
+  const overflow = rawTotalFrames(apply(want)) - FRAMES_MAX
+  if (overflow > 0) want = Math.max(CUT_FRAMES_MIN, want - overflow)
+  writeCuts('컷 길이 변경', apply(want), `cutFrames:${cutId}`)
 }
 
 export function setCutCross(cutId: string, crossFrames: number): void {
   const doc = useDocumentStore.getState().doc
-  const next = cutsOf(doc).map((c) =>
-    c.id === cutId
-      ? { ...c, crossFrames: Math.max(0, Math.min(c.frames - 1, Math.round(crossFrames))) }
-      : c,
-  )
-  writeCuts('컷 전환 변경', next, `cutCross:${cutId}`)
+  const cuts = cutsOf(doc)
+  const target = cuts.find((c) => c.id === cutId)
+  if (!target) return
+  const apply = (cross: number): CutSpec[] =>
+    cuts.map((c) => (c.id === cutId ? { ...c, crossFrames: cross } : c))
+  let want = Math.max(0, Math.min(target.frames - 1, Math.round(crossFrames)))
+  // 겹침을 줄이면 총 길이가 늘어난다. 예산을 넘기면 겹침 하한을 올려 막는다.
+  const overflow = rawTotalFrames(apply(want)) - FRAMES_MAX
+  if (overflow > 0) want = Math.min(target.frames - 1, want + overflow)
+  writeCuts('컷 전환 변경', apply(want), `cutCross:${cutId}`)
 }
 
 export function setCutName(cutId: string, name: string): void {
