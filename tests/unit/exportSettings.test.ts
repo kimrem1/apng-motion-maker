@@ -26,6 +26,10 @@ function base(width: number, height: number): ExportSettings {
     dither: 0,
     quality: 0.9,
     lossless: false,
+    rotate: 0,
+    flip: 'none',
+    freeze: 0,
+    degrain: false,
   }
 }
 

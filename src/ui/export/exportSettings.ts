@@ -12,6 +12,7 @@
  */
 
 import { CANVAS_MAX, GIF_COLOR_CHOICES } from '@/core/types.ts'
+import { FREEZE_DEFAULT } from '@/export/compress.ts'
 import type { ExportFormat, ExportSettings } from '@/export/pipeline.ts'
 
 export type ExportPurposeId = 'sticker' | 'web' | 'messenger' | 'sns' | 'custom'
@@ -240,6 +241,16 @@ export function settingsForPurpose(
     // WebP 전용 필드. 다른 포맷의 인코더는 읽지 않는다.
     quality: WEBP_QUALITY_DEFAULT,
     lossless: false,
+    /*
+     * 방향과 용량 필터는 용도와 무관하다. 용도는 "어디에 올릴 건가" 이고 이 넷은
+     * "결과물을 어떻게 손볼 건가" 라, 라디오를 갈아탄다고 사용자가 고른 회전이
+     * 되돌아가면 안 된다. 그래서 여기서는 언제나 기본값을 내고, 화면이 자기 상태로
+     * 덮어쓴다 (ui/export/ExportDialog.tsx).
+     */
+    rotate: 0,
+    flip: 'none',
+    freeze: FREEZE_DEFAULT,
+    degrain: false,
   }
 }
 

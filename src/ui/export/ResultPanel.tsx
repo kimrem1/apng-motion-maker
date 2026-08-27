@@ -115,14 +115,21 @@ export function ResultPanel({
   const isGif = result.settings.format === 'gif'
   const isWebp = result.settings.format === 'webp'
   const webpUsable = isWebpSupported()
-  const canShrink = Math.min(result.width, result.height) * SHRINK_RATIO >= MIN_EXPORT_PX
+  /*
+   * 줄이기는 **설정의 렌더 크기**를 기준으로 잰다.
+   *
+   * result.width / height 는 회전 후 크기라, 90도가 걸린 결과에서 그 값을 설정에
+   * 되먹이면 가로세로가 조용히 뒤바뀐다. 회전 없이도 어긋날 수 있던 자리다.
+   */
+  const canShrink =
+    Math.min(result.settings.width, result.settings.height) * SHRINK_RATIO >= MIN_EXPORT_PX
   const formatNote = FORMAT_NOTE[result.extension]
 
   const handleShrink = (): void => {
     onReencode({
       ...result.settings,
-      width: Math.max(MIN_EXPORT_PX, Math.round(result.width * SHRINK_RATIO)),
-      height: Math.max(MIN_EXPORT_PX, Math.round(result.height * SHRINK_RATIO)),
+      width: Math.max(MIN_EXPORT_PX, Math.round(result.settings.width * SHRINK_RATIO)),
+      height: Math.max(MIN_EXPORT_PX, Math.round(result.settings.height * SHRINK_RATIO)),
     })
   }
 
@@ -233,7 +240,10 @@ export function ResultPanel({
         />
         <p className="mm-field-hint">
           {result.presetName.length > 0
-            ? `원본명_${result.presetName}_${result.width} 규칙으로 지었습니다. 바꿔도 됩니다.`
+            ? // 파일명에 들어가는 것은 긴 변이다 (exportFileName.ts). 회전이 걸리면
+              // result.width 가 짧은 변일 수 있어서, 여기서 폭을 그대로 쓰면 안내가
+              // 실제 파일명과 어긋난다.
+              `원본명_${result.presetName}_${Math.max(result.width, result.height)} 규칙으로 지었습니다. 바꿔도 됩니다.`
             : '원본명_크기 규칙으로 지었습니다. 바꿔도 됩니다.'}
         </p>
 

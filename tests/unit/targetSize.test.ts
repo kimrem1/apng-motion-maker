@@ -35,6 +35,10 @@ function settings(patch: Partial<ExportSettings> = {}): ExportSettings {
     dither: 1,
     quality: 0.82,
     lossless: false,
+    rotate: 0,
+    flip: 'none',
+    freeze: 0,
+    degrain: false,
     ...patch,
   }
 }
@@ -59,15 +63,17 @@ function fakeMeasure(bytesPerUnit = 1): SizeMeasure {
 /** 사다리 칸이 base 대비 어떤 축을 건드렸는지. */
 function touched(base: SizeCandidate, c: SizeCandidate) {
   return {
+    freeze: c.settings.freeze !== base.settings.freeze,
     width: c.settings.width !== base.settings.width,
     frames: c.fps !== base.fps || c.durationFrames !== base.durationFrames,
+    quality: c.settings.quality !== base.settings.quality,
     colors: c.settings.maxColors !== base.settings.maxColors,
     dither: c.settings.dither !== base.settings.dither,
   }
 }
 
 describe('buildSizeLadder 조정 순서', () => {
-  it('해상도를 먼저 줄이고, 그다음 프레임, 그다음 색상, 마지막이 디더다', () => {
+  it('얼리기를 먼저 걸고, 그다음 해상도, 프레임, 색상, 마지막이 디더다', () => {
     const base = baseCandidate()
     const ladder = buildSizeLadder(base)
 
@@ -75,15 +81,18 @@ describe('buildSizeLadder 조정 순서', () => {
     expect(ladder.length).toBeLessThanOrEqual(MAX_LADDER_RUNGS)
 
     // 각 축이 처음 등장하는 칸 번호
-    const firstIndex = (key: 'width' | 'frames' | 'colors' | 'dither'): number =>
+    const firstIndex = (key: 'freeze' | 'width' | 'frames' | 'colors' | 'dither'): number =>
       ladder.findIndex((c) => touched(base, c)[key])
 
+    const freeze = firstIndex('freeze')
     const width = firstIndex('width')
     const frames = firstIndex('frames')
     const colors = firstIndex('colors')
     const dither = firstIndex('dither')
 
-    expect(width).toBe(0)
+    // 얼리기가 맨 앞이다. 해상도도 프레임도 색상도 그대로 두는 유일한 축이다.
+    expect(freeze).toBe(0)
+    expect(width).toBeGreaterThan(freeze)
     expect(frames).toBeGreaterThan(width)
     expect(colors).toBeGreaterThan(frames)
     expect(dither).toBeGreaterThan(colors)
@@ -93,9 +102,35 @@ describe('buildSizeLadder 조정 순서', () => {
     const base = baseCandidate()
     for (const rung of buildSizeLadder(base)) {
       const t = touched(base, rung)
+      if (t.width) expect(t.freeze).toBe(true)
       if (t.frames) expect(t.width).toBe(true)
       if (t.colors) expect(t.frames).toBe(true)
       if (t.dither) expect(t.colors).toBe(true)
+    }
+  })
+
+  it('WebP 는 색상 대신 화질 칸을 만든다', () => {
+    const base = baseCandidate({ format: 'webp' })
+    const ladder = buildSizeLadder(base)
+    expect(ladder.some((c) => c.settings.quality < base.settings.quality)).toBe(true)
+    for (const rung of ladder) {
+      expect(rung.settings.maxColors).toBe(base.settings.maxColors)
+      const t = touched(base, rung)
+      if (t.quality) expect(t.frames).toBe(true)
+    }
+  })
+
+  it('무손실 WebP 에는 화질 칸을 만들지 않는다', () => {
+    const base = baseCandidate({ format: 'webp', lossless: true })
+    for (const rung of buildSizeLadder(base)) {
+      expect(rung.settings.quality).toBe(base.settings.quality)
+    }
+  })
+
+  it('이미 센 얼리기를 골라 뒀으면 그 칸을 만들지 않는다', () => {
+    const base = baseCandidate({ freeze: 40 })
+    for (const rung of buildSizeLadder(base)) {
+      expect(rung.settings.freeze).toBe(40)
     }
   })
 
@@ -202,7 +237,8 @@ describe('planForTargetSize', () => {
   it('줄일 여지가 전혀 없어도 이유를 남긴다', async () => {
     // 이미 하한이라 사다리가 비는 경우
     const base: SizeCandidate = {
-      settings: settings({ format: 'apng', width: 96, height: 96 }),
+      // 얼리기까지 이미 상한이라 어느 축으로도 더 갈 곳이 없다.
+      settings: settings({ format: 'apng', width: 96, height: 96, freeze: 40 }),
       durationFrames: 20,
       fps: 10,
     }

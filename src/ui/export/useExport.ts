@@ -13,6 +13,7 @@ import type { WebpWarning } from '@/export/webp/encoder.ts'
 import {
   ExportAbortError,
   exportFrames,
+  outputSize,
   runExport,
   type ExportProgress,
   type ExportSettings,
@@ -208,6 +209,7 @@ export function useExport(): UseExportResult {
       // 결과에서 사본이 하나 더 생겨 탭이 죽는다.
       const blob = output.blob
       const presetName = presetNameOf(doc)
+      const out = outputSize(settings)
 
       setResult({
         blob,
@@ -217,12 +219,15 @@ export function useExport(): UseExportResult {
         fileName: buildExportFileName({
           sourceName: sourceName(doc),
           presetName: presetName.length > 0 ? presetName : undefined,
-          width: settings.width,
+          // 파일명에 들어가는 것은 "결과물의 긴 변" 이다. 회전이 걸리면 렌더 크기가
+          // 아니라 회전 후 크기여야 파일명과 실제 파일이 맞는다.
+          width: Math.max(out.width, out.height),
           extension: output.extension,
         }),
         presetName,
-        width: settings.width,
-        height: settings.height,
+        // 화면에 보이는 크기도 회전 후 크기다. 결과 패널이 이 값으로 크기를 적는다.
+        width: out.width,
+        height: out.height,
         frameCount: exportFrames(doc).length,
         fps: doc.timeline.fps,
         loopLabel: loopLabel(doc),

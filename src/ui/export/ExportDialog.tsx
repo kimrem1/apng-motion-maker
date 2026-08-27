@@ -24,7 +24,15 @@ import {
 
 import { CANVAS_MAX, CANVAS_MIN, FPS_CHOICES, FRAMES_MAX } from '@/core/types.ts'
 import { isGifExactFps } from '@/core/time.ts'
-import { exportFrames, type ExportFormat, type ExportSettings } from '@/export/pipeline.ts'
+import {
+  exportFrames,
+  outputSize,
+  type ExportFlip,
+  type ExportFormat,
+  type ExportRotate,
+  type ExportSettings,
+} from '@/export/pipeline.ts'
+import { FREEZE_DEFAULT, FREEZE_GENTLE, FREEZE_MAX } from '@/export/compress.ts'
 import {
   estimateExportSize,
   formatBytes,
@@ -81,6 +89,34 @@ const FORMAT_OPTIONS: readonly {
   { value: 'apng', label: 'APNG', hint: '반투명 그대로' },
   { value: 'webp', label: 'WebP', hint: '반투명 그대로, 가장 작음' },
   { value: 'gif', label: 'GIF', hint: '어디서나 열림' },
+]
+
+/**
+ * 회전 선택지. 시계 방향이 양수다.
+ *
+ * 라벨을 각도가 아니라 방향으로 적는다. "270도" 를 보고 어느 쪽으로 도는지
+ * 바로 아는 사람은 드물다. 세로로 찍은 사진을 가로로 눕히는 것이 이 노브의
+ * 거의 유일한 쓰임새라, 왼쪽/오른쪽이 곧 답이다.
+ */
+const ROTATE_OPTIONS: readonly { value: ExportRotate; label: string }[] = [
+  { value: 0, label: '그대로' },
+  { value: 90, label: '오른쪽 90도' },
+  { value: 180, label: '180도' },
+  { value: 270, label: '왼쪽 90도' },
+]
+
+/** 회전 값 -> 라벨. 요약 줄이 각도를 다시 적지 않고 이 표를 쓴다. */
+const ROTATE_LABEL: Record<ExportRotate, string> = {
+  0: '그대로',
+  90: '오른쪽 90도',
+  180: '180도',
+  270: '왼쪽 90도',
+}
+
+const FLIP_OPTIONS: readonly { value: ExportFlip; label: string }[] = [
+  { value: 'none', label: '없음' },
+  { value: 'x', label: '좌우' },
+  { value: 'y', label: '상하' },
 ]
 
 /**
@@ -148,6 +184,19 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
   const [estimate, setEstimate] = useState<SizeEstimate | null>(null)
   const [estimating, setEstimating] = useState(false)
 
+  /*
+   * 방향과 용량 필터.
+   *
+   * custom 안이 아니라 밖에 둔다. 용도 라디오(스티커 / 웹 / 메신저 / SNS)를 갈아타도
+   * 살아 있어야 하기 때문이다. 용도는 "어디에 올릴 건가" 이고 이 넷은 "결과물을
+   * 어떻게 손볼 건가" 라, 라디오를 한 번 스쳤다고 골라 둔 회전이 되돌아가면 안 된다.
+   * settingsForPurpose 는 언제나 기본값을 내고 아래 baseSettings 가 이 상태로 덮어쓴다.
+   */
+  const [rotate, setRotate] = useState<ExportRotate>(0)
+  const [flip, setFlip] = useState<ExportFlip>('none')
+  const [freeze, setFreeze] = useState(FREEZE_DEFAULT)
+  const [degrain, setDegrain] = useState(false)
+
   // 목표 용량 맞추기
   const [targetOn, setTargetOn] = useState(false)
   const [targetMb, setTargetMb] = useState(DEFAULT_TARGET_MB)
@@ -184,13 +233,19 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
    * 내보내기가 그 비율 차이만큼 그림을 늘려 버린다(사양 라디오를 왔다 갔다 해야
    * 고쳐지던 증상). 상태를 동기화하는 대신 파생 계산으로 못 박는다.
    */
-  const baseSettings: ExportSettings = useMemo(
-    () =>
-      isCustom
-        ? fitSettingsToCanvas(custom, doc.canvas.w, doc.canvas.h)
-        : settingsForPurpose(purpose, doc.canvas.w, doc.canvas.h),
-    [isCustom, custom, purpose, doc.canvas.w, doc.canvas.h],
-  )
+  const baseSettings: ExportSettings = useMemo(() => {
+    const sized = isCustom
+      ? fitSettingsToCanvas(custom, doc.canvas.w, doc.canvas.h)
+      : settingsForPurpose(purpose, doc.canvas.w, doc.canvas.h)
+    /*
+     * 방향과 용량 필터는 마지막에 덮어쓴다.
+     *
+     * fitSettingsToCanvas 앞이 아니라 뒤여야 한다. 그쪽은 width / height 를 캔버스
+     * 비율로 되맞추는 함수이고, 여기 네 값은 크기 계산과 무관하다. 순서를 바꿔도
+     * 결과는 같지만, 뒤에 두면 "크기는 크기끼리, 손보기는 손보기끼리" 가 눈에 보인다.
+     */
+    return { ...sized, rotate, flip, freeze, degrain }
+  }, [isCustom, custom, purpose, doc.canvas.w, doc.canvas.h, rotate, flip, freeze, degrain])
   const settingsKey = JSON.stringify(baseSettings)
 
   /**
@@ -209,6 +264,16 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
 
   /** 실제로 내보낼 설정. 계획을 적용했으면 계획 쪽이 이긴다. */
   const effective: ExportSettings = plan ? plan.settings : baseSettings
+
+  /*
+   * 화면에 보이는 크기는 언제나 **회전 후** 크기다.
+   *
+   * settings.width / height 는 렌더 크기라 90도에서 파일과 다르다. 한 화면에서
+   * 서로 다른 두 크기가 보이면 사용자는 어느 쪽이 결과인지 알 수 없다.
+   */
+  const outSize = outputSize(effective)
+  const baseOutSize = outputSize(baseSettings)
+  const rotated = effective.rotate === 90 || effective.rotate === 270
 
   const frameCount = useMemo(() => exportFrames(doc).length, [doc])
   const plannedFrameCount = useMemo(() => {
@@ -447,11 +512,12 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
     ? [
         {
           label: '크기',
-          before: `${baseSettings.width} x ${baseSettings.height}`,
-          after: `${plan.settings.width} x ${plan.settings.height}`,
+          // 회전 후 크기로 적는다. 아래 [예상 결과] 와 같은 자를 써야 한 화면에서
+          // 서로 다른 두 숫자가 안 보인다.
+          before: `${baseOutSize.width} x ${baseOutSize.height}`,
+          after: `${outSize.width} x ${outSize.height}`,
           same:
-            baseSettings.width === plan.settings.width &&
-            baseSettings.height === plan.settings.height,
+            baseOutSize.width === outSize.width && baseOutSize.height === outSize.height,
         },
         {
           label: '속도',
@@ -741,6 +807,137 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
               ) : null}
 
               {/* ------------------------------------------------------------
+                방향.
+
+                `세부 설정` 안이 아니라 밖이다. 저쪽은 `직접 고르기` 에서만 보이는데,
+                스티커로 내보내는 사람도 세로로 찍은 그림을 돌려야 한다.
+                90 의 배수와 반전은 픽셀 순열이라 화질이 한 픽셀도 안 상한다.
+              ------------------------------------------------------------ */}
+              <section className="mm-section">
+                <h3 className="mm-section-title">방향</h3>
+
+                <fieldset className="mm-fieldset">
+                  <legend className="mm-field-label">회전</legend>
+                  <div className="mm-radio-row">
+                    {ROTATE_OPTIONS.map((r) => (
+                      <label key={r.value} className="mm-radio">
+                        <input
+                          type="radio"
+                          name="mm-export-rotate"
+                          checked={rotate === r.value}
+                          disabled={busy}
+                          onChange={() => {
+                            setRotate(r.value)
+                          }}
+                        />
+                        <span>{r.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <fieldset className="mm-fieldset">
+                  <legend className="mm-field-label">뒤집기</legend>
+                  <div className="mm-radio-row">
+                    {FLIP_OPTIONS.map((f) => (
+                      <label key={f.value} className="mm-radio">
+                        <input
+                          type="radio"
+                          name="mm-export-flip"
+                          checked={flip === f.value}
+                          disabled={busy}
+                          onChange={() => {
+                            setFlip(f.value)
+                          }}
+                        />
+                        <span>{f.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <p className="mm-field-hint">
+                  결과 파일 자체를 돌립니다. 오른쪽 90도와 왼쪽 90도에서는 가로세로가 바뀝니다.
+                  화질은 한 픽셀도 상하지 않습니다.
+                  {rotated ? ` 지금 설정이면 ${outSize.width} x ${outSize.height} 로 나옵니다.` : ''}
+                </p>
+              </section>
+
+              {/* ------------------------------------------------------------
+                용량 다이어트.
+
+                해상도도 프레임도 색상도 줄이지 않고 파일만 줄이는 두 노브다.
+                용량 맞추기 바로 위에 둔다. 자동 조정이 첫 번째로 건드리는 축이
+                얼리기라서, 자동으로 켜졌을 때 어떤 값인지 여기서 보인다.
+              ------------------------------------------------------------ */}
+              <section className="mm-section">
+                <h3 className="mm-section-title">용량 다이어트</h3>
+
+                <div className="mm-field">
+                  <label className="mm-field-label" htmlFor="mm-export-freeze">
+                    움직임 없는 곳 얼리기
+                  </label>
+                  <input
+                    id="mm-export-freeze"
+                    className="mm-range"
+                    type="range"
+                    min={0}
+                    max={FREEZE_MAX}
+                    step={1}
+                    value={freeze}
+                    disabled={busy}
+                    aria-valuetext={freeze === 0 ? '끔' : `${freeze}`}
+                    onChange={(e) => {
+                      setFreeze(Number(e.target.value))
+                    }}
+                  />
+                  <p className="mm-field-hint">
+                    {freeze === 0
+                      ? '끔. 파일이 커지는 가장 큰 원인은 눈에 안 보이는 미세한 색 흔들림입니다. 손잡이를 오른쪽으로 옮기면 그만큼을 얼려서 파일만 줄입니다.'
+                      : `${freeze}. 직전 화면과 이만큼 가까운 픽셀은 다시 그리지 않습니다. 해상도와 색상은 그대로입니다.`}
+                    {freeze > FREEZE_GENTLE + 6
+                      ? ' 이 정도로 올리면 평평한 면에 얼룩이 보일 수 있습니다.'
+                      : ''}
+                  </p>
+                  <div className="mm-btn-row">
+                    <button
+                      type="button"
+                      className="mm-btn"
+                      disabled={busy || freeze === FREEZE_GENTLE}
+                      onClick={() => {
+                        setFreeze(FREEZE_GENTLE)
+                      }}
+                    >
+                      알아서 (권장 {FREEZE_GENTLE})
+                    </button>
+                    <button
+                      type="button"
+                      className="mm-btn"
+                      disabled={busy || freeze === 0}
+                      onClick={() => {
+                        setFreeze(0)
+                      }}
+                    >
+                      끄기
+                    </button>
+                  </div>
+                </div>
+
+                <ToggleField
+                  label="그레인(미세 노이즈) 먼저 걷어내기"
+                  checked={degrain}
+                  disabled={busy}
+                  onChange={setDegrain}
+                  ariaLabel="그레인 제거"
+                />
+                <p className="mm-field-hint">
+                  사진에 낀 아주 작은 알갱이는 프레임마다 달라져서 용량을 크게 먹습니다. 선과 글자는
+                  건드리지 않고 그 알갱이만 걷어냅니다. 얼리기와 함께 쓰면 훨씬 잘 듭니다. 대신
+                  프레임마다 한 번씩 더 계산하므로 내보내기가 조금 느려집니다.
+                </p>
+              </section>
+
+              {/* ------------------------------------------------------------
                 목표 용량 맞추기. 4노브보다 위에 놓는 1급 컨트롤이다.
               ------------------------------------------------------------ */}
               <section className="mm-section mm-target">
@@ -799,8 +996,9 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
 
                 {!plan && !planning ? (
                   <p className="mm-field-hint">
-                    해상도, 프레임 수, 색상 수를 영향이 큰 순서로 자동 조정합니다. 무엇을 얼마나
-                    줄였는지 그대로 보여드리고, 마음에 들 때만 적용합니다.
+                    먼저 위의 얼리기를 걸어 보고, 그래도 넘치면 해상도, 프레임 수, 화질, 색상 수를
+                    차례로 줄입니다. 얼리기는 해상도도 색도 그대로 두는 유일한 축이라 맨 앞입니다.
+                    무엇을 얼마나 줄였는지 그대로 보여드리고, 마음에 들 때만 적용합니다.
                   </p>
                 ) : null}
 
@@ -873,7 +1071,8 @@ export function ExportDialog({ open, onClose }: ExportDialogProps) {
                   <div>
                     <dt>크기</dt>
                     <dd>
-                      {effective.width} x {effective.height}
+                      {outSize.width} x {outSize.height}
+                      {rotated ? ` (${ROTATE_LABEL[effective.rotate]})` : ''}
                     </dd>
                   </div>
                   <div>

@@ -25,6 +25,7 @@ import {
   SAMPLE_FRAME_MAX,
 } from '@/export/gif/encoder.ts'
 import { WebpStreamEncoder, encodeWebp, type WebpWarning } from '@/export/webp/encoder.ts'
+import { FrameFilterChain } from '@/export/compress.ts'
 import { yieldToHost } from '@/export/yield.ts'
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,42 @@ import { yieldToHost } from '@/export/yield.ts'
 // ---------------------------------------------------------------------------
 
 export type ExportFormat = 'apng' | 'gif' | 'webp' | 'png-sequence'
+
+/**
+ * 결과 파일 자체를 돌리는 각도. 시계 방향이고 90 의 배수만 있다.
+ *
+ * 임의 각도는 리샘플링이 필요하다. 그러면 가장자리가 뭉개지고 알파가 번져서, 이
+ * 파이프라인이 지키는 "미리보기가 곧 결과물" 이 깨진다. 90 의 배수는 픽셀 순열이라
+ * 한 픽셀도 섞이지 않는다. 그림을 비스듬히 돌리고 싶으면 레이어 회전을 쓰면 된다.
+ */
+export type ExportRotate = 0 | 90 | 180 | 270
+
+/** 회전을 마친 뒤의 반전. 'x' 는 좌우, 'y' 는 상하다. */
+export type ExportFlip = 'none' | 'x' | 'y'
+
+export interface ExportOrientation {
+  rotate: ExportRotate
+  flip: ExportFlip
+}
+
+export const NO_ORIENTATION: ExportOrientation = { rotate: 0, flip: 'none' }
+
+/**
+ * 방향을 적용한 뒤의 픽셀 크기.
+ *
+ * 90 과 270 에서만 가로세로가 바뀐다. 반전은 크기를 바꾸지 않는다.
+ * 인코더는 프레임 버퍼의 **길이**만 검증하므로(gif/encoder.ts, apng/encoder.ts),
+ * 여기를 틀리게 넘겨도 예외가 나지 않고 찢어진 파일이 조용히 만들어진다.
+ */
+export function orientedSize(
+  width: number,
+  height: number,
+  orient: ExportOrientation,
+): { width: number; height: number } {
+  return orient.rotate === 90 || orient.rotate === 270
+    ? { width: height, height: width }
+    : { width, height }
+}
 
 export interface ExportSettings {
   format: ExportFormat
@@ -51,6 +88,33 @@ export interface ExportSettings {
   quality: number
   /** WebP 전용. 브라우저가 무손실을 못 만들면 경고를 내고 손실로 떨어진다. */
   lossless: boolean
+  /**
+   * 결과 파일 자체의 회전. 시계 방향이다.
+   *
+   * width / height 는 **회전 전** 렌더 크기다. 캔버스 비율을 그대로 따라야
+   * fitSettingsToCanvas 와 용량 맞추기 사다리가 성립한다. 실제 파일 크기는
+   * orientedSize(width, height, ...) 다. 여기에 회전 후 크기를 넣으면
+   * fitSettingsToCanvas 가 캔버스 비율에 맞춰 되돌려 회전이 무효가 된다.
+   */
+  rotate: ExportRotate
+  /** 회전 뒤의 반전. */
+  flip: ExportFlip
+  /**
+   * 움직임 없는 픽셀을 얼려 두는 세기. 0 이면 끈다.
+   *
+   * 프레임마다 색이 아주 조금씩 흔들리는 픽셀(사진의 그레인, 그라데이션의 디더 잡티,
+   * 압축 잔여물)이 용량의 대부분을 먹는다. 눈에는 안 보이는데 코덱은 그걸 전부
+   * "바뀐 픽셀" 로 보기 때문이다. 이 값보다 가까운 색이면 화면에 이미 찍혀 있는 값을
+   * 그대로 두고 갱신하지 않는다. APNG 는 차분 사각형이 좁아지고, GIF 는 같은
+   * 팔레트 인덱스가 길게 이어져 LZW 가 짧아진다.
+   *
+   * 비교 대상이 "직전 입력 프레임" 이 아니라 "지금 화면에 찍혀 있는 값" 이라서
+   * 오차가 누적되지 않는다. 아무리 오래 얼어 있어도 참값과의 거리가 이 값 안이다.
+   * 자세한 규칙은 export/compress.ts 에 있다.
+   */
+  freeze: number
+  /** 그레인(미세 노이즈)을 미리 걷어낸다. 얼리기가 훨씬 잘 먹는다. */
+  degrain: boolean
 }
 
 export interface ExportProgress {
@@ -170,12 +234,88 @@ export function readbackToStraight(
   height: number,
   matte: Rgb255 | null,
 ): void {
-  const rowBytes = width * 4
+  readbackToOriented(src, dst, width, height, matte, NO_ORIENTATION)
+}
 
-  for (let y = 0; y < height; y += 1) {
-    let s = (height - 1 - y) * rowBytes
-    let d = y * rowBytes
-    for (let x = 0; x < width; x += 1, s += 4, d += 4) {
+/**
+ * 리드백 픽셀을 straight alpha 로 바꾸면서 결과 파일의 방향까지 맞춘다.
+ *
+ * 왜 한 패스인가
+ *
+ * 회전을 별도 패스로 두면 4000px 프레임 한 장(64MB)이 더 상주한다. 스트리밍 경로가
+ * "힙에는 프레임 두어 장만 남는다" 를 근거로 상한을 잡고 있어서(MEMORY_BUDGET_BYTES,
+ * STREAM_FLUSH_BYTES) 그 근거가 무너진다. 어차피 여기는 이미 세로 뒤집기를 하느라
+ * 읽기 인덱스를 계산하고 있다. 읽는 자리만 바꾸면 회전과 반전이 공짜로 따라온다.
+ *
+ * 90 의 배수 회전과 반전은 픽셀 순열이라 리샘플링이 0 이다. 한 픽셀도 섞이지 않는다.
+ *
+ * srcWidth / srcHeight 는 **렌더 크기**이고, dst 는 orientedSize 크기로 채워진다.
+ * 바이트 수는 같으므로 호출자의 할당은 그대로다.
+ *
+ * 인덱스 맵 (P = 4, R = srcWidth * 4). 출력 픽셀을 순서대로 쓰고 읽기 자리만 옮긴다.
+ *
+ *   회전   base                          stepX  stepY  출력 크기
+ *   0      (srcH-1)*R                    +P     -R     srcW x srcH   (세로 뒤집기만)
+ *   90     0                             +R     +P     srcH x srcW
+ *   180    (srcW-1)*P                    -P     +R     srcW x srcH
+ *   270    (srcH-1)*R + (srcW-1)*P       -R     -P     srcH x srcW
+ *
+ * 반전은 회전이 끝난 좌표계에서 base 와 step 을 접기만 한다.
+ */
+export function readbackToOriented(
+  src: Uint8Array,
+  dst: Uint8Array,
+  srcWidth: number,
+  srcHeight: number,
+  matte: Rgb255 | null,
+  orient: ExportOrientation,
+): void {
+  const P = 4
+  const R = srcWidth * P
+  const out = orientedSize(srcWidth, srcHeight, orient)
+  const dstW = out.width
+  const dstH = out.height
+
+  let base: number
+  let stepX: number
+  let stepY: number
+  switch (orient.rotate) {
+    case 90:
+      base = 0
+      stepX = R
+      stepY = P
+      break
+    case 180:
+      base = (srcWidth - 1) * P
+      stepX = -P
+      stepY = R
+      break
+    case 270:
+      base = (srcHeight - 1) * R + (srcWidth - 1) * P
+      stepX = -R
+      stepY = -P
+      break
+    case 0:
+    default:
+      base = (srcHeight - 1) * R
+      stepX = P
+      stepY = -R
+      break
+  }
+
+  if (orient.flip === 'x') {
+    base += (dstW - 1) * stepX
+    stepX = -stepX
+  } else if (orient.flip === 'y') {
+    base += (dstH - 1) * stepY
+    stepY = -stepY
+  }
+
+  let d = 0
+  for (let dy = 0; dy < dstH; dy += 1) {
+    const rowStart = base + dy * stepY
+    for (let dx = 0; dx < dstW; dx += 1, d += P) {
+      const s = rowStart + dx * stepX
       const a = src[s + 3]!
 
       if (matte) {
@@ -320,11 +460,25 @@ export interface RenderSequenceArgs {
   doc: MotionProject
   renderer: Renderer
   assets: AssetTable
+  /** **렌더** 크기. 회전이 걸려도 이 값은 캔버스 비율 그대로다. */
   width: number
   height: number
   /** 인코딩할 프레임 인덱스 목록. exportFrameIndices 결과이거나 그 부분집합이다. */
   frames: readonly number[]
   matte: Rgb255 | null
+  /**
+   * 결과 파일의 방향. 생략하면 지금까지와 같다(세로 뒤집기만).
+   * 렌더 타깃은 이 값과 무관하게 언제나 width x height 다. 타깃을 뒤바꾸면
+   * 회전이 아니라 찌그러진 그림이 나온다.
+   */
+  orient?: ExportOrientation
+  /**
+   * 용량 다이어트 필터. 생략하면 걸지 않는다.
+   *
+   * 상태를 들고 있으므로(얼리기 화면) 내보내기 한 번에 하나여야 한다. 호출자가
+   * 만들어 넘긴다. 여기서 만들면 통짜 경로와 스트리밍 경로가 각자 다른 화면을 들게 된다.
+   */
+  filter?: FrameFilterChain
   onFrame?(done: number, total: number): void
   signal?: AbortSignal
 }
@@ -344,9 +498,10 @@ export interface RenderSinkArgs extends RenderSequenceArgs {
  * (풀은 반납 전에는 같은 걸 다시 주지 않는다) 120프레임에 FBO 120개가 생긴다.
  */
 export async function renderFrameSink(args: RenderSinkArgs): Promise<void> {
-  const { doc, renderer, assets, frames, matte, onFrame, signal, sink } = args
+  const { doc, renderer, assets, frames, matte, onFrame, signal, sink, filter } = args
   const width = Math.max(1, Math.round(args.width))
   const height = Math.max(1, Math.round(args.height))
+  const orient = args.orient ?? NO_ORIENTATION
   const gl = renderer.gl
   const total = frames.length
 
@@ -370,7 +525,10 @@ export async function renderFrameSink(args: RenderSinkArgs): Promise<void> {
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, scratch)
 
       const rgba = new Uint8Array(width * height * 4)
-      readbackToStraight(scratch, rgba, width, height, matte)
+      // 방향은 리드백과 한 패스로 묶는다. 회전 후 크기라도 바이트 수는 같다.
+      readbackToOriented(scratch, rgba, width, height, matte, orient)
+      // 용량 필터는 회전이 끝난 좌표계에서 돈다. 얼리기 화면도 그 좌표계다.
+      filter?.apply(rgba)
       await sink(rgba, i)
 
       onFrame?.(i + 1, total)
@@ -505,6 +663,20 @@ export interface RunExportArgs {
   signal?: AbortSignal
 }
 
+/** 설정에서 방향만 뽑는다. 두 필드를 따로 읽는 곳이 늘어나면 반드시 한쪽을 빠뜨린다. */
+export function orientationOf(settings: ExportSettings): ExportOrientation {
+  return { rotate: settings.rotate, flip: settings.flip }
+}
+
+/** 이 설정으로 만들어질 파일의 픽셀 크기. 회전이 걸리면 렌더 크기와 다르다. */
+export function outputSize(settings: ExportSettings): { width: number; height: number } {
+  return orientedSize(
+    Math.max(1, Math.round(settings.width)),
+    Math.max(1, Math.round(settings.height)),
+    orientationOf(settings),
+  )
+}
+
 /** 이 설정으로 실제 인코딩될 프레임 인덱스. UI 의 프레임 수 표시도 이걸 쓴다. */
 export function exportFrames(doc: MotionProject): number[] {
   const { durationFrames, loop } = doc.timeline
@@ -522,6 +694,22 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
   const height = Math.max(1, Math.round(settings.height))
   const frames = exportFrames(doc)
   const matte = resolveMatte(doc, settings)
+  /*
+   * 렌더 크기와 파일 크기가 갈라지는 유일한 자리다.
+   *
+   *   width / height  렌더 타깃. 캔버스 비율 그대로다
+   *   out.width / out.height  실제 파일. 90 / 270 이면 가로세로가 바뀐다
+   *
+   * 인코더는 버퍼 길이만 검증하므로 여기를 섞으면 예외 없이 찢어진 파일이 나온다.
+   */
+  const orient = orientationOf(settings)
+  const out = orientedSize(width, height, orient)
+  const filter = new FrameFilterChain({
+    freeze: settings.freeze,
+    degrain: settings.degrain,
+    width: out.width,
+    height: out.height,
+  })
 
   /*
    * 통짜 버퍼가 예산을 넘으면 스트리밍으로 간다. 여기서 막고 "크기를 줄여 달라" 고
@@ -537,6 +725,9 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
       height,
       frames,
       matte,
+      orient,
+      out,
+      filter,
       onProgress,
       signal,
     })
@@ -558,6 +749,8 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
     height,
     frames,
     matte,
+    orient,
+    filter,
     signal,
     onFrame: (done, total) => {
       onProgress?.({
@@ -581,8 +774,9 @@ export async function runExport(args: RunExportArgs): Promise<ExportOutput> {
     doc,
     settings,
     frames: rendered,
-    width,
-    height,
+    // 인코더에는 회전 후 크기를 넘긴다. 프레임 버퍼가 이미 그 모양이다.
+    width: out.width,
+    height: out.height,
     signal,
     onProgress: (done, total) => {
       // 인코더가 진행률을 못 주면 이 콜백이 아예 안 불린다. 그래도 위에서 40% 를
@@ -835,10 +1029,15 @@ interface StreamExportArgs {
   renderer: Renderer
   assets: AssetTable
   settings: ExportSettings
+  /** 렌더 크기. 캔버스 비율 그대로다. */
   width: number
   height: number
   frames: readonly number[]
   matte: Rgb255 | null
+  orient: ExportOrientation
+  /** 회전을 마친 뒤의 파일 크기. 인코더와 팔레트가 쓰는 값이다. */
+  out: { width: number; height: number }
+  filter: FrameFilterChain
   onProgress?(p: ExportProgress): void
   signal?: AbortSignal
 }
@@ -855,8 +1054,21 @@ interface StreamExportArgs {
  * 같은 세션 인코더를 쓰므로 픽셀 결과가 같다.
  */
 async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput> {
-  const { doc, renderer, assets, settings, width, height, frames, matte, onProgress, signal } =
-    args
+  const {
+    doc,
+    renderer,
+    assets,
+    settings,
+    width,
+    height,
+    frames,
+    matte,
+    orient,
+    out,
+    filter,
+    onProgress,
+    signal,
+  } = args
   const total = frames.length
 
   throwIfAborted(signal)
@@ -869,6 +1081,20 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
     // 표본 장수는 크기에 따라 줄인다. 4000px 에서 16장이면 그것만 1GB 다.
     const sampleIndices = pickSampleIndices(total, paletteSampleCount(width, height))
     const sampleFrames: Uint8Array[] = []
+    /*
+     * 표본에는 본 필터를 쓰지 않는다.
+     *
+     * 얼리기는 화면 상태를 들고 있어서, 여기서 돌리면 본 렌더가 시작하기도 전에
+     * 화면이 표본 프레임들로 채워진다. 그러면 첫 프레임부터 엉뚱한 값과 비교하게 된다.
+     * 그레인 제거만 걸어 준다. 그쪽은 색을 실제로 바꾸므로 팔레트가 그 색을 봐야 한다.
+     * 얼리기는 새 색을 만들지 않으므로 팔레트와 무관하다.
+     */
+    const paletteFilter = new FrameFilterChain({
+      freeze: 0,
+      degrain: settings.degrain,
+      width: out.width,
+      height: out.height,
+    })
     await renderFrameSink({
       doc,
       renderer,
@@ -877,14 +1103,18 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
       height,
       frames: sampleIndices.map((i) => frames[i]!),
       matte,
+      orient,
+      filter: paletteFilter,
       signal,
       sink: (rgba) => {
         sampleFrames.push(rgba)
       },
     })
     gifPalette = buildPaletteFromFrames(sampleFrames, {
-      width,
-      height,
+      // 표본 프레임은 이미 회전돼 있다. 여기에 렌더 크기를 넘기면 던지지 않고
+      // 디더 좌표만 어긋나 무늬가 비스듬해진다 (gif/encoder.ts prepareFrame).
+      width: out.width,
+      height: out.height,
       maxColors: settings.maxColors,
       transparent: settings.transparent,
       dither: settings.dither,
@@ -895,8 +1125,8 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
   const { session, mime, extension } = createStreamSession({
     doc,
     settings,
-    width,
-    height,
+    width: out.width,
+    height: out.height,
     frameCount: total,
     gifPalette,
     warnings,
@@ -920,6 +1150,8 @@ async function runExportStreaming(args: StreamExportArgs): Promise<ExportOutput>
     height,
     frames,
     matte,
+    orient,
+    filter,
     signal,
     sink: async (rgba) => {
       await session.add(rgba)

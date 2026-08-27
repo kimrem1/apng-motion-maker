@@ -8,11 +8,14 @@
  *
  * ## 조정 순서
  *
- * 효과가 큰 순서다.
+ * 앞칸일수록 눈에 덜 띄는 희생이다.
+ *   0) 얼리기   - 움직임 없는 픽셀을 갱신하지 않는다. 해상도도 프레임도 색상도
+ *                 그대로라 앞칸에 둔다. 대신 정지 구간이 없는 모션에서는 거의 안 준다
  *   1) 해상도  - 픽셀 수는 면적으로 줄어든다. 0.7배면 절반이다. 가장 강력하다
  *   2) 프레임 수 - fps 를 내려 같은 길이를 더 적은 프레임으로 담는다. 선형으로 준다
- *   3) 색상 수  - GIF 전용. 인덱스 비트폭이 줄어 LZW 가 짧아진다
- *   4) 압축 파라미터 - 디더를 끄면 인접 픽셀이 같아져 LZW 런이 길어진다
+ *   3) 화질    - WebP 전용. 손실 압축 강도를 올린다
+ *   4) 색상 수  - GIF 전용. 인덱스 비트폭이 줄어 LZW 가 짧아진다
+ *   5) 압축 파라미터 - 디더를 끄면 인접 픽셀이 같아져 LZW 런이 길어진다
  *
  * 위 순서대로 사다리(ladder)를 만들고 그 위에서 이분 탐색한다. 사다리를 쓰는 이유는
  * 네 노브를 동시에 흔들면 결과를 설명할 수 없기 때문이다. 사다리는 단조 감소이므로
@@ -20,9 +23,13 @@
  *
  * ## 인코딩 횟수
  *
- * 실제 측정은 비싸다(표본 8프레임을 렌더 + 인코딩). 기본 5회로 제한한다.
- * 1회는 현재 설정 확인에 쓰고, 남은 4회로 15칸 사다리를 이분 탐색한다
- * (ceil(log2(16)) = 4). 예산이 떨어지면 그때까지 찾은 최선을 돌려준다.
+ * 실제 측정은 비싸다(표본 8프레임을 렌더 + 인코딩). 기본 6회로 제한한다.
+ * 1회는 현재 설정 확인에 쓰고, 남은 5회로 18칸 사다리를 이분 탐색한다
+ * (ceil(log2(19)) = 5). 예산이 떨어지면 그때까지 찾은 최선을 돌려준다.
+ *
+ * 5회 / 15칸이었다가 한 칸씩 늘렸다. 얼리기(2칸)와 WebP 화질(3칸)이 들어오면서
+ * GIF 사다리가 18칸이 되었고, 15칸에서 끊으면 맨 뒤의 디더 칸이 통째로 사라져
+ * "디더까지 끄면 들어갈 파일" 이 해상도를 깎은 채로 나왔다.
  *
  * DOM 을 참조하지 않는다. 측정은 measure 콜백으로 주입받으므로 워커에서도 돈다.
  */
@@ -137,16 +144,31 @@ export function createEstimateMeasure(
   }
 }
 
-export const DEFAULT_MAX_ATTEMPTS = 5
+export const DEFAULT_MAX_ATTEMPTS = 6
 const DEFAULT_MIN_WIDTH = 96
 const DEFAULT_MIN_FPS = 10
 const DEFAULT_MIN_COLORS = GIF_COLOR_CHOICES[0]
 
 /**
- * 사다리 길이 상한. 이분 탐색이 ceil(log2(15+1)) = 4회에 끝나야
- * 첫 측정 1회를 합쳐 5회 예산에 들어간다. 늘리면 예산을 넘긴다.
+ * 사다리 길이 상한. 이분 탐색이 ceil(log2(18+1)) = 5회에 끝나야
+ * 첫 측정 1회를 합쳐 6회 예산에 들어간다. 늘리면 예산을 넘긴다.
+ *
+ * 18 은 가장 긴 사다리(GIF)의 실제 길이다.
+ * 얼리기 2 + 해상도 5 + 프레임 6 + 색상 3 + 디더 2 = 18.
  */
-export const MAX_LADDER_RUNGS = 15
+export const MAX_LADDER_RUNGS = 18
+
+/**
+ * 얼리기 사다리.
+ *
+ * 두 칸뿐인 이유는 이 축이 금방 포화하기 때문이다. 10 이면 그레인과 디더 잡티가
+ * 대부분 얼고, 18 이면 평평한 면까지 얼어붙는다. 그 위는 얼룩이 눈에 띄기 시작하는
+ * 대신 줄어드는 양은 완만해져서, 칸을 더 만들어도 측정 예산만 쓴다.
+ *
+ * 사용자가 이미 더 센 값을 골라 뒀으면 그 칸은 만들지 않는다. 사다리는 단조
+ * 감소여야 이분 탐색이 성립한다.
+ */
+const FREEZE_STEPS = [10, 18] as const
 
 /** 해상도 축소 비율. 원본 대비 절대값이다(누적이 아니다). */
 const SCALE_STEPS = [0.85, 0.72, 0.6, 0.5, 0.42] as const
@@ -160,6 +182,15 @@ const FPS_STEPS = [50, 30, 25, 20, 15, 12.5, 10] as const
 /** GIF 팔레트 사다리. 화면 선택지와 같은 값이어야 한다(core/types.ts GIF_COLOR_CHOICES). */
 const COLOR_STEPS = [...GIF_COLOR_CHOICES].reverse()
 
+/**
+ * WebP 화질 사다리. 0~1 이다.
+ *
+ * 이 축이 없으면 WebP 는 해상도와 프레임 수 두 노브밖에 없다. 색상/디더는 GIF
+ * 전용이라 통째로 건너뛰기 때문이다. 그래서 목표에 조금 못 미치는 WebP 가 굳이
+ * 해상도까지 깎여 나왔다. 0.4 아래로는 또렷한 가장자리에 링잉이 눈에 띈다.
+ */
+const QUALITY_STEPS = [0.7, 0.55, 0.4] as const
+
 /** 압축 파라미터. 디더는 마지막에 건드린다(가장 눈에 덜 띄지만 효과도 작다). */
 const DITHER_STEPS = [0.5, 0] as const
 
@@ -167,14 +198,26 @@ const DITHER_STEPS = [0.5, 0] as const
 // 사다리
 // ---------------------------------------------------------------------------
 
-function scaledCandidate(base: SizeCandidate, scale: number, minWidth: number): SizeCandidate {
+/**
+ * 앞칸에서 이어받되 크기는 언제나 **base** 기준으로 잰다.
+ *
+ * 비율을 누적하지 않는 이유는 사다리 칸의 뜻이 "원본의 몇 배" 여야 화면 문구
+ * (describeChanges)와 맞기 때문이다. 반대로 다른 축(얼리기 등)은 앞칸에서
+ * 이어받아야 한다. base 를 통째로 펼치면 앞칸이 걸어 둔 얼리기가 여기서 풀린다.
+ */
+function scaledCandidate(
+  prev: SizeCandidate,
+  base: SizeCandidate,
+  scale: number,
+  minWidth: number,
+): SizeCandidate {
   const baseWidth = Math.max(1, Math.round(base.settings.width))
   const baseHeight = Math.max(1, Math.round(base.settings.height))
   const width = Math.max(minWidth, Math.round(baseWidth * scale))
-  if (width >= baseWidth) return base
+  if (width >= baseWidth) return prev
   // 종횡비는 반드시 유지한다. 한쪽만 줄이면 결과가 찌그러진다.
   const height = Math.max(1, Math.round((baseHeight * width) / baseWidth))
-  return { ...base, settings: { ...base.settings, width, height } }
+  return { ...prev, settings: { ...prev.settings, width, height } }
 }
 
 function withFps(prev: SizeCandidate, base: SizeCandidate, fps: number): SizeCandidate {
@@ -195,10 +238,18 @@ export function buildSizeLadder(base: SizeCandidate, limits: SizePlanLimits = {}
   const rungs: SizeCandidate[] = []
   let cur = base
 
+  // 0) 얼리기. 그림의 크기도 색도 그대로라 가장 앞이다.
+  for (const freeze of FREEZE_STEPS) {
+    if (rungs.length >= MAX_LADDER_RUNGS) return rungs
+    if (freeze <= cur.settings.freeze) continue
+    cur = { ...cur, settings: { ...cur.settings, freeze } }
+    rungs.push(cur)
+  }
+
   // 1) 해상도
   for (const scale of SCALE_STEPS) {
     if (rungs.length >= MAX_LADDER_RUNGS) return rungs
-    const next = scaledCandidate(base, scale, minWidth)
+    const next = scaledCandidate(cur, base, scale, minWidth)
     if (next.settings.width >= cur.settings.width) continue // 하한에 닿았다
     cur = next
     rungs.push(cur)
@@ -212,7 +263,17 @@ export function buildSizeLadder(base: SizeCandidate, limits: SizePlanLimits = {}
     rungs.push(cur)
   }
 
-  // 3) 색상 수. APNG 는 트루컬러라 팔레트 노브가 없다. 칸을 만들면 측정만 낭비한다.
+  // 3) 화질. WebP 전용이다. 무손실을 켜 뒀으면 이 값은 안 읽히므로 칸을 만들지 않는다.
+  if (base.settings.format === 'webp' && !base.settings.lossless) {
+    for (const quality of QUALITY_STEPS) {
+      if (rungs.length >= MAX_LADDER_RUNGS) return rungs
+      if (quality >= cur.settings.quality) continue
+      cur = { ...cur, settings: { ...cur.settings, quality } }
+      rungs.push(cur)
+    }
+  }
+
+  // 4) 색상 수. APNG 는 트루컬러라 팔레트 노브가 없다. 칸을 만들면 측정만 낭비한다.
   if (base.settings.format === 'gif') {
     for (const colors of COLOR_STEPS) {
       if (rungs.length >= MAX_LADDER_RUNGS) return rungs
@@ -222,7 +283,7 @@ export function buildSizeLadder(base: SizeCandidate, limits: SizePlanLimits = {}
     }
   }
 
-  // 4) 압축 파라미터. 디더도 GIF 전용이다.
+  // 5) 압축 파라미터. 디더도 GIF 전용이다.
   if (base.settings.format === 'gif') {
     for (const dither of DITHER_STEPS) {
       if (rungs.length >= MAX_LADDER_RUNGS) return rungs
@@ -250,6 +311,12 @@ function formatDither(value: number): string {
 export function describeChanges(base: SizeCandidate, chosen: SizeCandidate): string[] {
   const out: string[] = []
 
+  if (chosen.settings.freeze !== base.settings.freeze) {
+    out.push(
+      `움직임 없는 픽셀 얼리기 ${base.settings.freeze === 0 ? '끔' : base.settings.freeze}` +
+        ` -> ${chosen.settings.freeze} (해상도와 색은 그대로입니다)`,
+    )
+  }
   if (chosen.settings.width !== base.settings.width) {
     out.push(`크기 ${base.settings.width}px -> ${chosen.settings.width}px`)
   }
@@ -260,6 +327,11 @@ export function describeChanges(base: SizeCandidate, chosen: SizeCandidate): str
     )
   } else if (chosen.durationFrames !== base.durationFrames) {
     out.push(`${base.durationFrames}프레임 -> ${chosen.durationFrames}프레임`)
+  }
+  if (chosen.settings.quality !== base.settings.quality) {
+    out.push(
+      `화질 ${Math.round(base.settings.quality * 100)}% -> ${Math.round(chosen.settings.quality * 100)}%`,
+    )
   }
   if (chosen.settings.maxColors !== base.settings.maxColors) {
     out.push(`색상 ${base.settings.maxColors}색 -> ${chosen.settings.maxColors}색`)

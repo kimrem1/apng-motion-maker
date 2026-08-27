@@ -19,10 +19,13 @@
 
 import type { AssetTable, MotionProject } from '@/core/types.ts'
 import type { Renderer } from '@/core/renderer/index.ts'
+import { FrameFilterChain } from './compress.ts'
 import {
   encodeRenderedFrames,
   exportFrames,
   needsStreamingExport,
+  orientationOf,
+  orientedSize,
   renderFrameSequence,
   resolveMatte,
   type ExportSettings,
@@ -134,6 +137,24 @@ export async function estimateExportSize(args: EstimateArgs): Promise<SizeEstima
   const picks = sampleIndices(totalFrames, estimateSampleCount(width, height))
   const sampleFrames = picks.map((i) => all[i]!)
 
+  /*
+   * 방향과 용량 필터도 실제 경로와 똑같이 건다. "추정 경로 = 실제 경로" 불변이
+   * 이 파일의 존재 이유다. 회전을 빼면 90도에서 인코더에 넘기는 크기가 어긋나고,
+   * 얼리기를 빼면 실제보다 몇 배 크게 잡혀 용량 맞추기가 과하게 줄인다.
+   *
+   * 얼리기의 효과는 실제보다 **작게** 잡힌다. 표본이 시간축에서 멀리 떨어져 있어
+   * 프레임 사이가 많이 다르기 때문이다. 그 편향은 이 파일이 이미 낙관/비관 계수로
+   * 흡수하고 있는 것과 같은 종류다.
+   */
+  const orient = orientationOf(settings)
+  const out = orientedSize(width, height, orient)
+  const filter = new FrameFilterChain({
+    freeze: settings.freeze,
+    degrain: settings.degrain,
+    width: out.width,
+    height: out.height,
+  })
+
   const rendered = await renderFrameSequence({
     doc,
     renderer,
@@ -142,6 +163,8 @@ export async function estimateExportSize(args: EstimateArgs): Promise<SizeEstima
     height,
     frames: sampleFrames,
     matte: resolveMatte(doc, settings),
+    orient,
+    filter,
     signal,
   })
 
@@ -149,8 +172,8 @@ export async function estimateExportSize(args: EstimateArgs): Promise<SizeEstima
     doc,
     settings,
     frames: rendered,
-    width,
-    height,
+    width: out.width,
+    height: out.height,
     /*
      * 실제 내보내기가 스트리밍으로 라우팅되는 설정(700MB 초과)은 APNG 팔레트
      * 최적화 없이 인코딩된다. 추정도 같은 조건으로 돌려야 "추정 경로 = 실제 경로"
