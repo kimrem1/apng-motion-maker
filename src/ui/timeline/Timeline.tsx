@@ -170,7 +170,14 @@ const TIMELINE_CSS = `
   background: var(--surface);
 }
 
+/*
+ * 머리 열의 첫 칸은 캔버스 쪽 눈금자와 짝이다. 눈금자를 스크롤 위치에 다시
+ * 그려 고정하므로(timelineDraw.ts scrollY), 이 칸도 sticky 로 같이 붙인다.
+ */
 .tl__head-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   height: ${RULER_H}px;
@@ -453,6 +460,22 @@ export function Timeline(): ReactNode {
    */
   const [bodyEl, setBodyEl] = useState<HTMLDivElement | null>(null)
 
+  /*
+   * 세로 스크롤 컨테이너(.tl__main). bodyEl 과 같은 이유로 상태로 든다.
+   *
+   * 눈금자는 캔버스 안에 그려져 있어서 스크롤을 따라 올라가 버린다. 그래서
+   * 스크롤할 때마다 scrollTop 을 읽어 눈금자를 그 자리에 다시 그린다
+   * (timelineDraw.ts 의 scrollY). 값을 상태로 들지 않고 매번 요소에서 읽는
+   * 이유는, 내용 높이가 바뀌며 브라우저가 scrollTop 을 조용히 가둘 때 상태
+   * 사본이 낡기 때문이다.
+   */
+  const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null)
+  const mainElRef = useRef<HTMLDivElement | null>(null)
+  mainElRef.current = mainEl
+
+  /** 지금 눈금자가 붙어 있는 세로 오프셋. 그리기와 히트 테스트가 같은 값을 쓴다. */
+  const stickyTop = (): number => mainElRef.current?.scrollTop ?? 0
+
   useEffect(() => {
     if (!bodyEl) return
     const ro = new ResizeObserver((entries) => {
@@ -529,6 +552,7 @@ export function Timeline(): ReactNode {
       hoveredLayerId: hoveredLayerRef.current,
       drop,
       loopMode: timeline.loop.mode,
+      scrollY: mainElRef.current?.scrollTop ?? 0,
     })
   }, [
     geo,
@@ -571,6 +595,14 @@ export function Timeline(): ReactNode {
       requestDraw()
     })
   }, [requestDraw])
+
+  // 세로 스크롤은 리렌더 없이 캔버스만 다시 그린다. 눈금자가 새 위치를 따라간다.
+  useEffect(() => {
+    if (!mainEl) return
+    const onScroll = (): void => requestDraw()
+    mainEl.addEventListener('scroll', onScroll, { passive: true })
+    return () => mainEl.removeEventListener('scroll', onScroll)
+  }, [mainEl, requestDraw])
 
   // -------------------------------------------------------------------------
   // 휠 (Ctrl 줌 / 그 외 가로 이동)
@@ -625,7 +657,9 @@ export function Timeline(): ReactNode {
       const x = clientX - rect.left
       const y = clientY - rect.top
       if (x < 0 || x > rect.width) return null
-      if (y < RULER_H || y >= clipBottomY(geoRef.current)) return null
+      // 눈금자가 스크롤을 따라 덮은 자리에는 놓을 수 없다.
+      const sy = mainElRef.current?.scrollTop ?? 0
+      if (y < sy + RULER_H || y >= clipBottomY(geoRef.current)) return null
       const index = clipsRef.current.findIndex((c) => c.layerId === layerId)
       if (index < 0) return null
 
@@ -766,7 +800,8 @@ export function Timeline(): ReactNode {
     e.currentTarget.setPointerCapture(e.pointerId)
 
     // --- 눈금자: 스크럽 ---
-    if (y < RULER_H) {
+    // 눈금자는 스크롤을 따라 내려와 그려진다. 판정도 그 자리를 봐야 한다.
+    if (y < stickyTop() + RULER_H) {
       if (!additive) clearSelection()
       beginScrub(e, x)
       return
@@ -857,7 +892,7 @@ export function Timeline(): ReactNode {
       let keyId: string | null = null
       let layerHover: string | null = null
 
-      if (y < RULER_H) {
+      if (y < stickyTop() + RULER_H) {
         cursor = 'ew-resize'
       } else if (y < clipBottomY(geo)) {
         const hit = hitTestClip(clips, geo, x, y, e.pointerType === 'touch' ? 12 : undefined)
@@ -974,7 +1009,10 @@ export function Timeline(): ReactNode {
   function onDoubleClick(e: ReactMouseEvent<HTMLCanvasElement>): void {
     const { x, y } = localPoint(e)
 
-    if (y >= RULER_H && y < clipBottomY(geo)) {
+    // 스크롤을 따라 내려온 눈금자 밑에 깔린 줄은 더블클릭 대상이 아니다.
+    if (y < stickyTop() + RULER_H) return
+
+    if (y < clipBottomY(geo)) {
       const index = clipRowIndexAtY(y, geo)
       const row = index >= 0 ? clips[index] : undefined
       if (row && !row.locked) toggleRange(row)
@@ -1243,7 +1281,7 @@ export function Timeline(): ReactNode {
         </div>
       </div>
 
-      <div className="tl__main">
+      <div className="tl__main" ref={setMainEl}>
         <div className="tl__head" style={{ minHeight: `${contentH}px` }}>
           <div className="tl__head-top">레이어</div>
 

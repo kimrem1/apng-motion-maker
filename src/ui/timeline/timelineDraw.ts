@@ -717,6 +717,15 @@ export interface TimelineDrawOptions {
   /** 레이어 패널에서 끌어오는 중일 때 놓일 자리. 없으면 null 이다. */
   drop: { layerId: string; start: number; end: number } | null
   loopMode: LoopMode
+  /**
+   * 세로 스크롤 오프셋 (CSS px).
+   *
+   * 캔버스는 내용 전체 높이라서 스크롤하면 눈금자가 함께 밀려 올라간다.
+   * 눈금자만 이 값만큼 내려 그려, 스크롤해도 화면 위에 붙어 있는 것처럼 보이게
+   * 한다. 히트 테스트(Timeline.tsx)도 반드시 같은 값으로 눈금자 영역을 판정해야
+   * 한다. 생략하면 0 이고, 그때의 그림은 예전과 같다.
+   */
+  scrollY?: number
 }
 
 export function selectionId(prop: TrackProp, frame: number): string {
@@ -915,6 +924,7 @@ export function drawTimeline(ctx: CanvasRenderingContext2D, o: TimelineDrawOptio
   const { axis, rulerH, rowH } = geo
   const duration = Math.max(1, o.durationFrames)
   const trackRows = model?.rows ?? []
+  const scrollY = Math.max(0, o.scrollY ?? 0)
 
   ctx.clearRect(0, 0, width, height)
   ctx.fillStyle = theme.surface
@@ -949,52 +959,6 @@ export function drawTimeline(ctx: CanvasRenderingContext2D, o: TimelineDrawOptio
     const x = Math.round(frameToX(s * o.fps, axis)) + 0.5
     if (x < -1 || x > width + 1) continue
     line(ctx, x, 0, x, height)
-  }
-
-  // 눈금자
-  ctx.fillStyle = theme.surfaceRaised
-  ctx.fillRect(0, 0, width, rulerH)
-  ctx.strokeStyle = theme.border
-  line(ctx, 0, rulerH - 0.5, width, rulerH - 0.5)
-
-  ctx.textBaseline = 'middle'
-  ctx.textAlign = 'left'
-  ctx.font = `600 10px ${theme.fontUi}`
-  ctx.fillStyle = theme.textMuted
-  for (let s = 0; s <= totalSec + 1e-6; s += secStep) {
-    const x = frameToX(s * o.fps, axis)
-    if (x < -20 || x > width + 20) continue
-    const label = secStep < 1 ? `${round(s, 2)}s` : `${round(s, 0)}s`
-    ctx.fillText(label, x + 3, 9)
-  }
-
-  ctx.font = `10px ${theme.fontMono}`
-  ctx.fillStyle = theme.textFaint
-  for (let f = firstGrid; f <= duration; f += labelStep) {
-    const x = frameToX(f, axis)
-    if (x < -20) continue
-    if (x > width + 20) break
-    ctx.fillText(String(f), x + 3, rulerH - 9)
-  }
-
-  // 반복 구간 표시. 눈금자 아래쪽에 얇은 띠와 양끝 브래킷을 둔다.
-  const loopY = rulerH - 3.5
-  const loopX0 = Math.max(0, frameToX(0, axis))
-  const loopX1 = Math.min(width, endX)
-  if (loopX1 > loopX0) {
-    ctx.strokeStyle = theme.accent
-    ctx.lineWidth = 2
-    line(ctx, loopX0, loopY, loopX1, loopY)
-    line(ctx, loopX0 + 1, loopY - 4, loopX0 + 1, loopY + 2)
-    line(ctx, loopX1 - 1, loopY - 4, loopX1 - 1, loopY + 2)
-    ctx.lineWidth = 1
-    if (loopX1 - loopX0 > 120) {
-      ctx.font = `600 9px ${theme.fontUi}`
-      ctx.fillStyle = theme.accent
-      ctx.textAlign = 'center'
-      ctx.fillText(LOOP_LABELS[o.loopMode], (loopX0 + loopX1) / 2, rulerH - 9)
-      ctx.textAlign = 'left'
-    }
   }
 
   // ---- 위층: 클립 (문서의 모든 레이어) ----
@@ -1135,7 +1099,66 @@ export function drawTimeline(ctx: CanvasRenderingContext2D, o: TimelineDrawOptio
     }
   }
 
+  /*
+   * ---- 눈금자 ----
+   *
+   * 내용(클립 / 트랙)을 전부 그린 뒤, 스크롤 오프셋만큼 내린 자리에 덮어 그린다.
+   * 그래야 세로로 스크롤해도 눈금자가 항상 보이는 영역의 맨 위에 남고, 그 밑을
+   * 지나가는 줄들은 눈금자 밑으로 사라진다. scrollY 0 이면 예전 자리 그대로다.
+   */
+  ctx.save()
+  ctx.translate(0, scrollY)
+
+  ctx.fillStyle = theme.surfaceRaised
+  ctx.fillRect(0, 0, width, rulerH)
+  ctx.strokeStyle = theme.border
+  ctx.lineWidth = 1
+  line(ctx, 0, rulerH - 0.5, width, rulerH - 0.5)
+
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  ctx.font = `600 10px ${theme.fontUi}`
+  ctx.fillStyle = theme.textMuted
+  for (let s = 0; s <= totalSec + 1e-6; s += secStep) {
+    const x = frameToX(s * o.fps, axis)
+    if (x < -20 || x > width + 20) continue
+    const label = secStep < 1 ? `${round(s, 2)}s` : `${round(s, 0)}s`
+    ctx.fillText(label, x + 3, 9)
+  }
+
+  ctx.font = `10px ${theme.fontMono}`
+  ctx.fillStyle = theme.textFaint
+  for (let f = firstGrid; f <= duration; f += labelStep) {
+    const x = frameToX(f, axis)
+    if (x < -20) continue
+    if (x > width + 20) break
+    ctx.fillText(String(f), x + 3, rulerH - 9)
+  }
+
+  // 반복 구간 표시. 눈금자 아래쪽에 얇은 띠와 양끝 브래킷을 둔다.
+  const loopY = rulerH - 3.5
+  const loopX0 = Math.max(0, frameToX(0, axis))
+  const loopX1 = Math.min(width, endX)
+  if (loopX1 > loopX0) {
+    ctx.strokeStyle = theme.accent
+    ctx.lineWidth = 2
+    line(ctx, loopX0, loopY, loopX1, loopY)
+    line(ctx, loopX0 + 1, loopY - 4, loopX0 + 1, loopY + 2)
+    line(ctx, loopX1 - 1, loopY - 4, loopX1 - 1, loopY + 2)
+    ctx.lineWidth = 1
+    if (loopX1 - loopX0 > 120) {
+      ctx.font = `600 9px ${theme.fontUi}`
+      ctx.fillStyle = theme.accent
+      ctx.textAlign = 'center'
+      ctx.fillText(LOOP_LABELS[o.loopMode], (loopX0 + loopX1) / 2, rulerH - 9)
+      ctx.textAlign = 'left'
+    }
+  }
+
+  ctx.restore()
+
   // 재생 헤드. 화면 높이를 가로지르는 선이라 점으로 찍히는 키와 모양부터 다르다.
+  // 깃발(삼각형)은 눈금자에 붙는 표식이므로 눈금자와 같이 스크롤을 따라 내린다.
   const px = Math.round(frameToX(o.playhead, axis)) + 0.5
   if (px >= -1 && px <= width + 1) {
     ctx.strokeStyle = theme.warn
@@ -1143,9 +1166,9 @@ export function drawTimeline(ctx: CanvasRenderingContext2D, o: TimelineDrawOptio
     line(ctx, px, 0, px, height)
     ctx.fillStyle = theme.warn
     ctx.beginPath()
-    ctx.moveTo(px - 5, 0)
-    ctx.lineTo(px + 5, 0)
-    ctx.lineTo(px, 8)
+    ctx.moveTo(px - 5, scrollY)
+    ctx.lineTo(px + 5, scrollY)
+    ctx.lineTo(px, scrollY + 8)
     ctx.closePath()
     ctx.fill()
   }
