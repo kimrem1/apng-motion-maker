@@ -201,6 +201,14 @@ export const DEGRAIN_HIGH = 9
  *
  * `scratch` 는 가로 방향 결과를 담는 임시 버퍼다. 호출부가 프레임마다 다시 할당하지
  * 않도록 밖에서 넘긴다. 길이가 안 맞으면 여기서 만든다.
+ *
+ * 비용 실측 (Node 24, 이 저장소의 vitest 환경):
+ *   512x512    17ms
+ *   1080x1080  50ms
+ *   2048x2048  177ms
+ * 같은 크기에서 인코딩 자체가 Mpx 당 130~260ms 이므로(ui/export/exportSettings.ts
+ * estimateDurationSec) 프레임당 한 번 더 도는 값으로 감당할 만하다. 추측으로 최적화하지
+ * 않고 이 숫자를 근거로 지금 형태를 유지한다.
  */
 export function degrainFrame(
   rgba: Uint8Array,
