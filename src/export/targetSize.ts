@@ -8,13 +8,15 @@
  *
  * ## 조정 순서
  *
- * 앞칸일수록 눈에 덜 띄는 희생이다.
- *   0) 얼리기   - 움직임 없는 픽셀을 갱신하지 않는다. 해상도도 프레임도 색상도
- *                 그대로라 앞칸에 둔다. 대신 정지 구간이 없는 모션에서는 거의 안 준다
- *   1) 해상도  - 픽셀 수는 면적으로 줄어든다. 0.7배면 절반이다. 가장 강력하다
- *   2) 프레임 수 - fps 를 내려 같은 길이를 더 적은 프레임으로 담는다. 선형으로 준다
- *   3) 화질    - WebP 전용. 손실 압축 강도를 올린다
- *   4) 색상 수  - GIF 전용. 인덱스 비트폭이 줄어 LZW 가 짧아진다
+ * **해상도(크기)는 절대 줄이지 않는다.** 그림이 작아지는 것이 가장 눈에 띄는
+ * 희생이고, 스티커는 받은 쪽 화면에서 원래 크기로 보여야 한다. 크기를 지킨 채
+ * 앞칸일수록 눈에 덜 띄는 순서로 줄인다.
+ *   0) 얼리기      - 움직임 없는 픽셀을 갱신하지 않는다. 화질 손상이 가장 적다
+ *   1) 그레인 제거 - 프레임마다 흔들리는 미세 노이즈만 걷어낸다. 선과 글자는 그대로다
+ *   2) 프레임 수   - fps 를 내려 같은 길이를 더 적은 프레임으로 담는다. 그림 자체는
+ *                    한 픽셀도 안 상한다. 대신 움직임이 덜 부드러워진다
+ *   3) 화질        - WebP 전용. 손실 압축 강도를 올린다
+ *   4) 색상 수     - GIF 전용. 인덱스 비트폭이 줄어 LZW 가 짧아진다
  *   5) 압축 파라미터 - 디더를 끄면 인접 픽셀이 같아져 LZW 런이 길어진다
  *
  * 위 순서대로 사다리(ladder)를 만들고 그 위에서 이분 탐색한다. 사다리를 쓰는 이유는
@@ -24,12 +26,12 @@
  * ## 인코딩 횟수
  *
  * 실제 측정은 비싸다(표본 8프레임을 렌더 + 인코딩). 기본 6회로 제한한다.
- * 1회는 현재 설정 확인에 쓰고, 남은 5회로 18칸 사다리를 이분 탐색한다
- * (ceil(log2(19)) = 5). 예산이 떨어지면 그때까지 찾은 최선을 돌려준다.
+ * 1회는 현재 설정 확인에 쓰고, 남은 5회로 15칸 사다리를 이분 탐색한다
+ * (ceil(log2(16)) = 4). 예산이 떨어지면 그때까지 찾은 최선을 돌려준다.
  *
- * 5회 / 15칸이었다가 한 칸씩 늘렸다. 얼리기(2칸)와 WebP 화질(3칸)이 들어오면서
- * GIF 사다리가 18칸이 되었고, 15칸에서 끊으면 맨 뒤의 디더 칸이 통째로 사라져
- * "디더까지 끄면 들어갈 파일" 이 해상도를 깎은 채로 나왔다.
+ * 예전에는 해상도 5칸이 들어간 18칸 사다리였다. 해상도 축을 빼면서 얼리기를
+ * 세 칸으로 늘리고 그레인 제거 칸을 새로 두었다. 둘 다 크기와 색을 그대로 두는
+ * 축이라, "크기를 지키면서 줄인다" 는 새 계약에 맞는 자리다.
  *
  * DOM 을 참조하지 않는다. 측정은 measure 콜백으로 주입받으므로 워커에서도 돈다.
  */
@@ -67,8 +69,6 @@ export interface SizePlan extends SizeCandidate {
 export type SizeMeasure = (candidate: SizeCandidate) => Promise<number>
 
 export interface SizePlanLimits {
-  /** 이보다 작게는 줄이지 않는다. 기본 96px. */
-  minWidth?: number
   /** 이보다 낮추지 않는다. 기본 10fps. */
   minFps?: number
   /** GIF 팔레트 하한. 기본 32색. */
@@ -145,33 +145,30 @@ export function createEstimateMeasure(
 }
 
 export const DEFAULT_MAX_ATTEMPTS = 6
-const DEFAULT_MIN_WIDTH = 96
 const DEFAULT_MIN_FPS = 10
 const DEFAULT_MIN_COLORS = GIF_COLOR_CHOICES[0]
 
 /**
- * 사다리 길이 상한. 이분 탐색이 ceil(log2(18+1)) = 5회에 끝나야
- * 첫 측정 1회를 합쳐 6회 예산에 들어간다. 늘리면 예산을 넘긴다.
+ * 사다리 길이 상한. 이분 탐색이 ceil(log2(15+1)) = 4회에 끝나야
+ * 첫 측정 1회를 합쳐 6회 예산에 넉넉히 들어간다.
  *
- * 18 은 가장 긴 사다리(GIF)의 실제 길이다.
- * 얼리기 2 + 해상도 5 + 프레임 6 + 색상 3 + 디더 2 = 18.
+ * 15 는 가장 긴 사다리(GIF)의 실제 길이다.
+ * 얼리기 3 + 그레인 1 + 프레임 6 + 색상 3 + 디더 2 = 15.
  */
-export const MAX_LADDER_RUNGS = 18
+export const MAX_LADDER_RUNGS = 15
 
 /**
  * 얼리기 사다리.
  *
- * 두 칸뿐인 이유는 이 축이 금방 포화하기 때문이다. 10 이면 그레인과 디더 잡티가
- * 대부분 얼고, 18 이면 평평한 면까지 얼어붙는다. 그 위는 얼룩이 눈에 띄기 시작하는
- * 대신 줄어드는 양은 완만해져서, 칸을 더 만들어도 측정 예산만 쓴다.
+ * 10 이면 그레인과 디더 잡티가 대부분 얼고, 16 은 무손실 원본에서 안 보이는
+ * 권장 상한이다(compress.ts FREEZE_GENTLE). 24 는 이미 압축된 GIF 를 다시 넣은
+ * 경우를 위한 칸으로, 평평한 면에 옅은 얼룩이 생길 수 있는 대신 해상도와 색은
+ * 끝까지 지킨다. 해상도 축을 빼면서 이 축이 마지막 칸 하나를 더 받았다.
  *
  * 사용자가 이미 더 센 값을 골라 뒀으면 그 칸은 만들지 않는다. 사다리는 단조
  * 감소여야 이분 탐색이 성립한다.
  */
-const FREEZE_STEPS = [10, 18] as const
-
-/** 해상도 축소 비율. 원본 대비 절대값이다(누적이 아니다). */
-const SCALE_STEPS = [0.85, 0.72, 0.6, 0.5, 0.42] as const
+const FREEZE_STEPS = [10, 16, 24] as const
 
 /**
  * fps 사다리. 전부 FPS_CHOICES 안의 값이다.
@@ -198,28 +195,6 @@ const DITHER_STEPS = [0.5, 0] as const
 // 사다리
 // ---------------------------------------------------------------------------
 
-/**
- * 앞칸에서 이어받되 크기는 언제나 **base** 기준으로 잰다.
- *
- * 비율을 누적하지 않는 이유는 사다리 칸의 뜻이 "원본의 몇 배" 여야 화면 문구
- * (describeChanges)와 맞기 때문이다. 반대로 다른 축(얼리기 등)은 앞칸에서
- * 이어받아야 한다. base 를 통째로 펼치면 앞칸이 걸어 둔 얼리기가 여기서 풀린다.
- */
-function scaledCandidate(
-  prev: SizeCandidate,
-  base: SizeCandidate,
-  scale: number,
-  minWidth: number,
-): SizeCandidate {
-  const baseWidth = Math.max(1, Math.round(base.settings.width))
-  const baseHeight = Math.max(1, Math.round(base.settings.height))
-  const width = Math.max(minWidth, Math.round(baseWidth * scale))
-  if (width >= baseWidth) return prev
-  // 종횡비는 반드시 유지한다. 한쪽만 줄이면 결과가 찌그러진다.
-  const height = Math.max(1, Math.round((baseHeight * width) / baseWidth))
-  return { ...prev, settings: { ...prev.settings, width, height } }
-}
-
 function withFps(prev: SizeCandidate, base: SizeCandidate, fps: number): SizeCandidate {
   // 벽시계 길이를 유지한다. fps 만 내리고 프레임 수를 그대로 두면 영상이 느려진다.
   const durationFrames = Math.max(2, Math.round((base.durationFrames * fps) / base.fps))
@@ -228,10 +203,10 @@ function withFps(prev: SizeCandidate, base: SizeCandidate, fps: number): SizeCan
 
 /**
  * 조정 사다리를 만든다. 앞칸일수록 희생이 적다.
- * 순서는 해상도 -> 프레임 -> 색상 -> 압축 파라미터로 고정이다.
+ * 순서는 얼리기 -> 그레인 -> 프레임 -> 화질/색상 -> 압축 파라미터로 고정이다.
+ * **해상도 칸은 없다.** 크기를 바꾸지 않는 것이 이 사다리의 계약이다.
  */
 export function buildSizeLadder(base: SizeCandidate, limits: SizePlanLimits = {}): SizeCandidate[] {
-  const minWidth = Math.max(16, Math.floor(limits.minWidth ?? DEFAULT_MIN_WIDTH))
   const minFps = Math.max(1, limits.minFps ?? DEFAULT_MIN_FPS)
   const minColors = Math.max(2, Math.floor(limits.minColors ?? DEFAULT_MIN_COLORS))
 
@@ -246,12 +221,11 @@ export function buildSizeLadder(base: SizeCandidate, limits: SizePlanLimits = {}
     rungs.push(cur)
   }
 
-  // 1) 해상도
-  for (const scale of SCALE_STEPS) {
+  // 1) 그레인 제거. 얼리기와 함께 써야 효과가 크다 (compress.ts 상단 주석).
+  //    사용자가 이미 켜 뒀으면 칸을 만들지 않는다.
+  if (!base.settings.degrain) {
     if (rungs.length >= MAX_LADDER_RUNGS) return rungs
-    const next = scaledCandidate(cur, base, scale, minWidth)
-    if (next.settings.width >= cur.settings.width) continue // 하한에 닿았다
-    cur = next
+    cur = { ...cur, settings: { ...cur.settings, degrain: true } }
     rungs.push(cur)
   }
 
@@ -317,8 +291,8 @@ export function describeChanges(base: SizeCandidate, chosen: SizeCandidate): str
         ` -> ${chosen.settings.freeze} (해상도와 색은 그대로입니다)`,
     )
   }
-  if (chosen.settings.width !== base.settings.width) {
-    out.push(`크기 ${base.settings.width}px -> ${chosen.settings.width}px`)
+  if (chosen.settings.degrain !== base.settings.degrain) {
+    out.push('그레인(미세 노이즈) 제거 켬 (선과 글자는 그대로입니다)')
   }
   if (chosen.fps !== base.fps) {
     out.push(
@@ -452,7 +426,8 @@ function failedPlan(
   const head = reason ? `${reason}. ` : ''
   changes.push(
     `${head}목표 ${formatBytes(target.maxBytes)} 에 맞추지 못했습니다` +
-      ` (여기까지 줄여 약 ${formatBytes(bytes)}). 길이를 줄이거나 더 단순한 모션을 골라 주세요.`,
+      ` (여기까지 줄여 약 ${formatBytes(bytes)}). 크기는 건드리지 않았습니다.` +
+      ` 길이를 줄이거나, 크기를 직접 낮추거나, 더 단순한 모션을 골라 주세요.`,
   )
   return { ...candidate, changes, estimatedBytes: bytes, achieved: false, attempts }
 }

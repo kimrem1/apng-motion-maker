@@ -1,13 +1,15 @@
 /**
  * 목표 용량 맞추기.
  *
- * 여기서 지켜야 하는 계약은 셋이다.
- *   1) 조정 순서가 해상도 -> 프레임 -> 색상 이어야 한다. 순서가 뒤집히면
- *      사용자가 가장 먼저 잃는 것이 "부드러움" 이 되어 결과가 뚝뚝 끊긴다
- *   2) 목표를 못 맞추면 조용히 성공한 척하지 않는다 (achieved=false + 이유)
- *   3) 이미 목표 안이면 아무것도 건드리지 않는다. 이유 없이 품질을 깎지 않는다
+ * 여기서 지켜야 하는 계약은 넷이다.
+ *   1) **크기(해상도)는 어떤 칸도 건드리지 않는다.** 스티커는 받은 쪽 화면에서
+ *      원래 크기로 보여야 하고, 그림이 작아지는 것이 가장 눈에 띄는 희생이다
+ *   2) 조정 순서가 얼리기 -> 그레인 -> 프레임 -> 색상 이어야 한다. 화질을 깎는
+ *      축(색상/디더)은 그림을 안 깎는 축(시간축) 뒤에 온다
+ *   3) 목표를 못 맞추면 조용히 성공한 척하지 않는다 (achieved=false + 이유)
+ *   4) 이미 목표 안이면 아무것도 건드리지 않는다. 이유 없이 품질을 깎지 않는다
  *
- * 실제 인코딩 대신 measure 를 주입한다. 픽셀 수 x 프레임 수 x 색상 계수의
+ * 실제 인코딩 대신 measure 를 주입한다. 얼리기/그레인/프레임/색상 계수의
  * 단순 모델이면 사다리 탐색 로직을 검사하는 데 충분하다.
  */
 
@@ -48,15 +50,17 @@ function baseCandidate(patch: Partial<ExportSettings> = {}): SizeCandidate {
 }
 
 /**
- * 바이트 모델. 면적 x 프레임 수 x 색상 계수 x 디더 계수.
+ * 바이트 모델. 프레임 수 x 얼리기 계수 x 그레인 계수 x 색상 계수 x 디더 계수.
  * 실제 인코더의 거동을 흉내 내는 것이 아니라 **단조 감소**만 보장하면 된다.
  */
 function fakeMeasure(bytesPerUnit = 1): SizeMeasure {
   return async (c: SizeCandidate) => {
     const area = c.settings.width * c.settings.height
+    const freezeFactor = 1 - c.settings.freeze * 0.005
+    const degrainFactor = c.settings.degrain ? 0.92 : 1
     const colorFactor = Math.log2(Math.max(2, c.settings.maxColors)) / 8
     const ditherFactor = 1 + c.settings.dither * 0.15
-    return area * c.durationFrames * colorFactor * ditherFactor * bytesPerUnit
+    return area * c.durationFrames * freezeFactor * degrainFactor * colorFactor * ditherFactor * bytesPerUnit
   }
 }
 
@@ -64,7 +68,7 @@ function fakeMeasure(bytesPerUnit = 1): SizeMeasure {
 function touched(base: SizeCandidate, c: SizeCandidate) {
   return {
     freeze: c.settings.freeze !== base.settings.freeze,
-    width: c.settings.width !== base.settings.width,
+    degrain: c.settings.degrain !== base.settings.degrain,
     frames: c.fps !== base.fps || c.durationFrames !== base.durationFrames,
     quality: c.settings.quality !== base.settings.quality,
     colors: c.settings.maxColors !== base.settings.maxColors,
@@ -73,7 +77,7 @@ function touched(base: SizeCandidate, c: SizeCandidate) {
 }
 
 describe('buildSizeLadder 조정 순서', () => {
-  it('얼리기를 먼저 걸고, 그다음 해상도, 프레임, 색상, 마지막이 디더다', () => {
+  it('얼리기를 먼저 걸고, 그다음 그레인, 프레임, 색상, 마지막이 디더다', () => {
     const base = baseCandidate()
     const ladder = buildSizeLadder(base)
 
@@ -81,29 +85,39 @@ describe('buildSizeLadder 조정 순서', () => {
     expect(ladder.length).toBeLessThanOrEqual(MAX_LADDER_RUNGS)
 
     // 각 축이 처음 등장하는 칸 번호
-    const firstIndex = (key: 'freeze' | 'width' | 'frames' | 'colors' | 'dither'): number =>
+    const firstIndex = (key: 'freeze' | 'degrain' | 'frames' | 'colors' | 'dither'): number =>
       ladder.findIndex((c) => touched(base, c)[key])
 
     const freeze = firstIndex('freeze')
-    const width = firstIndex('width')
+    const degrain = firstIndex('degrain')
     const frames = firstIndex('frames')
     const colors = firstIndex('colors')
     const dither = firstIndex('dither')
 
-    // 얼리기가 맨 앞이다. 해상도도 프레임도 색상도 그대로 두는 유일한 축이다.
+    // 얼리기가 맨 앞이다. 화질 손상이 가장 적은 축이다.
     expect(freeze).toBe(0)
-    expect(width).toBeGreaterThan(freeze)
-    expect(frames).toBeGreaterThan(width)
+    expect(degrain).toBeGreaterThan(freeze)
+    expect(frames).toBeGreaterThan(degrain)
     expect(colors).toBeGreaterThan(frames)
     expect(dither).toBeGreaterThan(colors)
   })
 
-  it('프레임을 건드리는 칸은 이미 해상도를 줄인 뒤다', () => {
+  it('어떤 칸도 크기를 바꾸지 않는다', () => {
+    for (const format of ['gif', 'apng', 'webp'] as const) {
+      const base = baseCandidate({ format })
+      for (const rung of buildSizeLadder(base)) {
+        expect(rung.settings.width, format).toBe(base.settings.width)
+        expect(rung.settings.height, format).toBe(base.settings.height)
+      }
+    }
+  })
+
+  it('프레임을 건드리는 칸은 이미 얼리기와 그레인을 건 뒤다', () => {
     const base = baseCandidate()
     for (const rung of buildSizeLadder(base)) {
       const t = touched(base, rung)
-      if (t.width) expect(t.freeze).toBe(true)
-      if (t.frames) expect(t.width).toBe(true)
+      if (t.degrain) expect(t.freeze).toBe(true)
+      if (t.frames) expect(t.degrain).toBe(true)
       if (t.colors) expect(t.frames).toBe(true)
       if (t.dither) expect(t.colors).toBe(true)
     }
@@ -134,17 +148,17 @@ describe('buildSizeLadder 조정 순서', () => {
     }
   })
 
-  it('종횡비를 유지하고 하한 아래로 내려가지 않는다', () => {
-    const base = { settings: settings({ width: 400, height: 200 }), durationFrames: 30, fps: 25 }
-    for (const rung of buildSizeLadder(base, { minWidth: 200 })) {
-      expect(rung.settings.width).toBeGreaterThanOrEqual(200)
-      expect(rung.settings.height).toBe(Math.round(rung.settings.width / 2))
+  it('이미 그레인 제거를 켜 뒀으면 그 칸을 만들지 않는다', () => {
+    const base = baseCandidate({ degrain: true })
+    for (const rung of buildSizeLadder(base)) {
+      expect(rung.settings.degrain).toBe(true)
     }
   })
 
   it('fps 를 내려도 벽시계 길이를 유지한다', () => {
     const base = baseCandidate() // 60프레임 / 30fps = 2초
     const lowered = buildSizeLadder(base).filter((c) => c.fps !== base.fps)
+    expect(lowered.length).toBeGreaterThan(0)
     for (const rung of lowered) {
       expect(rung.durationFrames / rung.fps).toBeCloseTo(2, 5)
     }
@@ -180,41 +194,43 @@ describe('planForTargetSize', () => {
     expect(plan.attempts).toBe(1)
   })
 
-  it('조금 넘치면 해상도만 줄인다', async () => {
+  it('조금 넘치면 얼리기만 건다. 크기와 프레임은 그대로다', async () => {
     const base = baseCandidate()
     const measure = fakeMeasure()
     const current = await measure(base)
 
     const plan = await planForTargetSize({
       ...base,
-      target: { maxBytes: current * 0.8 },
+      target: { maxBytes: current * 0.93 },
       measure,
     })
 
     expect(plan.achieved).toBe(true)
     const t = touched(base, plan)
-    expect(t.width).toBe(true)
+    expect(t.freeze).toBe(true)
     expect(t.frames).toBe(false)
     expect(t.colors).toBe(false)
-    expect(plan.changes.some((line) => line.includes('px'))).toBe(true)
+    expect(plan.settings.width).toBe(base.settings.width)
+    expect(plan.changes.some((line) => line.includes('얼리기'))).toBe(true)
   })
 
-  it('많이 넘치면 해상도에 이어 프레임까지 줄인다', async () => {
+  it('많이 넘치면 프레임까지 줄인다. 그래도 크기는 그대로다', async () => {
     const base = baseCandidate()
     const measure = fakeMeasure()
     const current = await measure(base)
 
     const plan = await planForTargetSize({
       ...base,
-      target: { maxBytes: current * 0.12 },
+      target: { maxBytes: current * 0.3 },
       measure,
     })
 
     expect(plan.achieved).toBe(true)
     const t = touched(base, plan)
-    expect(t.width).toBe(true)
     expect(t.frames).toBe(true)
     expect(t.colors).toBe(false)
+    expect(plan.settings.width).toBe(base.settings.width)
+    expect(plan.settings.height).toBe(base.settings.height)
     // 무엇을 얼마나 희생했는지 반드시 남긴다
     expect(plan.changes.some((line) => line.includes('fps'))).toBe(true)
   })
@@ -230,6 +246,8 @@ describe('planForTargetSize', () => {
     expect(plan.achieved).toBe(false)
     expect(plan.changes.length).toBeGreaterThan(0)
     expect(plan.changes.at(-1)).toContain('맞추지 못했습니다')
+    // 크기를 줄여서라도 맞추는 척하지 않는다.
+    expect(plan.settings.width).toBe(base.settings.width)
     // 돌려주는 estimatedBytes 는 실제로 측정한 값이어야 한다.
     expect(plan.estimatedBytes).toBeGreaterThan(10)
   })
@@ -237,8 +255,8 @@ describe('planForTargetSize', () => {
   it('줄일 여지가 전혀 없어도 이유를 남긴다', async () => {
     // 이미 하한이라 사다리가 비는 경우
     const base: SizeCandidate = {
-      // 얼리기까지 이미 상한이라 어느 축으로도 더 갈 곳이 없다.
-      settings: settings({ format: 'apng', width: 96, height: 96, freeze: 40 }),
+      // 얼리기와 그레인까지 이미 상한이라 어느 축으로도 더 갈 곳이 없다.
+      settings: settings({ format: 'apng', width: 96, height: 96, freeze: 40, degrain: true }),
       durationFrames: 20,
       fps: 10,
     }
@@ -246,16 +264,16 @@ describe('planForTargetSize', () => {
       ...base,
       target: { maxBytes: 1 },
       measure: fakeMeasure(),
-      limits: { minWidth: 96, minFps: 10 },
+      limits: { minFps: 10 },
     })
 
-    expect(buildSizeLadder(base, { minWidth: 96, minFps: 10 })).toHaveLength(0)
+    expect(buildSizeLadder(base, { minFps: 10 })).toHaveLength(0)
     expect(plan.achieved).toBe(false)
     expect(plan.changes.length).toBeGreaterThan(0)
     expect(plan.settings).toEqual(base.settings)
   })
 
-  it('실제 인코딩 횟수를 5회 이하로 제한한다', async () => {
+  it('실제 인코딩 횟수를 예산 이하로 제한한다', async () => {
     const base = baseCandidate()
     let calls = 0
     const inner = fakeMeasure()
@@ -303,7 +321,7 @@ describe('planForTargetSize', () => {
 
     expect(plan.achieved).toBe(true)
     // 3번 칸이 정확히 목표와 같으므로 그보다 앞칸은 전부 초과다.
-    expect(plan.settings.width).toBe(ladder[3]!.settings.width)
+    expect(plan.settings).toEqual(ladder[3]!.settings)
     expect(plan.fps).toBe(ladder[3]!.fps)
   })
 
