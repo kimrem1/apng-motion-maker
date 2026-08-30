@@ -128,6 +128,25 @@ export function SceneGlyph({ group }: { group: ShapeSceneGroup }) {
           <rect x="18" y="4" width="4" height="4" rx="1" opacity="0.45" transform="rotate(25 20 6)" />
         </g>
       ) : null}
+
+      {/* 영상 느낌: 가운데서 튀는 방울과 감아 도는 호. 잉크 튀김의 정지 화면이다. */}
+      {group === 'cinema' ? (
+        <g fill="currentColor">
+          <circle cx="24" cy="16" r="4.4" />
+          <circle cx="34" cy="9" r="2.4" opacity="0.75" />
+          <circle cx="13" cy="10" r="1.9" opacity="0.6" />
+          <circle cx="36" cy="23" r="1.7" opacity="0.55" />
+          <circle cx="12" cy="22" r="2.6" opacity="0.7" />
+          <path
+            d="M10 16a14 11 0 0 1 22-8"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            opacity="0.45"
+          />
+        </g>
+      ) : null}
     </svg>
   )
 }
