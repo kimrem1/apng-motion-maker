@@ -21,6 +21,7 @@ import {
   SPEED_MIN,
   type CharAnimSpec,
   type EffectInstance,
+  type EffectParam,
   type Layer,
   type LoopMode,
   type Modifier,
@@ -28,6 +29,7 @@ import {
   type RevealSpec,
   type Track,
 } from '@/core/types.ts'
+import { cycleOffsets, tileTrack } from '@/core/timeTile.ts'
 import { solveLayerContain } from '@/core/overscan.ts'
 import { normalizeRevealSpec } from '@/core/reveal.ts'
 import { normalizeCharAnimSpec } from '@/core/charAnim.ts'
@@ -408,6 +410,18 @@ export function applyPresetToLayer(args: PresetApplyArgs): PresetApplyResult {
   const params = resolveParams(preset, args.params)
 
   /*
+   * 길이를 못박은 문서(timeline.durationPinned)는 완전히 다른 길을 탄다.
+   *
+   * 사용자가 트랜스포트 바에 90 을 넣어 뒀는데 모션 속도를 올렸다고 길이가 70 으로
+   * 바뀌면, "이 길이를 지켜 달라" 는 선언이 속도 노브 하나에 무너진다. 그래서
+   * 못박은 문서에서는 속도가 길이 대신 **그 길이 안에서의 빠르기**를 정한다.
+   * 도형 세트의 fitFrames 와 같은 철학이다 (shapes/shared.ts timingOf).
+   */
+  if (args.doc.timeline.durationPinned === true) {
+    return applyPresetPinned(args, preset, layer, strength, speed, params)
+  }
+
+  /*
    * 기준선(초) -> 목표 시간(초) -> fps -> 프레임 수. 이 순서를 지켜야 한다.
    *
    * 그 프리셋의 기준선이 문서에 없으면(첫 적용이거나 다른 프리셋으로 갈아탔으면)
@@ -483,6 +497,197 @@ export function applyPresetToLayer(args: PresetApplyArgs): PresetApplyResult {
     if (reference !== undefined) result.containScale = reference
   }
   return result
+}
+
+// ---------------------------------------------------------------------------
+// 길이 못박기
+// ---------------------------------------------------------------------------
+
+/**
+ * 못박은 길이 안에서 프리셋을 앉힌다. 전체 길이와 fps 를 한 프레임도 바꾸지 않는다.
+ *
+ * 속도가 하는 일이 프리셋의 반복 안전성(loopSafe)에 따라 갈린다.
+ *
+ *   seamless      한 주기 길이를 속도로 정하고, 그 주기를 못박은 길이 안에 이어
+ *                 붙인다 (core/timeTile.ts). 속도 2 면 두 배로 잘게 돈다.
+ *                 도형 세트가 fitFrames 위에서 하는 것과 같은 동작이다.
+ *   once/pingPong 한 번만 재생하고 남는 구간은 마지막 상태로 멈춘다. 등장을 반복해
+ *                 다시 등장시키면 "빠르게" 가 아니라 "여러 번" 이 되기 때문이다.
+ *                 속도는 그 한 번이 걸리는 시간을 정한다.
+ *
+ * 기준선(presetRef.baseSec)은 읽지 않는다. 못박은 길이 자체가 기준선이라, 같은
+ * 속도로 몇 번을 다시 적용해도 타임라인에서만 계산하면 결과가 흘러가지 않는다.
+ */
+function applyPresetPinned(
+  args: PresetApplyArgs,
+  preset: MotionPreset,
+  layer: Layer,
+  strength: number,
+  speed: number,
+  params: Record<string, number | string | boolean>,
+): PresetApplyResult {
+  const doc = args.doc
+  const total = clamp(Math.round(doc.timeline.durationFrames), 2, FRAMES_MAX)
+  const fps = doc.timeline.fps > 0 ? doc.timeline.fps : 25
+  const totalSec = total / fps
+  const naturalSec = Math.max(0.04, presetDurationMs(preset) / 1000)
+  const seamless = preset.loopSafe === 'seamless'
+
+  let span: number
+  let reps = 1
+  if (seamless) {
+    /*
+     * 속도 1 에서 이 문서가 프리셋의 권장 주기를 몇 번 담는가가 기준이다.
+     * 주기가 문서보다 길면 1 로 올린다. 문서 길이에 맞춰 한 번 도는 것이 속도 1 이다.
+     * 주기 하나가 두 프레임보다 짧아지면 정수 격자에서 뭉개지므로 거기까지만 쪼갠다.
+     */
+    const repsAt1 = Math.max(1, Math.round(totalSec / naturalSec))
+    reps = clamp(Math.round(repsAt1 * speed), 1, Math.max(1, Math.floor(total / 2)))
+    span = Math.max(2, Math.round(total / reps))
+  } else {
+    span = clamp(Math.round((naturalSec / speed) * fps), 2, total)
+  }
+
+  const emission = applyPreset(
+    preset,
+    toEmitContext({
+      doc,
+      layer,
+      strength,
+      speed,
+      params,
+      seed: seedFor(args.presetId, layer.id),
+      fps,
+      // resolveSpan 은 baseSec / speed * fps 를 쓴다. 여기서 speed 를 미리 곱해
+      // 두면 프리셋이 내는 한 주기가 정확히 span 프레임이 된다.
+      baseSec: (span * speed) / fps,
+    }),
+  )
+  const read = readEmission(emission)
+
+  // 프리셋이 홀드 배수로 스냅한 길이가 있으면 그것이 실제 주기다.
+  const cycle = clamp(Math.round(read.durationFrames ?? span), 2, total)
+  let tracks = read.tracks
+  let effects = read.effects
+  let modifiers = read.modifiers
+  if (seamless && reps > 1) {
+    const offsets = cycleOffsets(total, reps)
+    tracks = tracks.map((t) => tileTrack(t, cycle, offsets))
+    effects = effects?.map((e) => retimeEffectForTile(e, cycle, offsets))
+    modifiers = modifiers.map((m) => retimeModifierPinned(m, cycle, offsets))
+  } else if (cycle < total) {
+    /*
+     * 한 번짜리 모션이 일찍 끝나는 경우에도 모디파이어의 박자는 지켜야 한다.
+     * 모디파이어는 emit 이 잰 주기(cycle)가 아니라 **문서 전체**를 한 바퀴로
+     * 평가되므로(core/evaluate.ts), 그대로 두면 빨리 하라고 한 흔들림이 도리어
+     * 길게 늘어진다. 주기 수를 전체/주기 비율만큼 올려 초당 박자를 유지한다.
+     * 포락선은 이미 cycle 에서 끝나므로 그 뒤는 알아서 잦아든다.
+     */
+    modifiers = modifiers.map((m) => retimeModifierPinned(m, cycle, cycleOffsets(total, 1)))
+  }
+
+  const allowExit = preset.overscan === 'allowEmpty'
+  const result: PresetApplyResult = {
+    tracks,
+    modifiers,
+    durationFrames: total,
+    /*
+     * baseSec / speed = 못박은 길이. setDurationFrames 가 되짚는 공식과 같은 값이라
+     * 못박기를 풀어도 기준선이 지금 길이에서 이어진다.
+     */
+    baseSec: totalSec * speed,
+    baseFps: fps,
+    allowExit,
+    suggestedLoop: read.suggestedLoop,
+  }
+  if (effects) result.effects = effects
+  // suggestedFps 는 싣지 않는다. 못박은 문서는 fps 도 함께 지킨다. forcedFps 도 없다.
+  if (read.reveal) result.reveal = read.reveal
+  if (read.charAnim) result.charAnim = read.charAnim
+  if (read.perspective !== undefined) result.perspective = read.perspective
+  if (read.anchor) result.anchor = read.anchor
+  if (!allowExit) {
+    const reference = containReferenceScale({
+      doc,
+      layer,
+      preset,
+      params,
+      speed,
+      // 담기 극단은 한 주기 안에 다 있다. 이어 붙인 전체가 아니라 주기로 잰다.
+      durationFrames: cycle,
+      fps,
+    })
+    if (reference !== undefined) result.containScale = reference
+  }
+  return result
+}
+
+/**
+ * 못박은 길이 위에서 모디파이어의 박자를 지킨다.
+ *
+ * 모디파이어는 문서 전체를 한 바퀴로 평가된다 (core/evaluate.ts). emit 은 한 주기
+ * (cycle) 기준으로 주기 수를 골랐으므로, 전체가 주기보다 길면 그 비율만큼 주기 수를
+ * 올려야 초당 박자가 유지된다. sine 과 spring 은 정수 주기가 이음새의 근거라
+ * 반올림을 지키고, loopNoise 의 cycles 는 노이즈 반지름이라 실수 그대로 늘린다.
+ *
+ * 포락선은 키프레임이므로 트랙과 같은 규칙으로 이어 붙인다. 이어 붙일 반복이
+ * 없으면(offsets 가 두 칸) 원래 키를 그대로 두어, 한 번짜리 모션의 감쇠가
+ * 주기 끝에서 잦아든 채 남게 한다.
+ */
+function retimeModifierPinned(
+  modifier: Modifier,
+  cycle: number,
+  offsets: readonly number[],
+): Modifier {
+  const total = offsets[offsets.length - 1] ?? cycle
+  if (total <= cycle) return modifier
+  const factor = total / cycle
+  const out: Modifier = { ...modifier }
+  out.cycles =
+    modifier.type === 'loopNoise'
+      ? modifier.cycles * factor
+      : Math.max(1, Math.round(modifier.cycles * factor))
+  if (modifier.envelope && modifier.envelope.length > 0 && offsets.length > 2) {
+    out.envelope = tileTrack(
+      { id: `${modifier.id}:env`, prop: 'opacity', unit: 'ratio', keys: modifier.envelope },
+      cycle,
+      offsets,
+    ).keys
+  }
+  return out
+}
+
+/**
+ * 이어 붙인 트랙과 같은 시계를 타도록 이펙트를 다시 배치한다.
+ *
+ * 구간(range)은 주기 안 비율을 전체 길이로 편다. 노이즈류 이펙트는 연속이라 이걸로
+ * 충분하다. 파라미터에 걸린 시간축 트랙(맥동 등)은 키프레임 트랙과 같은 규칙으로
+ * 이어 붙인다. 닫히지 않은 트랙은 tileTrack 이 스스로 한 프레임 앞에서 끊는다.
+ */
+function retimeEffectForTile(
+  effect: EffectInstance,
+  cycle: number,
+  offsets: readonly number[],
+): EffectInstance {
+  const total = offsets[offsets.length - 1] ?? cycle
+  const out: EffectInstance = { ...effect }
+  if (effect.range) {
+    out.range = [
+      clamp(Math.round((effect.range[0] * total) / cycle), 0, Math.max(0, total - 1)),
+      clamp(Math.round((effect.range[1] * total) / cycle), 0, Math.max(0, total - 1)),
+    ]
+  }
+  const params: Record<string, EffectParam> = {}
+  for (const key of Object.keys(effect.params)) {
+    const value = effect.params[key]
+    if (value === undefined) continue
+    params[key] =
+      typeof value === 'object' && value !== null && Array.isArray(value.keys)
+        ? tileTrack(value, cycle, offsets)
+        : value
+  }
+  out.params = params
+  return out
 }
 
 /**

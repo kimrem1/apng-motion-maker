@@ -1035,6 +1035,9 @@ function normalizeProject(raw: RawRecord, known: ReadonlySet<string>, bag: Warni
       dedupeBoundaryFrame: bool(rawLoop.dedupeBoundaryFrame, true),
     },
   } as MotionProject['timeline']
+  // 길이 못박기는 정확히 true 일 때만 키를 남긴다. 다른 값이 남으면 왕복 JSON 이 달라진다.
+  if (rawTimeline.durationPinned === true) timeline.durationPinned = true
+  else delete timeline.durationPinned
 
   const rawSafe: RawRecord = isRecord(raw.safeZone) ? raw.safeZone : {}
   const safeZone: MotionProject['safeZone'] = {

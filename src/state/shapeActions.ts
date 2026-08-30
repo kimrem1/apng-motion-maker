@@ -190,9 +190,17 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
    */
   const others = doc.layers.filter((l) => !previous.includes(l.id))
   const reused = previous.length > 0 ? ui.applied : null
+  /*
+   * 길이를 못박은 문서(timeline.durationPinned)는 레이어가 없어도 맞춘다.
+   * 사용자가 길이를 직접 입력했다는 것은 "이 길이를 지켜 달라" 는 뜻이고,
+   * 세트가 그 길이를 자기 기본 길이로 덮으면 그 선언이 무너진다.
+   */
+  const pinned = doc.timeline.durationPinned === true
   const fitFrames = reused
-    ? (reused.fitFrames ?? undefined)
-    : others.length > 0
+    ? // 못박은 문서라면 처음에 잰 길이가 없어도 지금 길이에 맞춘다. 못박기가
+      // hardFit 으로 늘어남을 막으므로 이 값은 왕복해도 흘러가지 않는다.
+      (reused.fitFrames ?? (pinned ? doc.timeline.durationFrames : undefined))
+    : others.length > 0 || pinned
       ? doc.timeline.durationFrames
       : undefined
 
@@ -221,6 +229,8 @@ export function applyShapeScene(sceneId: string, live = false): ShapeApplyReport
       speed: ui.speed,
       color: ui.color,
       ...(fitFrames === undefined ? {} : { fitFrames }),
+      // 못박은 길이는 아주 느린 속도에서도 늘리지 않는다 (shapes/shared.ts timingOf).
+      ...(pinned ? { hardFit: true } : {}),
     }),
   )
   if (!emission) return { ok: false, message: '도형 세트를 만들지 못했습니다.' }

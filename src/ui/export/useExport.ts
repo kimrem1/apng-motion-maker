@@ -160,7 +160,8 @@ export function useExport(): UseExportResult {
     if (timeline) {
       const store = useDocumentStore.getState()
       store.setFps(timeline.fps)
-      store.setDurationFrames(timeline.durationFrames)
+      // 계획이 정한 길이는 사용자의 선언이 아니다. 못박기 표시를 남기지 않는다.
+      store.setDurationFrames(timeline.durationFrames, { pin: false })
     }
 
     const doc = useDocumentStore.getState().doc

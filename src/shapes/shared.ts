@@ -90,6 +90,8 @@ export function timingOf(ctx: SceneContext, defaultMs: number): Timing {
     const want = repsAt1 * speed
 
     if (want < 1) {
+      // 길이를 못박은 문서는 늘릴 수도 없다. 한 주기가 문서 전체인 자리에서 멈춘다.
+      if (ctx.hardFit === true) return { span: total, fps, reps: 1 }
       // 한 주기도 다 못 담는다. 문서를 늘린다.
       const span = clamp(Math.round(total / want), MAX_STOPS, FRAMES_MAX)
       return { span, fps, reps: 1 }

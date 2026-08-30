@@ -480,7 +480,17 @@ interface DocumentState {
   setBackgroundType(type: BackgroundType): void
   setBackgroundColor(color: string): void
   setFps(fps: number): void
-  setDurationFrames(frames: number): void
+  /**
+   * 타임라인 길이를 바꾼다.
+   *
+   * 기본은 **길이 못박기**다. 사용자가 길이를 직접 입력했다는 것은 "이 길이를
+   * 지켜 달라" 는 뜻이고, 그때부터 모션/도형의 속도 노브는 전체 길이를 건드리지
+   * 못한다 (TimelineConfig.durationPinned). 내보내기 복원처럼 사용자의 선언이
+   * 아닌 경로는 pin: false 로 불러 표시를 남기지 않는다.
+   */
+  setDurationFrames(frames: number, options?: { pin?: boolean }): void
+  /** 길이 못박기 표시만 켜고 끈다. 트랜스포트 바의 자물쇠 버튼이 쓴다. */
+  setDurationPinned(pinned: boolean): void
   /**
    * 컷 목록과 타임라인 길이를 한 번에 쓴다.
    *
@@ -2108,9 +2118,17 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       })
     },
 
-    setDurationFrames(frames) {
+    setDurationFrames(frames, options) {
       mutateDoc('길이 변경', (d) => {
         d.timeline.durationFrames = clamp(Math.round(frames), 2, FRAMES_MAX)
+        /*
+         * 기본은 못박기다. 사용자가 길이를 직접 넣었다는 사실 자체가 "이 길이를
+         * 지켜 달라" 는 선언이고, 그때부터 속도 노브는 길이 대신 그 안의 반복
+         * 횟수를 바꾼다 (motions/apply.ts 의 pinned 분기). 내보내기 복원 같은
+         * 기계적 경로만 pin: false 로 지나간다. false 는 키를 지워서 저장 파일의
+         * 왕복 JSON 을 더럽히지 않는다.
+         */
+        if (options?.pin !== false) d.timeline.durationPinned = true
         // setFps 가 baseFps 를 갱신하는 것과 같은 이유다. 사용자가 직접 넣은 길이가
         // 곧 새 기준선이다. 갱신하지 않으면 세기 슬라이더를 한 번 스치는 순간
         // 재적용이 옛 baseSec 으로 길이를 되돌려 방금 넣은 값이 사라진다.
@@ -2120,6 +2138,14 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
             (d.timeline.durationFrames / d.timeline.fps) * d.presetRef.macro.speed
         }
       }, 'duration')
+    },
+
+    setDurationPinned(pinned) {
+      mutateDoc(pinned ? '길이 고정' : '길이 고정 해제', (d) => {
+        // false 는 키를 지운다. 저장 파일에 false 가 남으면 왕복 JSON 이 달라진다.
+        if (pinned) d.timeline.durationPinned = true
+        else delete d.timeline.durationPinned
+      }, 'durationPin')
     },
 
     setCuts(cuts, durationFrames, label, coalesceKey) {

@@ -225,19 +225,23 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
    * 손잡이를 따라 즉시 움직이게 한다. 프레임 상한 때문에 fps 가 내려가는 것까지
    * 같은 함수로 반영해야 표시값과 결과가 갈리지 않는다.
    */
+  // 길이를 못박은 문서(PRO 트랜스포트 바)는 속도가 길이를 못 바꾼다. 표시도 고정이다.
+  const pinned = doc.timeline.durationPinned === true
   const previewSec = useMemo(() => {
+    if (pinned) return doc.timeline.durationFrames / (doc.timeline.fps > 0 ? doc.timeline.fps : 25)
     const baseSec = baselineSec(doc)
     const target = baseSec / speed
     const fps = fpsForDuration(target, baselineFps(doc))
     return Math.min(FRAMES_MAX, Math.round(target * fps)) / fps
-  }, [doc, speed])
+  }, [doc, speed, pinned])
   /** 더 느리게 내려도 길이가 안 늘어나는 지점인가. 사각지대를 숫자로 알린다. */
   const atSlowLimit = useMemo(() => {
+    if (pinned) return false
     const baseSec = baselineSec(doc)
     const target = baseSec / speed
     const fps = fpsForDuration(target, baselineFps(doc))
     return Math.round(target * fps) >= FRAMES_MAX
-  }, [doc, speed])
+  }, [doc, speed, pinned])
   // 프리셋을 적용하는 대상과 같은 레이어여야 한다. 둘이 갈라지면 슬라이더가 다른 그림을 건드린다.
   const targetLayerId = resolveTargetLayerId()
   const targetLayer = targetLayerId ? doc.layers.find((l) => l.id === targetLayerId) : undefined
@@ -651,6 +655,7 @@ export function EasyMode({ showHeader = true, onOpenExportSettings }: EasyModePr
           <p className="mm-easy-note" role="status">
             재생 시간 {formatDurationSec(previewSec)}
             {atSlowLimit ? ' (이 모션에서 낼 수 있는 가장 긴 길이입니다)' : ''}
+            {pinned ? ' (길이 고정 중이라 속도는 이 길이 안에서 빠르기만 바꿉니다)' : ''}
           </p>
         </div>
 

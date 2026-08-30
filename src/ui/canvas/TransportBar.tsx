@@ -100,6 +100,29 @@ const TRANSPORT_CSS = `
   font-size: var(--fs-xs);
   cursor: help;
 }
+
+.transport__pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface-raised);
+  color: var(--text-faint);
+}
+
+.transport__pin:hover {
+  border-color: var(--accent);
+}
+
+.transport__pin.is-on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
 `
 
 function PlayIcon(): ReactNode {
@@ -115,6 +138,20 @@ function PauseIcon(): ReactNode {
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
       <rect x="4" y="3" width="3" height="10" rx="1" fill="currentColor" />
       <rect x="9" y="3" width="3" height="10" rx="1" fill="currentColor" />
+    </svg>
+  )
+}
+
+/** 자물쇠. 열림/닫힘을 고리의 걸림으로 구분한다. */
+function LockIcon({ locked }: { locked: boolean }): ReactNode {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" focusable="false">
+      {locked ? (
+        <path d="M5 7V5a3 3 0 0 1 6 0v2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      ) : (
+        <path d="M5 7V5a3 3 0 0 1 6 0" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      )}
+      <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" fill="currentColor" />
     </svg>
   )
 }
@@ -181,9 +218,11 @@ function formatClock(sec: number): string {
 export function TransportBar(): ReactNode {
   const fps = useDocumentStore((s) => s.doc.timeline.fps)
   const durationFrames = useDocumentStore((s) => s.doc.timeline.durationFrames)
+  const durationPinned = useDocumentStore((s) => s.doc.timeline.durationPinned === true)
   const loopMode = useDocumentStore((s) => s.doc.timeline.loop.mode)
   const setFps = useDocumentStore((s) => s.setFps)
   const setDurationFrames = useDocumentStore((s) => s.setDurationFrames)
+  const setDurationPinned = useDocumentStore((s) => s.setDurationPinned)
   const setLoopMode = useDocumentStore((s) => s.setLoopMode)
 
   const playing = useUiStore((s) => s.playing)
@@ -243,6 +282,25 @@ export function TransportBar(): ReactNode {
           <span className="mm-field-label">길이</span>
           <DurationInput value={durationFrames} onCommit={setDurationFrames} />
           <span className="mm-field-label">프레임</span>
+          {/*
+            길이 고정. 길이를 직접 입력하면 자동으로 잠긴다. 잠긴 동안 모션/도형의
+            속도 노브는 전체 길이 대신 그 안에서의 빠르기를 바꾼다. 상태가 보이지
+            않으면 "속도를 올렸는데 길이가 그대로다" 가 고장으로 읽힌다.
+          */}
+          <button
+            type="button"
+            className={durationPinned ? 'transport__pin is-on' : 'transport__pin'}
+            aria-pressed={durationPinned}
+            aria-label={durationPinned ? '길이 고정 해제' : '길이 고정'}
+            title={
+              durationPinned
+                ? '길이 고정 중. 모션 속도는 이 길이 안에서 빠르기만 바꿉니다. 누르면 풉니다.'
+                : '길이 고정. 켜면 모션 속도가 전체 길이를 바꾸지 못합니다. 길이를 직접 입력해도 켜집니다.'
+            }
+            onClick={() => setDurationPinned(!durationPinned)}
+          >
+            <LockIcon locked={durationPinned} />
+          </button>
         </label>
 
         <label className="transport__field">

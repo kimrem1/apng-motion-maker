@@ -25,7 +25,16 @@ import type {
  * 사용자에게 보이는 분류. 이름은 전부 "무엇을 하고 싶은가" 다.
  * 기술 용어(파티클, 트랜지션, 이퀄라이저)를 쓰지 않는다.
  */
-export type ShapeSceneGroup = 'pulse' | 'bars' | 'wipe' | 'spin' | 'accent' | 'ambient' | 'stage'
+export type ShapeSceneGroup =
+  | 'pulse'
+  | 'bars'
+  | 'wipe'
+  | 'spin'
+  | 'accent'
+  | 'ambient'
+  | 'stage'
+  /** 애니메이션 영상에서 따온 연출. 잉크 튀김, 부유 파편, 임팩트 프레임 등이다. */
+  | 'cinema'
 
 export const SHAPE_GROUP_LABELS: Record<ShapeSceneGroup, string> = {
   pulse: '퍼지기',
@@ -35,9 +44,11 @@ export const SHAPE_GROUP_LABELS: Record<ShapeSceneGroup, string> = {
   accent: '강조',
   ambient: '배경 장식',
   stage: '연출',
+  cinema: '영상 느낌',
 }
 
 export const SHAPE_GROUP_ORDER: ShapeSceneGroup[] = [
+  'cinema',
   'stage',
   'pulse',
   'bars',
@@ -91,6 +102,14 @@ export interface SceneContext {
    * 속도 노브가 길이를 바꾸지 못한다.
    */
   fitFrames?: number
+  /**
+   * fitFrames 를 절대로 넘지 않는다.
+   *
+   * 보통은 한 주기도 못 담을 만큼 느려지면 문서를 늘린다 (shared.ts timingOf 규칙 3).
+   * 사용자가 길이를 못박아 둔 문서(timeline.durationPinned)에서는 그 예외도 금지다.
+   * 그때 아주 느린 속도는 "한 주기가 문서 전체" 에서 멈춘다.
+   */
+  hardFit?: boolean
 }
 
 export interface ShapeScene {

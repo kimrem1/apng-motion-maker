@@ -159,7 +159,8 @@ export function QuickExport({ onOpenSettings }: QuickExportProps) {
       Math.max(1, Math.round(doc.timeline.durationFrames * scale)),
     )
     setFps(lowerFps)
-    setDurationFrames(nextFrames)
+    // 파생된 길이 조정이다. 길이 못박기 표시를 남기면 이후 속도 노브가 잠긴다.
+    setDurationFrames(nextFrames, { pin: false })
     const next = result.settings
     reset()
     void start(next)
