@@ -181,7 +181,9 @@ export function PresetGallery() {
             const shapeKey = s
               ? `${s.kind}/${s.color}/${s.width}x${s.height}/${s.strokeWidth}/${s.cornerRadius}/${s.points}/${s.innerRatio}/${s.sweepDeg}`
               : '-'
-            return `${l.id}:${l.assetId ?? '-'}:${shapeKey}`
+            // 파티클도 도형과 같은 이유다. spec 이 바뀌면 카드의 그림도 바뀐다.
+            const particleKey = l.particle ? JSON.stringify(l.particle) : '-'
+            return `${l.id}:${l.assetId ?? '-'}:${shapeKey}:${particleKey}`
           })
           .join(','),
         assetRevision,

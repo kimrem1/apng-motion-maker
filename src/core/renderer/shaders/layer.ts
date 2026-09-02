@@ -32,6 +32,9 @@ precision highp float;
 
 uniform sampler2D u_image;
 uniform float u_opacity;
+// 색 덧씌우기. 양이 0 이면 원본 그대로다. 알파는 건드리지 않는다.
+uniform vec3 u_tintColor;
+uniform float u_tintAmount;
 ${REVEAL_GLSL}
 
 in vec2 v_uv;
@@ -40,9 +43,10 @@ out vec4 fragColor;
 void main() {
   // 텍스처는 straight alpha 로 올라와 있다 (gl.ts 참조).
   vec4 c = texture(u_image, v_uv);
+  vec3 rgb = mix(c.rgb, u_tintColor, u_tintAmount);
   float a = c.a * u_opacity * mmRevealMask(v_uv);
   // 출력은 premultiplied. 블렌드는 (ONE, ONE_MINUS_SRC_ALPHA).
-  fragColor = vec4(c.rgb * a, a);
+  fragColor = vec4(rgb * a, a);
 }
 `
 

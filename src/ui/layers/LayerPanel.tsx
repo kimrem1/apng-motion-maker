@@ -47,8 +47,8 @@ import {
   timelineDropCommit,
   timelineDropHover,
 } from '@/ui/timeline/timelineDrop.ts'
-import { BLEND_OPTIONS, moveLayerTo, setLayerBlend, setLayerClip } from './layerDocActions.ts'
-import { buildLayerRows, dropTarget } from './layerTree.ts'
+import { BLEND_OPTIONS, moveLayerTo, moveLayersTo, setLayerBlend, setLayerClip } from './layerDocActions.ts'
+import { buildLayerRows, dropTarget, dropTargetMulti } from './layerTree.ts'
 import './layers.css'
 
 /** 썸네일 캔버스의 실제 픽셀. CSS 는 32px 이므로 2배 해상도다. */
@@ -512,11 +512,29 @@ export function LayerPanel() {
         return
       }
 
+      /*
+       * 잡은 행이 다중 선택에 들어 있으면 선택 전체가 한 덩어리로 움직인다.
+       * 선택 밖의 행을 잡았으면 그 한 장만 옮긴다. 포토샵과 피그마의 규칙이다.
+       * 잡은 것을 맨 앞에 둔다. 타임라인 드롭이 첫 장의 길이로 자리를 잡는다.
+       */
+      const draggedIds =
+        selectedIds.length > 1 && selectedIds.includes(meta.layerId)
+          ? [meta.layerId, ...selectedIds.filter((id) => id !== meta.layerId)]
+          : [meta.layerId]
+
       // 타임라인 위에서 놓았으면 순서는 건드리지 않는다. 구간만 옮긴다.
-      if (timelineDropCommit(e.clientX, e.clientY, meta.layerId)) return
+      if (timelineDropCommit(e.clientX, e.clientY, draggedIds)) return
 
       const from = meta.fromDisplay
       const boundary = meta.boundary
+
+      if (draggedIds.length > 1) {
+        const target = dropTargetMulti(layers, rows, draggedIds, boundary)
+        if (!target) return
+        moveLayersTo(draggedIds, target.index, target.folderId)
+        return
+      }
+
       // 자기 앞이나 자기 뒤 경계에 놓으면 제자리다.
       if (boundary === from || boundary === from + 1) return
 
@@ -525,7 +543,7 @@ export function LayerPanel() {
       if (!target) return
       moveLayerTo(meta.layerId, target.index, target.folderId)
     },
-    [layers, rows],
+    [layers, rows, selectedIds],
   )
 
   // -------------------------------------------------------------------------
@@ -771,7 +789,12 @@ export function LayerPanel() {
                 selected ? 'is-selected' : '',
                 layer.visible ? '' : 'is-hidden',
                 layer.locked ? 'is-locked' : '',
-                dragging && drag?.layerId === layer.id ? 'is-dragging-row' : '',
+                // 다중 선택을 잡아 끌면 선택된 행 전부가 함께 움직인다는 것을 보여 준다.
+                dragging &&
+                (drag?.layerId === layer.id ||
+                  (drag !== null && selectedIds.length > 1 && selectedIds.includes(drag.layerId) && selected))
+                  ? 'is-dragging-row'
+                  : '',
                 dragging && drag?.boundary === di ? 'is-drop-before' : '',
                 dragging && drag?.boundary === rows.length && di === rows.length - 1
                   ? 'is-drop-after'

@@ -44,7 +44,7 @@ import { useLayerUiStore, type LayerSelectMode } from '@/state/layerUi.ts'
 import {
   clearRanges,
   defaultRangeFrames,
-  dropRangeAt,
+  dropRangesAt,
   setRangeEnd,
   setRangeStart,
   splitSequential,
@@ -686,10 +686,14 @@ export function Timeline(): ReactNode {
         })
         return next !== null
       },
-      drop(clientX, clientY, layerId) {
-        const next = probe(clientX, clientY, layerId)
+      drop(clientX, clientY, layerIds) {
+        // 첫 번째가 잡은 레이어다. 자리 계산은 그 장의 길이로 하고, 나머지는
+        // 같은 프레임에 자기 길이대로 놓인다 (dropRangesAt).
+        const grabbed = layerIds[0]
+        if (grabbed === undefined) return false
+        const next = probe(clientX, clientY, grabbed)
         if (!next) return false
-        return dropRangeAt(layerId, next.start)
+        return dropRangesAt(layerIds, next.start) > 0
       },
       cancel() {
         setDrop((prev) => (prev === null ? prev : null))
@@ -898,7 +902,9 @@ export function Timeline(): ReactNode {
         const hit = hitTestClip(clips, geo, x, y, e.pointerType === 'touch' ? 12 : undefined)
         if (hit) {
           layerHover = hit.layerId
-          cursor = hit.part === 'body' ? 'grab' : 'ew-resize'
+          // 잠긴 줄은 잡을 수 없다. 잡힌다고 말하는 커서를 내지 않는다.
+          const hitRow = clips[hit.rowIndex]
+          cursor = hitRow?.locked ? 'default' : hit.part === 'body' ? 'grab' : 'ew-resize'
         }
       } else if (model) {
         const hit = hitTestKey(model, geo, x, y, hitRadius(e.pointerType))

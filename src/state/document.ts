@@ -33,7 +33,9 @@ import {
   type Keyframe,
   type Modifier,
   type Layer,
+  type LayerTint,
   type LoopMode,
+  type MotionLoopMode,
   type MotionProject,
   type RevealSpec,
   type ShapeSpec,
@@ -41,11 +43,14 @@ import {
   type Track,
   type TrackProp,
 } from '@/core/types.ts'
+import type { ParticleSpec } from '@/particles/types.ts'
+import { normalizeParticleSpec } from '@/particles/config.ts'
 import {
   TRACK_DEFAULTS,
   createEmptyProject,
   createFolderLayer,
   createImageLayer,
+  createParticleLayer,
   createShapeLayer,
   createTextLayer,
   createStaticTrack,
@@ -207,6 +212,14 @@ interface DocumentState {
    * addShape 와 같은 규칙이다. 캔버스를 건드리지 않고 이미 잡힌 캔버스에 얹는다.
    */
   addText(input: { name: string; text: TextSpec }): { layerId: string }
+
+  /**
+   * 파티클 오버레이 레이어를 넣는다. addShape 와 같은 규칙이다.
+   * spec 의 값 규칙은 particles/config.ts 의 normalizeParticleSpec 한 곳에만 있다.
+   */
+  addParticle(input: { name: string; spec: ParticleSpec }): { layerId: string }
+  /** 파티클 spec 을 통째로 바꾼다. 슬라이더 드래그는 coalesceKey 로 실행취소 한 칸이 된다. */
+  setParticleSpec(layerId: string, spec: ParticleSpec, coalesceKey?: string): void
   /**
    * 도형 모션 세트를 통째로 심는다.
    *
@@ -326,6 +339,16 @@ interface DocumentState {
   moveLayerTo(layerId: string, toIndex: number, folderId?: string | null): void
 
   /**
+   * 여러 장을 한 덩어리로 옮긴다. 실행취소 한 칸이다.
+   *
+   * toIndex 는 **옮길 레이어들을 뺀 배열** 기준 인덱스다 (layerTree.ts
+   * dropTargetMulti 가 그 기준으로 계산한다). 서로의 순서는 지금 문서 순서를
+   * 그대로 지킨다. 폴더와 그 식구가 함께 들어 있으면 폴더만 옮긴다. 식구는
+   * folderId 로 딸려 있어 따로 옮기면 두 번 옮겨진다.
+   */
+  moveLayersTo(layerIds: readonly string[], toIndex: number, folderId?: string | null): void
+
+  /**
    * 지금 걸려 있는 모션 프리셋을 걷어낸다.
    *
    * 프리셋이 심은 것만 지운다. 소유권 기록(레이어의 presetOwnership)이 그대로
@@ -404,6 +427,18 @@ interface DocumentState {
    * 1 이면 키를 지운다. 뜻이 없는 키가 남으면 저장/열기 왕복에서 JSON 이 달라진다.
    */
   setLayerMotionRepeat(layerId: string, repeat: number): void
+
+  /**
+   * 이 레이어 모션의 반복 방식을 정한다. 'repeat' 면 키를 지운다.
+   * 방식별 의미는 core/types.ts 의 MotionLoopMode 주석에 있다.
+   */
+  setLayerMotionLoop(layerId: string, mode: MotionLoopMode): void
+
+  /**
+   * 레이어 전체에 색을 덧씌운다. null 이거나 양이 0 이면 키를 지운다.
+   * 폴더에 걸면 안의 모든 레이어가 물려받는다 (core/evaluate.ts).
+   */
+  setLayerTint(layerId: string, tint: LayerTint | null): void
 
   /**
    * 이펙트를 추가한다.
@@ -733,6 +768,22 @@ export function withFolderContents(layers: readonly Layer[], ids: Iterable<strin
     if (folderChain(layers, layer).some((f) => folders.has(f.id))) drop.add(layer.id)
   }
   return drop
+}
+
+/**
+ * 잠긴 폴더에 들어간 레이어를 그 자리에서 잠근다.
+ *
+ * 잠금 전파(setLayerFlag)는 토글하는 순간에만 flag 를 써 넣는다. 소속이 나중에
+ * 바뀌면 그 전파를 못 받아서, 잠근 폴더에 새로 끌어 넣은 레이어만 편집이 되는
+ * 구멍이 생긴다. 소속을 바꾸는 모든 경로가 이걸 불러 구멍을 막는다.
+ * 옮겨 넣은 것이 폴더면 그 식구까지 함께 잠근다.
+ */
+function inheritFolderLock(d: MotionProject, ids: Iterable<string>): void {
+  for (const id of withFolderContents(d.layers, ids)) {
+    const layer = d.layers.find((l) => l.id === id)
+    if (!layer || layer.locked) continue
+    if (folderChain(d.layers, layer).some((f) => f.locked)) layer.locked = true
+  }
 }
 
 /**
@@ -1092,6 +1143,30 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       return { layerId }
     },
 
+    addParticle({ name, spec }) {
+      let layerId = ''
+      mutateDoc('파티클 추가', (d) => {
+        const layer = createParticleLayer(normalizeParticleSpec(spec), name, d.layers.length)
+        layerId = layer.id
+        d.layers.push(layer)
+      })
+      return { layerId }
+    },
+
+    setParticleSpec(layerId, spec, coalesceKey) {
+      mutateDoc('파티클 설정', (d) => {
+        const layer = findLayer(d, layerId)
+        if (!layer || layer.type !== 'particle') return
+        // 값 규칙은 particles/config.ts 한 곳에만 있다. 키 순서까지 고정되어
+        // 저장 파일의 왕복 JSON 이 흔들리지 않는다.
+        const next = normalizeParticleSpec(spec)
+        // 값이 같으면 쓰지 않는다. normalize 가 늘 새 객체를 돌려주므로 그냥
+        // 대입하면 immer 가 같은 값에도 패치를 내 빈 실행취소 칸이 쌓인다.
+        if (layer.particle && JSON.stringify(layer.particle) === JSON.stringify(next)) return
+        layer.particle = next
+      }, coalesceKey)
+    },
+
     addShapeScene({ label, layers, durationFrames, loopMode, fps, replace, coalesceKey, folderName }) {
       const layerIds: string[] = []
       mutateDoc(
@@ -1361,7 +1436,23 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
       const labels = { visible: '표시 전환', locked: '잠금 전환' }
       mutateDoc(labels[key], (d) => {
         const layer = findLayer(d, layerId)
-        if (layer) layer[key] = value
+        if (!layer) return
+        /*
+         * 폴더 잠금은 안의 모든 레이어에 전파된다. 몇 겹이든 따라 들어간다.
+         *
+         * 잠금을 보는 곳(스테이지 드래그, 타임라인, 모션 옮기기)이 전부 레이어
+         * 자신의 flag 만 읽으므로, 여기서 써 주지 않으면 폴더를 잠가도 안의
+         * 레이어는 그대로 편집된다. 표시(visible)는 렌더러가 폴더 사슬로 이미
+         * 전파하므로 건드리지 않는다.
+         */
+        if (key === 'locked' && layer.type === 'group') {
+          const ids = withFolderContents(d.layers, [layerId])
+          for (const l of d.layers) {
+            if (ids.has(l.id) && l.locked !== value) l.locked = value
+          }
+          return
+        }
+        layer[key] = value
       })
     },
 
@@ -1442,6 +1533,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           if (layer) layer.folderId = folder.id
         }
         normalizeFolderOrder(d)
+        inheritFolderLock(d, wanted)
       })
       return { folderId }
     },
@@ -1466,6 +1558,7 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
           layer.folderId = folderId
         }
         normalizeFolderOrder(d)
+        inheritFolderLock(d, layerIds)
       })
     },
 
@@ -1549,6 +1642,66 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         }
 
         normalizeFolderOrder(d)
+        inheritFolderLock(d, [layerId])
+      })
+    },
+
+    moveLayersTo(layerIds, toIndex, folderId) {
+      mutateDoc('레이어 순서 변경', (d) => {
+        const wanted = new Set(layerIds)
+        /*
+         * 조상이 함께 옮겨지는 것은 뺀다. 폴더가 움직이면 식구는 folderId 로
+         * 딸려 가므로(normalizeFolderOrder 가 뒤에 붙인다) 따로 옮기면 두 번
+         * 옮겨져 순서가 엉킨다. 남은 것은 문서 순서대로 정렬해, 옮긴 뒤에도
+         * 서로의 앞뒤가 그대로다.
+         */
+        const tops = d.layers.filter(
+          (l) =>
+            wanted.has(l.id) &&
+            !folderChain(d.layers, l).some((f) => wanted.has(f.id)),
+        )
+        if (tops.length === 0) return
+        const topIds = new Set(tops.map((l) => l.id))
+
+        const rest = d.layers.filter((l) => !topIds.has(l.id))
+        const to = clamp(Math.round(toIndex), 0, rest.length)
+
+        // 결과가 지금과 완전히 같으면 아무것도 쓰지 않는다. 빈 실행취소 칸을 만들지 않는다.
+        const finalIds = [
+          ...rest.slice(0, to).map((l) => l.id),
+          ...tops.map((l) => l.id),
+          ...rest.slice(to).map((l) => l.id),
+        ]
+        const sameOrder = finalIds.every((id, i) => d.layers[i]!.id === id)
+        const sameFolder =
+          folderId === undefined ||
+          tops.every((l) => (l.folderId ?? null) === folderId)
+        if (sameOrder && sameFolder) return
+
+        // 뒤에서부터 빼야 앞쪽 인덱스가 흔들리지 않는다.
+        for (let i = d.layers.length - 1; i >= 0; i -= 1) {
+          if (topIds.has(d.layers[i]!.id)) d.layers.splice(i, 1)
+        }
+        d.layers.splice(to, 0, ...tops)
+
+        /*
+         * 소속은 한 자리로 통일한다. 규칙은 moveLayerTo 와 같다. 지정이 없으면
+         * 덩어리 바로 아래 이웃을 따른다.
+         */
+        const below = to > 0 ? d.layers[to - 1] : undefined
+        const target =
+          folderId !== undefined
+            ? folderId
+            : (below ? (below.type === 'group' ? below.id : below.folderId) : undefined) ?? null
+        for (const moved of tops) {
+          if (target === null) delete moved.folderId
+          else if (target !== moved.id && !isInsideFolder(d, moved.id, target)) {
+            moved.folderId = target
+          }
+        }
+
+        normalizeFolderOrder(d)
+        inheritFolderLock(d, tops.map((l) => l.id))
       })
     },
 
@@ -1802,6 +1955,31 @@ export const useDocumentStore = create<DocumentState>()((set, get) => {
         }
         layer.motionRepeat = clamped
       }, `repeat:${layerId}`)
+    },
+
+    setLayerMotionLoop(layerId, mode) {
+      mutateDoc('모션 반복 방식', (d) => {
+        const layer = findLayer(d, layerId)
+        if (!layer) return
+        if (mode !== 'pingPong' && mode !== 'once') {
+          if ('motionLoop' in layer) delete layer.motionLoop
+          return
+        }
+        layer.motionLoop = mode
+      })
+    },
+
+    setLayerTint(layerId, tint) {
+      mutateDoc('색 덧씌우기', (d) => {
+        const layer = findLayer(d, layerId)
+        if (!layer) return
+        const amount = tint ? clamp(tint.amount, 0, 1) : 0
+        if (!tint || amount <= 0) {
+          if ('tint' in layer) delete layer.tint
+          return
+        }
+        layer.tint = { color: tint.color, amount }
+      }, `tint:${layerId}`)
     },
 
     setStaticValue(layerId, prop, value) {

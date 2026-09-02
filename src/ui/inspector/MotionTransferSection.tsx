@@ -11,7 +11,12 @@
 
 import { useState } from 'react'
 
-import { MOTION_REPEAT_MAX, MOTION_REPEAT_MIN, type Layer } from '@/core/types.ts'
+import {
+  MOTION_REPEAT_MAX,
+  MOTION_REPEAT_MIN,
+  type Layer,
+  type MotionLoopMode,
+} from '@/core/types.ts'
 import { effectiveRepeat } from '@/core/evaluate.ts'
 import {
   ALL_MOTION_PARTS,
@@ -35,8 +40,16 @@ import { SelectField, ToggleField } from '@/ui/widgets/Field.tsx'
  */
 const REPEAT_CHOICES = [1, 2, 3, 4, 6, 8, MOTION_REPEAT_MAX] as const
 
+/** 이 레이어 모션의 반복 방식. 값 규칙은 core/evaluate.ts 가 정한다. */
+const LOOP_MODE_OPTIONS: { value: MotionLoopMode; label: string }[] = [
+  { value: 'repeat', label: '반복 (처음부터 다시)' },
+  { value: 'pingPong', label: '왕복 (갔다가 되돌아오기)' },
+  { value: 'once', label: '한번만 (끝나면 멈춤)' },
+]
+
 export function MotionSpeedSection({ layer }: { layer: Layer }) {
   const setLayerMotionRepeat = useDocumentStore((s) => s.setLayerMotionRepeat)
+  const setLayerMotionLoop = useDocumentStore((s) => s.setLayerMotionLoop)
   const durationFrames = useDocumentStore((s) => s.doc.timeline.durationFrames)
   const fps = useDocumentStore((s) => s.doc.timeline.fps)
 
@@ -95,6 +108,23 @@ export function MotionSpeedSection({ layer }: { layer: Layer }) {
             반복 재생의 이음새가 끊기지 않도록 정수 배로만 돌립니다.
           </p>
         ) : null}
+        <SelectField
+          label="이 오브제의 반복 방식"
+          value={layer.motionLoop ?? 'repeat'}
+          options={LOOP_MODE_OPTIONS}
+          disabled={layer.locked}
+          ariaLabel="이 레이어 모션의 반복 방식"
+          hint={
+            !hasMotion
+              ? '이 오브제에 걸린 움직임이 아직 없습니다.'
+              : layer.motionLoop === 'once'
+                ? '한 바퀴만 돌고 마지막 모습에 멈춥니다. 위 배수를 올리면 더 일찍 멈춥니다.'
+                : layer.motionLoop === 'pingPong'
+                  ? '한 바퀴 안에서 갔다가 되돌아옵니다. 반복 이음새가 저절로 이어집니다.'
+                  : '아래 「반복」 섹션은 결과물 전체의 재생 방식이고, 이 값은 이 오브제만 바꿉니다.'
+          }
+          onChange={(v) => setLayerMotionLoop(layer.id, v)}
+        />
       </div>
     </section>
   )

@@ -64,6 +64,7 @@ import { normalizeTextSpec } from '@/core/text.ts'
 import { normalizeCharAnimSpec } from '@/core/charAnim.ts'
 import { CUT_FRAMES_MIN, cutRanges, cutsTotalFrames, normalizeCut } from '@/core/cuts.ts'
 import { EFFECT_BY_ID } from '@/effects/registry.ts'
+import { normalizeParticleSpec } from '@/particles/config.ts'
 
 // ---------------------------------------------------------------------------
 // 허용값 목록
@@ -88,7 +89,7 @@ const BACKGROUND_TYPES: BackgroundType[] = ['alpha', 'solid', 'blurExtend', 'mir
 const SAFE_POLICIES: SafeZonePolicy[] = ['autoFit', 'backgroundFill', 'warn', 'allowEmpty']
 const FIT_MODES: FitMode[] = ['cover', 'contain', 'fill', 'none']
 const BLEND_MODES: BlendMode[] = ['normal', 'multiply', 'screen', 'overlay', 'lighten', 'darken']
-const LAYER_TYPES: LayerType[] = ['image', 'solid', 'group', 'shape', 'text']
+const LAYER_TYPES: LayerType[] = ['image', 'solid', 'group', 'shape', 'text', 'particle']
 const SPRING_MODES: SpringSpec['mode'][] = ['physical', 'visual']
 const SPRING_FITS: SpringFit[] = ['springDrivesDuration', 'fitToDuration']
 
@@ -518,6 +519,28 @@ function normalizePresetOwnership(raw: unknown): PresetOwnershipRecord | undefin
   return Object.keys(rec).length > 0 ? rec : undefined
 }
 
+/**
+ * 색 덧씌우기 검증. 색은 #rrggbb 꼴이어야 하고 양은 0 초과여야 한다.
+ * 양이 0 이면 없는 것과 같은 그림이므로 유효하지 않은 것으로 본다 (키 삭제).
+ * 1 을 넘는 양은 여기서 거르지 않고 normalizeTint 가 1 로 조인다.
+ */
+function isValidTint(v: unknown): v is { color: string; amount: number } {
+  if (!isRecord(v)) return false
+  const color = v.color
+  const amount = v.amount
+  return (
+    typeof color === 'string' &&
+    /^#[0-9a-fA-F]{6}$/.test(color) &&
+    typeof amount === 'number' &&
+    Number.isFinite(amount) &&
+    amount > 0
+  )
+}
+
+function normalizeTint(v: { color: string; amount: number }): { color: string; amount: number } {
+  return { color: v.color, amount: Math.min(1, v.amount) }
+}
+
 function normalizeLayer(
   raw: unknown,
   index: number,
@@ -627,6 +650,12 @@ function normalizeLayer(
     ...(isRecord(raw.text)
       ? { text: { ...raw.text, ...normalizeTextSpec(raw.text as Partial<TextSpec>) } }
       : {}),
+    /*
+     * 파티클도 같다. 값 규칙은 particles/config.ts 한 곳에만 있다.
+     * spec 이 아예 깨졌어도 기본값으로 되살린다. 파티클 레이어는 spec 이 없으면
+     * 그리지도 못하고 고칠 UI 도 없는 죽은 줄이 되기 때문이다.
+     */
+    ...(raw.type === 'particle' ? { particle: normalizeParticleSpec(raw.particle) } : {}),
     // 글자 등장도 같다. 'none' 이면 아무 일도 하지 않으므로 키를 남기지 않는다.
     ...(isRecord(raw.charAnim) &&
     normalizeCharAnimSpec(raw.charAnim as Partial<CharAnimSpec>).mode !== 'none'
@@ -661,6 +690,12 @@ function normalizeLayer(
     Math.floor(raw.motionRepeat) > MOTION_REPEAT_MIN
       ? { motionRepeat: Math.min(MOTION_REPEAT_MAX, Math.floor(raw.motionRepeat)) }
       : {}),
+    // 반복 방식. 기본값 'repeat' 는 키를 남기지 않는다 (motionRepeat 와 같은 이유).
+    ...(raw.motionLoop === 'pingPong' || raw.motionLoop === 'once'
+      ? { motionLoop: raw.motionLoop }
+      : {}),
+    // 색 덧씌우기. 양이 0 이면 없는 것과 같은 그림이라 키를 남기지 않는다.
+    ...(isValidTint(raw.tint) ? { tint: normalizeTint(raw.tint) } : {}),
     tracks,
     modifiers,
     effects,
@@ -707,6 +742,14 @@ function normalizeLayer(
     const v = layer[key]
     if (key in layer && !(typeof v === 'number' && Number.isFinite(v))) delete layer[key]
   }
+  // 반복 방식과 색 덧씌우기도 같은 규칙이다. ...raw 가 살려 둔 잘못된 값을 지운다.
+  if ('motionLoop' in layer && layer.motionLoop !== 'pingPong' && layer.motionLoop !== 'once') {
+    delete layer.motionLoop
+  }
+  if ('tint' in layer) {
+    if (isValidTint(layer.tint)) layer.tint = normalizeTint(layer.tint)
+    else delete layer.tint
+  }
   if ('text' in layer && !isRecord(layer.text)) {
     delete layer.text
   }
@@ -717,6 +760,13 @@ function normalizeLayer(
    */
   if ('shape' in layer && !isRecord(layer.shape)) {
     delete layer.shape
+  }
+  // 파티클이 아닌 레이어에 붙은 particle 키는 지운다.
+  if ('particle' in layer && layer.type !== 'particle') {
+    delete layer.particle
+  }
+  if (layer.type === 'particle' && !isRecord(raw.particle)) {
+    bag.add('파티클 설정을 읽을 수 없어 기본값으로 되돌렸습니다.')
   }
   /*
    * 자르기는 참일 때만 남긴다.

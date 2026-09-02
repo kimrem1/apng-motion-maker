@@ -291,6 +291,7 @@ const ROW_ORDER: readonly TrackProp[] = [
   'skewX',
   'skewY',
   'opacity',
+  'blur',
   'reveal',
   'charIn',
   'anchorX',
@@ -309,6 +310,7 @@ export const PROP_LABELS: Record<TrackProp, string> = {
   skewX: '가로 기울임',
   skewY: '세로 기울임',
   opacity: '불투명도',
+  blur: '흐림',
   reveal: '가리기',
   charIn: '글자 등장',
   anchorX: '기준점 가로',
@@ -377,6 +379,7 @@ export function formatPropValue(prop: TrackProp, value: number): string {
       return `${round(value, 2)}도`
     case 'translateX':
     case 'translateY':
+    case 'blur':
       return `${round(value, 2)}픽셀`
     default:
       return `${round(value, 3)}`
@@ -897,7 +900,8 @@ function drawClipRow(
   }
 
   // 잡는 자리. 커서가 올라간 줄에서만 낸다. 늘 그리면 짧은 막대가 손잡이로 덮인다.
-  if (hovered && w > 14) {
+  // 잠긴 줄에는 내지 않는다. 잡을 수 없는 자리에 손잡이를 그리면 고장으로 읽힌다.
+  if (hovered && !row.locked && w > 14) {
     ctx.strokeStyle = theme.text
     ctx.lineWidth = 2
     line(ctx, x0 + 2.5, bar.y + 3, x0 + 2.5, bar.y + bar.h - 3)

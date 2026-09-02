@@ -51,7 +51,7 @@ export interface AppliedScene {
   signature: string
 }
 
-export type CreatorTab = 'motion' | 'shape' | 'text' | 'cut'
+export type CreatorTab = 'motion' | 'shape' | 'text' | 'particle' | 'cut'
 
 interface ShapeUiState {
   /** 왼쪽 도크에서 지금 보고 있는 도구. EASY 와 PRO 가 같은 값을 쓴다. */

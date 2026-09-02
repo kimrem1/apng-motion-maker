@@ -12,6 +12,7 @@ import {
   type TrackProp,
   type TrackUnit,
 } from './types.ts'
+import type { ParticleSpec } from '@/particles/types.ts'
 
 export const APP_VERSION = '0.1.0'
 
@@ -188,6 +189,39 @@ export function createTextLayer(text: TextSpec, name: string, z: number): Layer 
 }
 
 /**
+ * 파티클 레이어.
+ *
+ * 그림은 spec 이 정한다. 렌더러가 프레임마다 캔버스 크기의 오버레이 한 장을
+ * 만들어 이미지 레이어와 같은 경로로 그린다. 그래서 맞춤 / 기준점 / 변환 규칙이
+ * 이미지와 한 글자도 다르지 않다.
+ */
+export function createParticleLayer(spec: ParticleSpec, name: string, z: number): Layer {
+  return {
+    id: nextId('l'),
+    name,
+    type: 'particle',
+    assetId: null,
+    parentId: null,
+    z,
+    visible: true,
+    locked: false,
+    fit: 'none',
+    anchor: [0.5, 0.5],
+    keepPlaceOnAnchorChange: true,
+    baseScale: 1,
+    blend: 'normal',
+    parallaxFactor: 1,
+    fillsCanvas: false,
+    keepInside: false,
+    motionExitsFrame: false,
+    particle: spec,
+    tracks: [],
+    modifiers: [],
+    effects: [],
+  }
+}
+
+/**
  * 폴더 레이어.
  *
  * 아무것도 그리지 않는다. 안에 담긴 레이어의 매트릭스 바깥에 자기 변환이 곱해질
@@ -238,6 +272,7 @@ export const TRACK_DEFAULTS: Record<TrackProp, { unit: TrackUnit; identity: numb
   scaleX: { unit: 'ratio', identity: 1 },
   scaleY: { unit: 'ratio', identity: 1 },
   opacity: { unit: 'ratio', identity: 1 },
+  blur: { unit: 'px', identity: 0 },
   reveal: { unit: 'ratio', identity: 1 },
   charIn: { unit: 'ratio', identity: 1 },
   rotate: { unit: 'deg', identity: 0 },

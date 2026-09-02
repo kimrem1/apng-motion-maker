@@ -363,6 +363,7 @@ export function identityTransform(): ResolvedTransform {
     anchorX: 0.5,
     anchorY: 0.5,
     opacity: 1,
+    blur: 0,
     reveal: 1,
     charIn: 1,
   }

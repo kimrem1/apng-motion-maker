@@ -13,6 +13,7 @@ import type {
   AssetTable,
   BlendMode,
   CompositionSnapshot,
+  EffectInstance,
   RenderTarget,
   ResolvedLayer,
 } from '../types.ts'
@@ -26,7 +27,7 @@ import { clipGroups, subtreeEnds, type ClipGroup } from '../clip.ts'
 import { glyphInkCenterX, renderStepsForRange } from './renderPlan.ts'
 import { CLIP_FS } from './shaders/clip.ts'
 import { secToFrame } from '../time.ts'
-import { setPremultipliedBlend, type GlCapabilities } from './gl.ts'
+import { applyPixelStorePolicy, setPremultipliedBlend, type GlCapabilities } from './gl.ts'
 import { ProgramCache, type ProgramInfo } from './programCache.ts'
 import { TargetPool, type PooledTarget } from './targetPool.ts'
 import { COPY_FS, FULLSCREEN_VS, LAYER_FS, LAYER_VS } from './shaders/layer.ts'
@@ -46,6 +47,7 @@ import {
   hasActiveEffects,
   runEffectChain,
 } from '@/effects/passGraph.ts'
+import { ParticleFrameCache } from '@/particles/frames.ts'
 
 /**
  * 문서 시드. evaluate.ts 의 PROJECT_SEED 와 같은 값이어야 한다.
@@ -90,6 +92,60 @@ function setRevealUniforms(
   if (uFlip) gl.uniform1f(uFlip, spec.invert ? 1 : 0)
 }
 
+/**
+ * 색 덧씌우기 유니폼. 가리기와 같은 이유로 tint 가 없어도 양을 0 으로 반드시 쓴다
+ * (setRevealUniforms 주석).
+ */
+function setTintUniforms(
+  gl: WebGL2RenderingContext,
+  info: ProgramInfo,
+  layer: ResolvedLayer,
+): void {
+  const uAmount = info.uniforms.get('u_tintAmount')
+  const tint = layer.tint
+  if (!tint || tint.amount <= 0) {
+    if (uAmount) gl.uniform1f(uAmount, 0)
+    return
+  }
+  if (uAmount) gl.uniform1f(uAmount, tint.amount)
+  const uColor = info.uniforms.get('u_tintColor')
+  if (uColor) gl.uniform3f(uColor, tint.r, tint.g, tint.b)
+}
+
+/**
+ * 흐림 채널 하나짜리 이펙트 인스턴스.
+ *
+ * 흐림은 이웃 픽셀을 읽어야 해서 행렬로는 표현할 수 없고, 기존 fx.blur 패스가
+ * 정확히 그 일을 한다. 채널 전용 셰이더를 새로 만들면 같은 흐림이 두 벌이 된다.
+ *
+ * 사용자 이펙트 배열에 이어 붙이면 안 된다. C 단계는 배열 순서가 아니라 카탈로그
+ * 순서로 도는데(passGraph planFusedStage) fx.blur 는 카탈로그 앞쪽이라, 스캔라인이나
+ * 그레인 같은 뒤쪽 원자가 흐린 그림 위에 다시 또렷하게 찍힌다. 그래서 이 인스턴스는
+ * 사용자 체인이 다 끝난 뒤 **별도 체인**으로 돌린다 (renderLayerAlone).
+ *
+ * 반경은 문서 픽셀 값이다. 셰이더는 타깃 해상도로 나누므로(u_resolution) 썸네일이나
+ * 크기를 바꾼 내보내기에서는 같은 값이 다르게 번진다. 타깃/문서 비율로 환산해
+ * "프리뷰 = 결과물" 을 지킨다.
+ */
+function channelBlurInstance(
+  layer: ResolvedLayer,
+  targetW: number,
+  docW: number,
+): EffectInstance | null {
+  const radius = layer.transform.blur
+  if (radius <= 0) return null
+  const scale = docW > 0 ? targetW / docW : 1
+  return {
+    id: `${layer.layerId}:channelBlur`,
+    type: 'fx.blur',
+    enabled: true,
+    seed: 0,
+    holdFrames: 1,
+    requiresHistory: false,
+    params: { radius: Math.min(80, radius) * scale, taps: 36, mix: 1 },
+  }
+}
+
 export class Renderer {
   readonly gl: WebGL2RenderingContext
   readonly caps: GlCapabilities
@@ -119,6 +175,17 @@ export class Renderer {
 
   /** 이번 프레임의 폴더 매트릭스. 폴더가 없으면 비어 있고 비용도 0 이다. */
   private folderMatrices: ReadonlyMap<string, Mat3> = new Map()
+
+  /**
+   * 파티클 레이어의 프레임 공급과 텍스처.
+   *
+   * 파티클은 Canvas 2D 로 그린 뒤 프레임마다 텍스처로 올린다. 이 경로만은
+   * document 를 쓰므로 (src/particles) 메인 스레드에서만 돈다. 지금 내보내기도
+   * 메인 스레드에서 렌더하므로 (워커는 인코딩만 한다) 프리뷰 = 결과물 약속은
+   * 그대로다.
+   */
+  private readonly particleFrames = new ParticleFrameCache()
+  private readonly particleTextures = new Map<string, { texture: WebGLTexture }>()
 
   constructor(gl: WebGL2RenderingContext, caps: GlCapabilities) {
     this.gl = gl
@@ -173,6 +240,17 @@ export class Renderer {
     }
 
     const layers = resolveComposition(doc, frame, this.overscanMap)
+    // 문서에서 사라진 파티클 레이어의 엔진과 텍스처를 돌려준다.
+    if (this.particleTextures.size > 0 || layers.some((l) => l.particle)) {
+      const alive = new Set(layers.filter((l) => l.particle).map((l) => l.layerId))
+      this.particleFrames.prune(alive)
+      for (const [id, slot] of this.particleTextures) {
+        if (!alive.has(id)) {
+          gl.deleteTexture(slot.texture)
+          this.particleTextures.delete(id)
+        }
+      }
+    }
     /*
      * 폴더 매트릭스는 프레임마다 폴더 개수만큼만 만든다.
      * 레이어마다 사슬을 다시 곱하면 깊이의 제곱이 된다.
@@ -193,9 +271,11 @@ export class Renderer {
     // 혼합 모드가 있으면 배경을 읽어야 한다. 둘 다 오프스크린을 요구한다.
     const layerNeedsPass = layers.map(
       (l) =>
-        (!!l.assetId || !!l.shape || !!l.text) &&
+        (!!l.assetId || !!l.shape || !!l.text || !!l.particle) &&
         l.visible &&
-        (l.blend !== 'normal' || hasActiveEffects(l.effects, frame)),
+        (l.blend !== 'normal' ||
+          l.transform.blur > 0 ||
+          hasActiveEffects(l.effects, frame)),
     )
     /*
      * 혼합 모드가 걸린 보이는 폴더는 서브트리를 한 장에 담아 폴더의 blend 로
@@ -214,7 +294,7 @@ export class Renderer {
       gl.viewport(0, 0, target.width, target.height)
       this.clearBackground(doc)
       setPremultipliedBlend(gl)
-      for (const layer of layers) this.drawLayer(doc, layer, assets)
+      for (const layer of layers) this.drawLayer(doc, layer, assets, frame)
       gl.bindVertexArray(null)
       this.targets.endFrame()
       this.texts.endFrame()
@@ -260,34 +340,50 @@ export class Renderer {
         gl.clearColor(0, 0, 0, 0)
         gl.clear(gl.COLOR_BUFFER_BIT)
         setPremultipliedBlend(gl)
-        this.drawLayer(doc, layer, assets)
+        this.drawLayer(doc, layer, assets, frame)
 
-        if (!hasActiveEffects(layer.effects, frame)) return layerBuf
-
-        const ran = runEffectChain(
-          { gl, programs: this.programs, targets: this.targets },
-          {
-            source: layerBuf,
-            output: { fbo: fxBuf.fbo, width: w, height: h },
-            effects: layer.effects,
-            ctxBase: {
-              frame,
-              durationFrames: doc.timeline.durationFrames,
-              fps: doc.timeline.fps,
-              width: w,
-              height: h,
-              pass: 0,
-              passCount: 1,
-              seedStatic: 0,
-              instanceSeed: 0,
+        const runChain = (source: PooledTarget, output: PooledTarget, effects: EffectInstance[]) =>
+          runEffectChain(
+            { gl, programs: this.programs, targets: this.targets },
+            {
+              source,
+              output: { fbo: output.fbo, width: w, height: h },
+              effects,
+              ctxBase: {
+                frame,
+                durationFrames: doc.timeline.durationFrames,
+                fps: doc.timeline.fps,
+                width: w,
+                height: h,
+                pass: 0,
+                passCount: 1,
+                seedStatic: 0,
+                instanceSeed: 0,
+              },
+              projectSeed: PROJECT_SEED,
+              nodeId: layer.layerId,
             },
-            projectSeed: PROJECT_SEED,
-            nodeId: layer.layerId,
-          },
-        )
+          )
+
+        let current = layerBuf
+        if (hasActiveEffects(layer.effects, frame)) {
+          if (runChain(current, fxBuf, layer.effects)) current = fxBuf
+        }
+
+        /*
+         * 흐림 채널은 사용자 체인이 다 끝난 뒤 별도 체인으로 돌린다. 같은 체인에
+         * 붙이면 C 단계가 카탈로그 순서로 돌아 스캔라인/그레인이 흐림 뒤에 다시
+         * 또렷하게 찍힌다 (channelBlurInstance 주석).
+         */
+        const blurFx = channelBlurInstance(layer, w, doc.canvas.w)
+        if (blurFx) {
+          const output = current === layerBuf ? fxBuf : layerBuf
+          if (runChain(current, output, [blurFx])) current = output
+        }
+
         // 체인은 자기 VAO 를 바인딩하고 블렌딩을 꺼 둔 채 돌아온다. 되돌린다.
         gl.bindVertexArray(this.emptyVao)
-        return ran ? fxBuf : layerBuf
+        return current
       }
 
       /** 다 만들어진 한 장을 누산기에 얹는다. 혼합 모드가 있으면 누산기를 바꿔 낀다. */
@@ -439,7 +535,7 @@ export class Renderer {
             gl.bindFramebuffer(gl.FRAMEBUFFER, dest.fbo)
             gl.viewport(0, 0, w, h)
             setPremultipliedBlend(gl)
-            this.drawLayer(doc, inner, assets)
+            this.drawLayer(doc, inner, assets, frame)
             continue
           }
           // 이펙트나 혼합 모드가 있는 레이어. 따로 그린 뒤 자기 blend 로 얹는다.
@@ -467,7 +563,7 @@ export class Renderer {
           gl.bindFramebuffer(gl.FRAMEBUFFER, acc.fbo)
           gl.viewport(0, 0, w, h)
           setPremultipliedBlend(gl)
-          this.drawLayer(doc, layer, assets)
+          this.drawLayer(doc, layer, assets, frame)
           continue
         }
         compose(renderLayerAlone(layer), layer.blend)
@@ -610,17 +706,22 @@ export class Renderer {
     doc: CompositionSnapshot,
     layer: ResolvedLayer,
     assets: AssetTable,
+    frame: number,
   ): void {
     if (!layer.visible) return
     if (layer.transform.opacity <= 0) return
 
-    // 도형과 글자가 먼저다. 둘 다 에셋을 가리키지 않는다.
+    // 도형 / 글자 / 파티클이 먼저다. 셋 다 에셋을 가리키지 않는다.
     if (layer.shape) {
       this.drawShapeLayer(doc, layer)
       return
     }
     if (layer.text) {
       this.drawTextLayer(doc, layer)
+      return
+    }
+    if (layer.particle) {
+      this.drawParticleLayer(doc, layer, frame)
       return
     }
     if (!layer.assetId) return
@@ -653,6 +754,7 @@ export class Renderer {
     if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
 
     setRevealUniforms(gl, info, layer)
+    setTintUniforms(gl, info, layer)
 
     const uImage = info.uniforms.get('u_image')
     if (uImage) {
@@ -703,6 +805,7 @@ export class Renderer {
     if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
 
     setRevealUniforms(gl, info, layer)
+    setTintUniforms(gl, info, layer)
 
     // 색은 straight alpha 로 넘긴다. premultiply 는 프래그먼트 셰이더가 마지막에 한다.
     const uColor = info.uniforms.get('u_color')
@@ -731,6 +834,87 @@ export class Renderer {
 
     const uPoints = info.uniforms.get('u_points')
     if (uPoints) gl.uniform1i(uPoints, Math.max(3, Math.round(shape.points)))
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+  }
+
+  /**
+   * 파티클 레이어.
+   *
+   * 엔진(src/particles)이 Canvas 2D 로 캔버스 크기의 한 장을 그리고, 그걸 프레임마다
+   * 텍스처로 올려 이미지 경로와 같은 쿼드로 그린다. 원본 크기 = 캔버스 크기라
+   * 맞춤 / 기준점 / 배율 규칙이 이미지와 한 글자도 다르지 않고, 변환 / 투명도 /
+   * 가리기 / 색 덧씌우기 유니폼도 그대로 걸린다.
+   */
+  private drawParticleLayer(
+    doc: CompositionSnapshot,
+    layer: ResolvedLayer,
+    frame: number,
+  ): void {
+    const spec = layer.particle
+    if (!spec) return
+
+    const gl = this.gl
+    const w = doc.canvas.w
+    const h = doc.canvas.h
+    const canvas = this.particleFrames.frame(
+      layer.layerId,
+      spec,
+      w,
+      h,
+      frame,
+      doc.timeline.durationFrames,
+      doc.timeline.fps,
+    )
+    if (!canvas) return
+
+    let slot = this.particleTextures.get(layer.layerId)
+    if (!slot) {
+      const texture = gl.createTexture()
+      if (!texture) return
+      gl.bindTexture(gl.TEXTURE_2D, texture)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      slot = { texture }
+      this.particleTextures.set(layer.layerId, slot)
+    }
+
+    // 캔버스 내용은 프레임마다 다르므로 매 프레임 올린다. 업로드는 straight alpha 다
+    // (gl.ts 픽셀 저장 정책). 셰이더가 마지막에 premultiply 하는 계약 그대로다.
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, slot.texture)
+    applyPixelStorePolicy(gl)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, canvas)
+
+    const info = this.programs.get(LAYER_VS, LAYER_FS)
+
+    buildLayerMatrix(
+      layer.transform,
+      layer.fit,
+      doc.canvas.w,
+      doc.canvas.h,
+      w,
+      h,
+      this.layerMatrix,
+    )
+    applyFolderMatrix(this.layerMatrix, layer.folderId, this.folderMatrices)
+    mat3Multiply(this.clipMatrix, this.layerMatrix, this.finalMatrix)
+
+    gl.useProgram(info.program)
+
+    const uMatrix = info.uniforms.get('u_matrix')
+    if (uMatrix) gl.uniformMatrix3fv(uMatrix, false, this.finalMatrix)
+
+    const uOpacity = info.uniforms.get('u_opacity')
+    if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
+
+    setRevealUniforms(gl, info, layer)
+    setTintUniforms(gl, info, layer)
+
+    const uImage = info.uniforms.get('u_image')
+    if (uImage) gl.uniform1i(uImage, 0)
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }
@@ -780,6 +964,7 @@ export class Renderer {
     if (uOpacity) gl.uniform1f(uOpacity, layer.transform.opacity)
 
     setRevealUniforms(gl, info, layer)
+    setTintUniforms(gl, info, layer)
 
     const uImage = info.uniforms.get('u_image')
     if (uImage) {
@@ -916,6 +1101,8 @@ export class Renderer {
     this.programs.dispose()
     this.targets.dispose()
     this.texts.dispose()
+    for (const slot of this.particleTextures.values()) this.gl.deleteTexture(slot.texture)
+    this.particleTextures.clear()
     if (this.emptyVao) this.gl.deleteVertexArray(this.emptyVao)
   }
 }

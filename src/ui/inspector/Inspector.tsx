@@ -28,6 +28,7 @@ import { EffectStack } from '@/ui/effects/EffectStack.tsx'
 import { LayerProperties } from '@/ui/layers/LayerProperties.tsx'
 import { PrepPanel } from '@/ui/prep/PrepPanel.tsx'
 import { TextSection } from './TextSection.tsx'
+import { ParticleSection } from './ParticleSection.tsx'
 import { CharAnimSection } from './CharAnimSection.tsx'
 import { MotionSpeedSection, MotionTransferSection } from './MotionTransferSection.tsx'
 import { ShapeSection } from '@/ui/inspector/ShapeSection.tsx'
@@ -251,7 +252,9 @@ function LayerSection({ layer }: { layer: Layer }) {
   const setStaticValue = useDocumentStore((s) => s.setStaticValue)
   const setValueAtFrame = useDocumentStore((s) => s.setValueAtFrame)
   const setLayerPerspective = useDocumentStore((s) => s.setLayerPerspective)
+  const setLayerTint = useDocumentStore((s) => s.setLayerTint)
   const frame = useUiStore((s) => s.playheadFrame)
+  const isFolder = layer.type === 'group'
 
   // 한 번의 편집이 쓰는 프레임. 규칙은 useEditFrame.ts 한 곳에만 있다.
   const { beginEdit, endEdit } = useEditFrame()
@@ -279,6 +282,16 @@ function LayerSection({ layer }: { layer: Layer }) {
   const rotateX = read('rotateX')
   const rotateY = read('rotateY')
   const opacityPercent = read('opacity') * 100
+  const blurPx = read('blur')
+  /*
+   * 양을 0 으로 내리면 문서에서는 tint 키가 통째로 지워진다 (JSON 왕복 결정론).
+   * 고른 색까지 잃으면 0 으로 껐다 다시 켤 때마다 색을 다시 골라야 하므로,
+   * 마지막으로 쓴 색을 화면 쪽에서 기억해 둔다. 문서 상태가 아니라 편의 기억이다.
+   */
+  const lastTintColor = useRef(new Map<string, string>())
+  if (layer.tint) lastTintColor.current.set(layer.id, layer.tint.color)
+  const tintColor = layer.tint?.color ?? lastTintColor.current.get(layer.id) ?? '#ffffff'
+  const tintAmount = layer.tint?.amount ?? 0
 
   return (
     <section className="mm-section" aria-labelledby="mm-sec-layer">
@@ -442,6 +455,69 @@ function LayerSection({ layer }: { layer: Layer }) {
             onChange={(v) => write('opacity', Math.min(1, Math.max(0, v / 100)))}
           />
         </div>
+
+        {/* 흐림. 폴더는 픽셀이 없어 흐릴 것이 없다. */}
+        {isFolder ? null : (
+          <div className="mm-anim-row">
+            <AnimateToggle layerId={layer.id} prop="blur" frame={frame} label="흐림" />
+            <NumberField
+              label="흐림"
+              value={blurPx}
+              min={0}
+              max={80}
+              step={0.5}
+              suffix="px"
+              hint="키프레임을 찍으면 서서히 흐려지거나 또렷해집니다."
+              ariaLabel="흐림 반경(픽셀)"
+              onEditStart={beginEdit}
+              onEditEnd={endEdit}
+              // 렌더러가 80px 에서 굳는다 (renderer/index.ts channelBlurInstance).
+              // 그 위 값을 문서에 남기면 표시된 숫자와 그림이 어긋난다.
+              onChange={(v) => write('blur', Math.min(80, Math.max(0, v)))}
+            />
+          </div>
+        )}
+
+        {/* 색 덧씌우기. 그림의 비투명 픽셀 위에만 색이 얹힌다. */}
+        <div className="mm-field mm-field-inline">
+          <label className="mm-field-label" htmlFor="mm-tint-color">
+            색 덧씌우기
+          </label>
+          <div className="mm-field-control mm-color-row">
+            <span className="mm-field-hint">{toHex6(tintColor)}</span>
+            <input
+              id="mm-tint-color"
+              className="mm-color"
+              type="color"
+              value={toHex6(tintColor)}
+              aria-label="덧씌울 색"
+              onChange={(e) =>
+                setLayerTint(layer.id, {
+                  color: e.target.value,
+                  // 양이 0 인 채로 색만 고르면 아무 일도 안 일어난 것처럼 보인다.
+                  amount: tintAmount > 0 ? tintAmount : 1,
+                })
+              }
+            />
+          </div>
+        </div>
+        <NumberField
+          label="덧씌우기 양"
+          value={Math.round(tintAmount * 100)}
+          min={0}
+          max={100}
+          step={1}
+          suffix="%"
+          hint={
+            isFolder
+              ? '폴더에 걸면 안의 모든 레이어 색이 함께 바뀝니다. 0 이면 원본 그대로입니다.'
+              : '0 이면 원본 색 그대로입니다.'
+          }
+          ariaLabel="색 덧씌우기 양(퍼센트)"
+          onChange={(v) =>
+            setLayerTint(layer.id, { color: tintColor, amount: Math.min(1, Math.max(0, v / 100)) })
+          }
+        />
       </div>
     </section>
   )
@@ -637,6 +713,7 @@ export function Inspector() {
             {/* 도형이면 모양부터. "이게 무엇인가" 다음에 "남들과 어떤 관계인가" 가 온다 */}
             {layer.shape ? <ShapeSection key={`shape:${layer.id}`} layer={layer} /> : null}
             {layer.text ? <TextSection key={`text:${layer.id}`} layer={layer} /> : null}
+            {layer.particle ? <ParticleSection key={`ptc:${layer.id}`} layer={layer} /> : null}
             {/*
               등장. 글자면 한 글자씩, 그 외에는 오브제 통째로 들어온다.
               규칙이 한 벌이라 화면도 한 벌이다 (core/charAnim.ts).
@@ -660,8 +737,8 @@ export function Inspector() {
             */}
             <MotionSpeedSection key={`speed:${layer.id}`} layer={layer} />
             <MotionTransferSection key={`transfer:${layer.id}`} layer={layer} />
-            {/* 배경 제거와 크롭. 도형과 폴더는 픽셀이 없어 다듬을 것이 없다 */}
-            {layer.shape || isFolder ? null : <PrepPanel />}
+            {/* 배경 제거와 크롭. 도형 / 파티클 / 폴더는 원본 픽셀이 없어 다듬을 것이 없다 */}
+            {layer.shape || layer.particle || isFolder ? null : <PrepPanel />}
           </>
         ) : (
           <section className="mm-section">

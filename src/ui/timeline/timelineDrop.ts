@@ -23,8 +23,12 @@ export interface TimelineDropHost {
    * "영역을 벗어났는데 표시가 남는" 상태가 반드시 생기기 때문이다.
    */
   hover(clientX: number, clientY: number, layerId: string): boolean
-  /** 놓는다. 처리했으면 참이다. 거짓이면 끄는 쪽이 원래 하려던 일을 한다. */
-  drop(clientX: number, clientY: number, layerId: string): boolean
+  /**
+   * 놓는다. 처리했으면 참이다. 거짓이면 끄는 쪽이 원래 하려던 일을 한다.
+   * layerIds 는 잡은 것을 포함해 함께 끌려온 전부다. 다중 선택을 잡아 끌었으면
+   * 목록에서처럼 여기서도 전부가 한꺼번에 놓여야 한다.
+   */
+  drop(clientX: number, clientY: number, layerIds: readonly string[]): boolean
   /** 드래그가 끝났다. 표시를 지운다. */
   cancel(): void
 }
@@ -49,8 +53,12 @@ export function timelineDropHover(clientX: number, clientY: number, layerId: str
   return host?.hover(clientX, clientY, layerId) ?? false
 }
 
-export function timelineDropCommit(clientX: number, clientY: number, layerId: string): boolean {
-  const done = host?.drop(clientX, clientY, layerId) ?? false
+export function timelineDropCommit(
+  clientX: number,
+  clientY: number,
+  layerIds: readonly string[],
+): boolean {
+  const done = host?.drop(clientX, clientY, layerIds) ?? false
   host?.cancel()
   return done
 }

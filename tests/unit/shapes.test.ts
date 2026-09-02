@@ -1125,7 +1125,8 @@ describe('도형 셰이더', () => {
 
   it('premultiplied 로 출력한다', () => {
     // 이걸 어기면 프리뷰는 멀쩡한데 내보낸 파일에서만 반투명 가장자리 색이 뜬다.
-    expect(source).toContain('fragColor = vec4(u_color.rgb * a, a)')
+    // 색 덧씌우기(mix)는 straight 색에서 하고, 알파 곱은 마지막에 한 번이다.
+    expect(source).toContain('fragColor = vec4(mix(u_color.rgb, u_tintColor, u_tintAmount) * a, a)')
   })
 
   it('첫 줄이 버전 선언이다', () => {

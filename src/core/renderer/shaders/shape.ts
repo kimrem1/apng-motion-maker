@@ -48,6 +48,9 @@ uniform float u_inner;
 uniform float u_sweep;
 uniform int u_kind;
 uniform int u_points;
+// 색 덧씌우기. 레이어 셰이더와 같은 규약이다.
+uniform vec3 u_tintColor;
+uniform float u_tintAmount;
 ${REVEAL_GLSL}
 
 in vec2 v_uv;
@@ -270,6 +273,6 @@ void main() {
   float cov = 1.0 - smoothstep(-aa * 0.5, aa * 0.5, d);
 
   float a = cov * u_color.a * u_opacity * mmRevealMask(v_uv);
-  fragColor = vec4(u_color.rgb * a, a);
+  fragColor = vec4(mix(u_color.rgb, u_tintColor, u_tintAmount) * a, a);
 }
 `

@@ -160,32 +160,60 @@ export function dropTarget(
   movedId: string,
   boundary: number,
 ): DropTarget | null {
-  const from = layers.findIndex((l) => l.id === movedId)
-  if (from < 0 || layers.length === 0) return null
+  return dropTargetMulti(layers, rows, [movedId], boundary)
+}
+
+/**
+ * 여러 장을 한꺼번에 놓을 자리. 규칙은 dropTarget 과 같고 두 가지만 넓어진다.
+ *
+ *   - 기준 행을 찾을 때 옮기는 것 전부(와 그 식구)를 건너뛴다. 옮겨 갈 행을
+ *     기준으로 잡으면 놓는 순간 기준이 사라진다.
+ *   - 앞자리에서 빠지는 칸 수가 옮기는 장 수만큼 늘어난다.
+ *
+ * 폴더와 그 식구가 함께 선택되어 있으면 폴더만 옮긴다. 식구는 folderId 로 이미
+ * 딸려 있어서 따로 옮기면 두 번 옮겨져 순서가 엉킨다. index 는 옮길 것들을 전부
+ * 뺀 배열 기준이고, moveLayersTo 에 그대로 넘긴다.
+ */
+export function dropTargetMulti(
+  layers: readonly Layer[],
+  rows: readonly LayerRow[],
+  movedIds: readonly string[],
+  boundary: number,
+): DropTarget | null {
+  if (layers.length === 0) return null
+  const present = new Set(movedIds.filter((id) => layers.some((l) => l.id === id)))
+  if (present.size === 0) return null
+  // 조상이 함께 옮겨지는 것은 뺀다. 폴더가 움직이면 식구는 저절로 따라간다.
+  const tops = layers.filter(
+    (l) => present.has(l.id) && !folderChainHasAny(layers, l, present),
+  )
+  if (tops.length === 0) return null
+  const topIds = new Set(tops.map((l) => l.id))
+
+  const isMovedRow = (row: LayerRow): boolean =>
+    topIds.has(row.layer.id) ||
+    [...topIds].some((t) => hasAncestor(layers, t, row.layer.folderId))
 
   const start = Math.min(boundary, rows.length) - 1
   let i = start
-  while (i >= 0) {
-    const row = rows[i]!
-    if (row.layer.id !== movedId && !hasAncestor(layers, movedId, row.layer.folderId)) break
-    i -= 1
-  }
+  while (i >= 0 && isMovedRow(rows[i]!)) i -= 1
 
   let folderId: string | null
   let insertAt: number
 
   if (i < 0) {
     /*
-     * 건너뛴 끝에 여기까지 왔다면 그 위에는 자기 블록밖에 없다. 폴더를 자기 식구
-     * 사이에 놓으려 한 것이고, 그건 아무 일도 아니다. 여기서 맨 위로 보내면
-     * 자기 자손 안으로 못 들어간 대신 목록 꼭대기로 튀어 오른다.
+     * 건너뛴 끝에 여기까지 왔다면 그 위에는 옮기는 것밖에 없다. 한 장짜리 블록이면
+     * 자기 블록 사이에 놓은 것이라 아무 일도 아니다. 여러 장이 띄엄띄엄 골라져
+     * 있을 때는 다르다. 아래쪽에 고른 장들이 위로 끌려 올라와야 하므로 맨 위
+     * 삽입으로 흘려보낸다. 진짜 제자리 드롭은 moveLayersTo 의 결과 비교가 거른다.
      */
-    if (i !== start) return null
+    if (i !== start && tops.length === 1) return null
     /*
      * 목록 맨 위. 최상위이고 z 가 가장 크다.
      *
-     * 배열 끝 **다음** 자리를 가리킨다. 아래에서 자기 자리가 빠진 만큼 한 칸을
-     * 당기므로, 여기서 length - 1 로 적으면 옮긴 뒤 끝에서 두 번째가 된다.
+     * 배열 끝 **다음** 자리를 가리킨다. 아래에서 자기 자리가 빠진 만큼 당기므로,
+     * 여기서 length - 1 로 적으면 옮긴 뒤 끝자리가 어긋난다.
      */
     folderId = null
     insertAt = layers.length
@@ -206,15 +234,44 @@ export function dropTarget(
   }
 
   // 자기 자신이나 자기 자손 안으로는 못 들어간다.
-  if (folderId !== null && (folderId === movedId || hasAncestor(layers, movedId, folderId))) {
-    return null
+  if (folderId !== null) {
+    for (const t of tops) {
+      if (folderId === t.id || hasAncestor(layers, t.id, folderId)) return null
+    }
   }
 
-  // splice 로 빼낸 뒤 넣으므로, 앞자리가 빠졌으면 한 칸 당긴다.
-  if (from < insertAt) insertAt -= 1
-  const index = Math.max(0, Math.min(layers.length - 1, insertAt))
+  // splice 로 빼낸 뒤 넣으므로, 앞자리에서 빠지는 만큼 당긴다.
+  let removedBefore = 0
+  for (let k = 0; k < insertAt && k < layers.length; k += 1) {
+    if (topIds.has(layers[k]!.id)) removedBefore += 1
+  }
+  insertAt -= removedBefore
+  const index = Math.max(0, Math.min(layers.length - tops.length, insertAt))
 
-  const sameFolder = (layers[from]!.folderId ?? null) === folderId
-  if (index === from && sameFolder) return null
+  if (tops.length === 1) {
+    // 뺀 배열 기준의 제자리는 from 그대로다. 자기 앞자리들은 그대로이기 때문이다.
+    const from = layers.findIndex((l) => l.id === tops[0]!.id)
+    const sameFolder = (tops[0]!.folderId ?? null) === folderId
+    if (index === from && sameFolder) return null
+  }
   return { index, folderId }
+}
+
+/** 이 레이어의 소속 사슬 어딘가에 ids 중 하나가 있는가. */
+function folderChainHasAny(
+  layers: readonly Layer[],
+  layer: Layer,
+  ids: ReadonlySet<string>,
+): boolean {
+  let cursor = layer.folderId
+  const seen = new Set<string>()
+  let depth = 0
+  while (cursor && depth <= MAX_FOLDER_DEPTH) {
+    if (ids.has(cursor)) return true
+    if (seen.has(cursor)) return false
+    seen.add(cursor)
+    cursor = layers.find((l) => l.id === cursor)?.folderId
+    depth += 1
+  }
+  return false
 }

@@ -15,6 +15,7 @@ import { PresetGallery } from '@/ui/presets/PresetGallery.tsx'
 import { useShapeUiStore, type CreatorTab } from '@/state/shapeUi.ts'
 import { CutPanel } from '@/ui/cuts/CutPanel.tsx'
 import { TextGallery } from '@/ui/text/TextGallery.tsx'
+import { ParticleGallery } from '@/ui/particles/ParticleGallery.tsx'
 import { ShapeGallery } from './ShapeGallery.tsx'
 import './shapes.css'
 
@@ -22,6 +23,7 @@ const TABS: readonly { id: CreatorTab; label: string }[] = [
   { id: 'motion', label: '모션' },
   { id: 'shape', label: '도형' },
   { id: 'text', label: '글자' },
+  { id: 'particle', label: '파티클' },
   { id: 'cut', label: '컷' },
 ]
 
@@ -95,6 +97,8 @@ export function CreatorTabs() {
           <ShapeGallery />
         ) : tab === 'text' ? (
           <TextGallery />
+        ) : tab === 'particle' ? (
+          <ParticleGallery />
         ) : (
           <CutPanel />
         )}

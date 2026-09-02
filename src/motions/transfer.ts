@@ -15,7 +15,7 @@
  *   effects                             셰이더 효과 스택                  (갈래 'effects')
  *   reveal / charAnim / anchor           경계선, 등장, 모션이 도는 축      (갈래 'shaping')
  *   perspective / motionExitsFrame       원근 거리, 프레임 이탈 표식       (갈래 'shaping')
- *   motionRepeat                        이 레이어만의 모션 배수            (갈래 'tracks')
+ *   motionRepeat / motionLoop           이 레이어만의 모션 배수와 반복 방식 (갈래 'tracks')
  *
  * 옮기지 않는 것 (정체성과 배치)
  *   id / name / type / assetId          무엇을 그리는가
@@ -50,6 +50,7 @@ import type {
   EffectParam,
   Layer,
   Modifier,
+  MotionLoopMode,
   RevealSpec,
   Track,
 } from '@/core/types.ts'
@@ -98,6 +99,7 @@ export interface MotionBundle {
   perspective?: number
   anchor: [number, number]
   motionRepeat?: number
+  motionLoop?: MotionLoopMode
   motionExitsFrame: boolean
 }
 
@@ -215,6 +217,7 @@ export function extractMotion(layer: Layer): MotionBundle {
     ...(typeof layer.perspective === 'number' ? { perspective: layer.perspective } : {}),
     anchor: [layer.anchor[0], layer.anchor[1]],
     ...(typeof layer.motionRepeat === 'number' ? { motionRepeat: layer.motionRepeat } : {}),
+    ...(layer.motionLoop ? { motionLoop: layer.motionLoop } : {}),
     motionExitsFrame: layer.motionExitsFrame === true,
   }
 }
@@ -267,12 +270,24 @@ export function applyMotionBundle(
   const isFolder = layer.type === 'group'
 
   if (parts.tracks) {
-    layer.tracks = bundle.tracks.map((t) => ({ ...cloneTrack(t), id: mint.track() }))
+    /*
+     * 흐림 트랙은 폴더에 옮기지 않는다. 폴더는 픽셀이 없어 흐림 채널이 소비되지
+     * 않고(evaluate 는 폴더의 투명도만 안쪽에 물려준다), 인스펙터도 폴더의 흐림
+     * 줄을 숨긴다. 옮기면 지울 수단이 없는 유령 트랙만 남는다.
+     */
+    layer.tracks = bundle.tracks
+      .filter((t) => !isFolder || t.prop !== 'blur')
+      .map((t) => ({ ...cloneTrack(t), id: mint.track() }))
     layer.modifiers = bundle.modifiers.map((m) => ({ ...cloneModifier(m), id: mint.modifier() }))
     if (typeof bundle.motionRepeat === 'number' && bundle.motionRepeat > 1) {
       layer.motionRepeat = bundle.motionRepeat
     } else {
       delete layer.motionRepeat
+    }
+    if (bundle.motionLoop === 'pingPong' || bundle.motionLoop === 'once') {
+      layer.motionLoop = bundle.motionLoop
+    } else {
+      delete layer.motionLoop
     }
   }
 
@@ -322,6 +337,7 @@ export function clearMotion(layer: Layer, parts: MotionParts): void {
     layer.tracks = []
     layer.modifiers = []
     delete layer.motionRepeat
+    delete layer.motionLoop
   }
   if (parts.effects) layer.effects = []
   if (parts.shaping) {

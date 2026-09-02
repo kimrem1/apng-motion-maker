@@ -5,7 +5,6 @@
  */
 
 import { useDocumentStore } from '@/state/document.ts'
-import { useUiStore } from '@/state/ui.ts'
 import { SKIP_TARGET_IDS } from '@/ui/a11y/SkipLinks.tsx'
 import { getCommandHost } from '@/ui/shortcuts/registry.ts'
 
@@ -69,8 +68,6 @@ export interface ToolbarProps {
 }
 
 export function Toolbar({ onExport }: ToolbarProps) {
-  const mode = useUiStore((s) => s.mode)
-  const setMode = useUiStore((s) => s.setMode)
   const undo = useDocumentStore((s) => s.undo)
   const redo = useDocumentStore((s) => s.redo)
   const canUndo = useDocumentStore((s) => s.past.length > 0)
@@ -110,29 +107,6 @@ export function Toolbar({ onExport }: ToolbarProps) {
           aria-label={canRedo ? `다시 실행: ${nextLabel}` : '다시 실행, 다시 실행할 작업이 없습니다'}
         >
           <IconRedo />
-        </button>
-      </div>
-
-      {/* 세그먼트 토글. 두 모드는 같은 문서를 보는 두 개의 뷰다. */}
-      <div className="mm-segment" role="radiogroup" aria-label="편집 모드">
-        <button
-          type="button"
-          className="mm-segment-item"
-          role="radio"
-          aria-checked={mode === 'easy'}
-          title="쉬운 모드. 프리셋을 고르고 바로 내보냅니다"
-          onClick={() => setMode('easy')}
-        >
-          EASY
-        </button>
-        <button
-          type="button"
-          className="mm-segment-item"
-          role="radio"
-          aria-checked={mode === 'pro'}
-          onClick={() => setMode('pro')}
-        >
-          PRO
         </button>
       </div>
 

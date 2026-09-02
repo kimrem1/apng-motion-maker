@@ -20,7 +20,7 @@ import { useDocumentStore } from '@/state/document.ts'
 import {
   clearRanges,
   defaultRangeFrames,
-  dropRangeAt,
+  dropRangesAt,
   setRangeEnd,
   setRangeStart,
   splitSequential,
@@ -392,7 +392,7 @@ describe('타임라인에 놓기', () => {
 
   it('구간이 없으면 기본 길이로 생긴다', () => {
     const id = s().doc.layers[0]!.id
-    dropRangeAt(id, 8)
+    dropRangesAt([id], 8)
     const layer = s().doc.layers[0]!
     expect(layer.inFrame).toBe(8)
     expect(layer.outFrame! - layer.inFrame! + 1).toBe(defaultRangeFrames(40))
@@ -402,15 +402,27 @@ describe('타임라인에 놓기', () => {
     // 여러 장을 차례로 놓는 동안 길이까지 달라지면 리듬이 어긋난다.
     const id = s().doc.layers[0]!.id
     s().setLayerRanges([{ layerId: id, inFrame: 0, outFrame: 5 }], '구간 변경')
-    dropRangeAt(id, 20)
+    dropRangesAt([id], 20)
     expect([s().doc.layers[0]!.inFrame, s().doc.layers[0]!.outFrame]).toEqual([20, 25])
   })
 
   it('끝을 넘겨 놓아도 구간 전체가 안에 들어온다', () => {
     const id = s().doc.layers[0]!.id
     s().setLayerRanges([{ layerId: id, inFrame: 0, outFrame: 9 }], '구간 변경')
-    dropRangeAt(id, 38)
+    dropRangesAt([id], 38)
     expect([s().doc.layers[0]!.inFrame, s().doc.layers[0]!.outFrame]).toEqual([30, 39])
+  })
+
+  it('여러 장을 한꺼번에 놓으면 각자 길이를 지키고 실행취소는 한 칸이다', () => {
+    const ids = s().doc.layers.map((l) => l.id)
+    s().setLayerRanges([{ layerId: ids[0]!, inFrame: 0, outFrame: 5 }], '구간 변경')
+    const depth = s().past.length
+    dropRangesAt(ids, 10)
+    const [a, b] = s().doc.layers
+    expect([a!.inFrame, a!.outFrame]).toEqual([10, 15])
+    expect(b!.inFrame).toBe(10)
+    expect(b!.outFrame! - b!.inFrame! + 1).toBe(defaultRangeFrames(40))
+    expect(s().past.length).toBe(depth + 1)
   })
 })
 
@@ -428,8 +440,23 @@ describe('구간 시작과 끝 맞추기', () => {
 
   it('끝만 정하면 시작은 0 이다', () => {
     const id = s().doc.layers[0]!.id
+    // 재생헤드는 칸의 왼쪽 변이다. 12 에서 끝을 누르면 11 프레임까지만 보인다.
     setRangeEnd([id], 12)
-    expect([s().doc.layers[0]!.inFrame, s().doc.layers[0]!.outFrame]).toEqual([0, 12])
+    expect([s().doc.layers[0]!.inFrame, s().doc.layers[0]!.outFrame]).toEqual([0, 11])
+  })
+
+  it('0 프레임에서 끝을 눌러도 한 프레임은 남는다', () => {
+    const id = s().doc.layers[0]!.id
+    setRangeEnd([id], 0)
+    expect([s().doc.layers[0]!.inFrame, s().doc.layers[0]!.outFrame]).toEqual([0, 0])
+  })
+
+  it('마지막 프레임에서 끝을 누르면 끝까지 다 들어간다', () => {
+    // 재생헤드는 마지막 칸 너머로 못 간다. 여기서도 한 칸을 빼면
+    // 마지막 프레임을 포함시킬 방법이 아예 없어진다.
+    const id = s().doc.layers[0]!.id
+    setRangeEnd([id], 29)
+    expect(s().doc.layers[0]!.outFrame).toBe(29)
   })
 
   it('시작이 끝을 넘어가면 끝이 따라온다', () => {

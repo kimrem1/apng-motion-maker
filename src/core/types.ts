@@ -6,6 +6,8 @@
  * 나중에 필드를 추가하면 저장된 프로젝트를 마이그레이션해야 하기 때문이다.
  */
 
+import type { ParticleSpec } from '@/particles/types.ts'
+
 export const SCHEMA_ID = 'motion-maker/1' as const
 
 /** 셰이더나 평가기가 바뀌어 같은 문서가 다른 픽셀을 내면 증가시킨다. */
@@ -186,6 +188,13 @@ export type TrackProp =
   | 'skewX'
   | 'skewY'
   | 'opacity'
+  /**
+   * 흐림 반경(px). 0 이면 또렷하다.
+   *
+   * 행렬로는 표현할 수 없어 렌더러가 이 값이 양수인 레이어만 오프스크린 패스로
+   * 돌린다. 항등값이 0 이라 트랙이 없으면 옛 문서의 픽셀이 바뀌지 않는다.
+   */
+  | 'blur'
   /**
    * 가리기 진행률. 0 이면 완전히 가려지고 1 이면 전부 보인다.
    *
@@ -502,7 +511,7 @@ export type FrameFit = 'contain' | 'crop' | 'cover'
 
 export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'lighten' | 'darken'
 
-export type LayerType = 'image' | 'solid' | 'group' | 'shape' | 'text'
+export type LayerType = 'image' | 'solid' | 'group' | 'shape' | 'text' | 'particle'
 
 // ---------------------------------------------------------------------------
 // 글자
@@ -775,6 +784,14 @@ export interface Layer {
    */
   text?: TextSpec
   /**
+   * 파티클 레이어의 내용. type 이 'particle' 일 때만 있다.
+   *
+   * 같은 spec 과 시간이면 언제나 같은 그림이 나온다 (src/particles/engine.ts).
+   * 렌더러가 캔버스 크기의 오버레이 한 장으로 그리므로 변환 / 투명도 / 흐림 /
+   * 색 덧씌우기 / 이펙트가 이미지 레이어와 한 글자도 다르지 않게 걸린다.
+   */
+  particle?: ParticleSpec
+  /**
    * 글자가 하나씩 들어오는 모양. `charIn` 트랙이 진행률을 민다.
    * 글자 레이어가 아니면 아무 데도 쓰이지 않는다.
    */
@@ -840,6 +857,22 @@ export interface Layer {
    */
   motionRepeat?: number
   /**
+   * 이 레이어 모션의 반복 방식. 없으면 'repeat'(매 주기 처음부터)다.
+   *
+   * motionRepeat 가 "몇 번 도는가" 라면 이쪽은 "어떻게 도는가" 다. 문서의
+   * loop.mode 는 결과물 전체의 재생 방식이고, 이 필드는 한 문서 길이 안에서
+   * 이 레이어의 모션만 왕복시키거나 멈춰 세운다 (core/evaluate.ts).
+   *
+   * 'repeat' 면 키를 만들지 않는다. shape 과 같은 이유다 (JSON 왕복 결정론).
+   */
+  motionLoop?: MotionLoopMode
+  /**
+   * 레이어 전체 색 덧씌우기. 없으면 원본 색 그대로다.
+   *
+   * amount 0 은 없음과 같은 그림이므로 키를 만들지 않는다 (JSON 왕복 결정론).
+   */
+  tint?: LayerTint
+  /**
    * 앞 프리셋이 **이 레이어에** 심은 것의 기록 (motions/merge.ts 가 읽고 쓴다).
    *
    * 문서(presetRef)가 아니라 레이어에 두는 이유는 소유권이 레이어마다 다르기
@@ -865,6 +898,31 @@ export interface Layer {
  */
 export const MOTION_REPEAT_MIN = 1
 export const MOTION_REPEAT_MAX = 12
+
+/**
+ * 레이어 모션의 반복 방식.
+ *
+ *   repeat    매 주기 처음부터 다시 돈다. 지금까지의 동작이고 키를 만들지 않는다.
+ *   pingPong  한 주기 안에서 갔다가 되돌아온다. 주기 끝 값이 시작 값과 같아
+ *             문서 반복 이음새가 저절로 이어진다.
+ *   once      첫 주기만 돌고 마지막 값에 멈춘다. motionRepeat 로 주기를 줄여
+ *             "빨리 끝내고 멈추기" 를 만든다.
+ */
+export type MotionLoopMode = 'repeat' | 'pingPong' | 'once'
+
+/**
+ * 레이어 전체에 덧씌우는 색.
+ *
+ * 그림의 비투명 픽셀 위에 color 를 amount 만큼 섞는다. 알파는 건드리지 않아
+ * 스티커의 투명 가장자리가 그대로 남는다. 폴더에 걸면 안의 모든 레이어가
+ * 물려받는다 (자기 tint 가 있는 레이어는 자기 것이 이긴다).
+ */
+export interface LayerTint {
+  /** #rrggbb */
+  color: string
+  /** 0..1. 0 이면 키를 만들지 않는다 (JSON 왕복 결정론). */
+  amount: number
+}
 
 // ---------------------------------------------------------------------------
 // 프로젝트
@@ -1045,6 +1103,8 @@ export interface ResolvedTransform {
   anchorX: number
   anchorY: number
   opacity: number
+  /** 흐림 반경(px). 0 이면 또렷하다. 행렬이 아니라 렌더러의 별도 패스가 소비한다. */
+  blur: number
   /** 가리기 진행률. 1 이면 전부 보인다. */
   reveal: number
   /** 글자 등장 진행률. 1 이면 전부 제자리다. */
@@ -1081,6 +1141,8 @@ export interface ResolvedLayer {
   shape?: ShapeSpec
   /** 글자 레이어의 내용. 렌더러가 에셋 대신 이걸 그린다. */
   text?: TextSpec
+  /** 파티클 레이어의 내용. 렌더러가 에셋 대신 이걸 그린다. */
+  particle?: ParticleSpec
   /** 글자 등장 모양. 진행률은 transform.charIn 이다. */
   charAnim?: CharAnimSpec
   /**
@@ -1088,6 +1150,11 @@ export interface ResolvedLayer {
    * shape 과 같은 이유로 있을 때만 키를 만든다 (JSON 결정론).
    */
   reveal?: RevealSpec
+  /**
+   * 색 덧씌우기. 자기 것이 없으면 가장 가까운 폴더의 것을 물려받은 값이다.
+   * 렌더러가 프레임마다 색을 파싱하지 않도록 평가 단계에서 숫자로 풀어 싣는다.
+   */
+  tint?: { r: number; g: number; b: number; amount: number }
 }
 
 // ---------------------------------------------------------------------------

@@ -121,3 +121,15 @@ export function moveLayerTo(
 ): void {
   useDocumentStore.getState().moveLayerTo(layerId, toIndex, folderId)
 }
+
+/**
+ * 여러 장을 한 덩어리로 옮긴다. toIndex 는 옮길 레이어들을 뺀 배열 기준이다
+ * (layerTree.ts dropTargetMulti 가 그 기준으로 계산한다).
+ */
+export function moveLayersTo(
+  layerIds: readonly string[],
+  toIndex: number,
+  folderId?: string | null,
+): void {
+  useDocumentStore.getState().moveLayersTo(layerIds, toIndex, folderId)
+}

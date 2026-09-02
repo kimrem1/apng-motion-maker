@@ -15,6 +15,7 @@ import type {
   TrackUnit,
 } from './types.ts'
 import { baseFitScale, identityTransform } from './transform.ts'
+import { parseHexColor } from './color.ts'
 import { charAnimIsActive, objectCharTransform } from './charAnim.ts'
 import { folderChain, isFolderLayer } from './group.ts'
 import { layerIntrinsicSize } from './shape.ts'
@@ -28,6 +29,8 @@ const DEFAULT_COMPOSITE: Record<TrackProp, CompositeOp> = {
   scaleX: 'multiply',
   scaleY: 'multiply',
   opacity: 'multiply',
+  // 흐림은 항등값 0 에 더해지므로 트랙 하나면 그 값이 그대로다.
+  blur: 'add',
   // 가리기는 투명도와 같은 규칙이다. 항등값 1 에 곱해지므로 트랙 하나면 그 값이 그대로다.
   reveal: 'multiply',
   // 글자 등장도 같다.
@@ -145,6 +148,10 @@ function writeChannel(
     case 'opacity':
       t.opacity = applyOp(t.opacity, value, op)
       return
+    case 'blur':
+      // 음수 흐림은 없다. add 결합에서 내려간 값이 또렷함 아래로 뚫지 않게 여기서 자른다.
+      t.blur = Math.max(0, applyOp(t.blur, value, op))
+      return
     case 'anchorX':
       t.anchorX = applyOp(t.anchorX, value, op)
       return
@@ -195,10 +202,33 @@ export function resolveLayerTransform(
    * `(effectiveFrame(frame, hold) % duration) / duration` 으로 만드는데(generators.ts),
    * 홀드 클럭은 문서 시간에 있어야 한다. 프레임에 배수를 곱하면 자글자글의 "2컷,
    * 3컷" 이 배수를 따라 잘아져서 홀드 정렬 검사(core/loopSeam.ts)가 거짓이 된다.
+   *
+   * motionLoop 는 이 매핑의 모양만 바꾼다.
+   *   pingPong  주기 앞 절반에 트랙 전 구간을 순방향으로, 뒤 절반에 역방향으로 편다.
+   *             주기 끝 값 = 시작 값이라 이음새가 저절로 이어진다.
+   *   once      첫 주기만 돌고 그 뒤로는 트랙 끝 값에 멈춘다 (evalTrack 은 구간 밖을
+   *             양 끝 값으로 클램프한다).
+   * 모디파이어의 프레임은 접지 않는다. 왕복에서 삼각파 프레임을 넘기면 클럭이 두 배로
+   * 흘러 홀드 격자("2컷, 3컷")가 잘아지고, 전체 길이에 깔린 감쇠 엔벌로프의 꼬리가
+   * 영영 샘플되지 않는다. 배수(repeat) 분기가 원래 그렇듯 흔들림은 문서 시간을 지키고,
+   * once 만 주기 끝에서 멈춰 세운다. 멈춘 모션 위에서 흔들림만 계속되면 안 되기 때문이다.
    */
   const repeat = effectiveRepeat(layer, durationFrames)
   const period = repeat > 1 ? durationFrames / repeat : durationFrames
-  const localFrame = repeat > 1 ? (frame % period) * repeat : frame
+  const loopMode = layer.motionLoop
+  let localFrame: number
+  let modifierFrame = frame
+  if (loopMode === 'pingPong') {
+    const pos = period > 0 ? (frame % period) / period : 0
+    const tri = pos < 0.5 ? pos * 2 : (1 - pos) * 2
+    localFrame = tri * durationFrames
+  } else if (loopMode === 'once') {
+    const clamped = Math.min(frame, period)
+    localFrame = clamped * repeat
+    modifierFrame = clamped
+  } else {
+    localFrame = repeat > 1 ? (frame % period) * repeat : frame
+  }
 
   const t = identityTransform()
   t.anchorX = layer.anchor[0]
@@ -223,7 +253,7 @@ export function resolveLayerTransform(
   // 오버스캔 솔버는 이보다 더 뒤에 돈다.
   for (const m of layer.modifiers) {
     const value = evalModifier(m, {
-      frame,
+      frame: modifierFrame,
       durationFrames: period,
       projectSeed: PROJECT_SEED,
       nodeId: layer.id,
@@ -399,11 +429,20 @@ export function resolveComposition(
      * 한 번으로 "폴더가 사라지면 안쪽도 사라진다" 가 따라온다.
      */
     let folderVisible = true
+    // 색 덧씌우기는 가장 가까운 것 하나만 이긴다. 자기 것 > 안쪽 폴더 > 바깥 폴더.
+    let tintSpec = layer.tint && layer.tint.amount > 0 ? layer.tint : undefined
     for (const folder of folderChain(doc.layers, layer)) {
       const folderTransform = resolveLayerTransformWithParents(doc, folder, frame)
       const folderGate = layerTimeGate(folder, frame)
       transform.opacity *= folderTransform.opacity * folderGate
       if (!folder.visible || folderGate <= 0) folderVisible = false
+      if (!tintSpec && folder.tint && folder.tint.amount > 0) tintSpec = folder.tint
+    }
+    // 렌더러가 프레임마다 문자열을 파싱하지 않도록 여기서 숫자로 푼다.
+    let tint: ResolvedLayer['tint']
+    if (tintSpec) {
+      const [r, g, b] = parseHexColor(tintSpec.color)
+      tint = { r, g, b, amount: Math.min(1, Math.max(0, tintSpec.amount)) }
     }
 
     resolved.push({
@@ -423,6 +462,7 @@ export function resolveComposition(
       // 뜻이 없는 키를 남기지 않는 편이 읽기 쉽다.
       ...(layer.shape ? { shape: layer.shape } : {}),
       ...(layer.text ? { text: layer.text } : {}),
+      ...(layer.particle ? { particle: layer.particle } : {}),
       /*
        * 글자 등장은 글자 레이어에만 싣는다.
        *
@@ -435,6 +475,7 @@ export function resolveComposition(
         : {}),
       // 가리기도 같은 규칙이다. 'none' 이면 아예 싣지 않아 렌더러가 유니폼조차 만지지 않는다.
       ...(layer.reveal && layer.reveal.mode !== 'none' ? { reveal: layer.reveal } : {}),
+      ...(tint ? { tint } : {}),
     })
   }
   resolved.sort((a, b) => a.z - b.z)

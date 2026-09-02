@@ -40,6 +40,9 @@ uniform sampler2D u_image;
 uniform float u_opacity;
 /** 글자 하나의 투명도. 글자별 등장이 쓴다. */
 uniform float u_charAlpha;
+// 색 덧씌우기. 레이어 셰이더와 같은 규약이다.
+uniform vec3 u_tintColor;
+uniform float u_tintAmount;
 ${REVEAL_GLSL}
 
 in vec2 v_uv;
@@ -48,7 +51,8 @@ out vec4 fragColor;
 
 void main() {
   vec4 c = texture(u_image, v_uv);
+  vec3 rgb = mix(c.rgb, u_tintColor, u_tintAmount);
   float a = c.a * u_opacity * u_charAlpha * mmRevealMask(v_box);
-  fragColor = vec4(c.rgb * a, a);
+  fragColor = vec4(rgb * a, a);
 }
 `

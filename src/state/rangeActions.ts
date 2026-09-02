@@ -52,17 +52,30 @@ export function setRangeStart(layerIds: readonly string[], frame: number): numbe
   return entries.length
 }
 
-/** 끝 프레임을 정한다. 시작은 그대로 둔다. */
+/**
+ * 끝 프레임을 정한다. 시작은 그대로 둔다.
+ *
+ * 재생헤드는 프레임 칸의 왼쪽 변에 서 있는 점이다. 시작은 그 점부터 보이고,
+ * 끝은 그 점까지만 보인다. 그래서 저장되는 outFrame(포함)은 재생헤드 프레임의
+ * 한 칸 앞이다. 재생헤드 프레임 자체를 넣으면 막대 오른끝이 재생헤드 선보다
+ * 한 칸 뒤에 그려져, 시작 괄호와 끝 괄호가 서로 다른 자리에 맞는 것처럼 보인다.
+ */
 export function setRangeEnd(layerIds: readonly string[], frame: number): number {
   const store = useDocumentStore.getState()
   const last = lastFrame()
   const at = clamp(Math.round(frame), 0, last)
+  /*
+   * 구간은 한 프레임보다 짧아질 수 없다. 0 프레임에서 누르면 첫 칸 하나가 남는다.
+   * 마지막 프레임에서 누르면 끝까지 다 넣는다. 재생헤드는 마지막 칸 너머로 갈 수
+   * 없어서, 여기서도 한 칸을 빼면 마지막 프레임을 포함시킬 방법이 아예 없어진다.
+   */
+  const end = at >= last ? last : Math.max(0, at - 1)
   const entries = layerIds
     .map((id) => {
       const layer = store.doc.layers.find((l) => l.id === id)
       if (!layer) return null
       const start = typeof layer.inFrame === 'number' ? clamp(layer.inFrame, 0, last) : 0
-      return { layerId: id, inFrame: Math.min(start, at), outFrame: at }
+      return { layerId: id, inFrame: Math.min(start, end), outFrame: end }
     })
     .filter((e): e is { layerId: string; inFrame: number; outFrame: number } => e !== null)
   store.setLayerRanges(entries, '구간 끝 변경')
@@ -111,30 +124,33 @@ export function splitSequential(
 }
 
 /**
- * 이 레이어를 이 프레임에서 시작하게 놓는다. 레이어 패널에서 끌어다 놓는 길이다.
+ * 이 레이어들을 이 프레임에서 시작하게 놓는다. 레이어 패널에서 끌어다 놓는 길이다.
  *
- * 길이는 지금 구간의 길이를 그대로 쓴다. 구간이 없으면 기본 길이다. 끌어 놓는
- * 조작에서 길이까지 달라지면 여러 장을 차례로 놓는 동안 리듬이 어긋난다.
+ * 길이는 장마다 지금 구간의 길이를 그대로 쓴다. 구간이 없으면 기본 길이다. 끌어
+ * 놓는 조작에서 길이까지 달라지면 여러 장을 차례로 놓는 동안 리듬이 어긋난다.
+ * 여러 장을 한꺼번에 놓아도 실행취소는 한 칸이다.
  */
-export function dropRangeAt(layerId: string, frame: number): boolean {
+export function dropRangesAt(layerIds: readonly string[], frame: number): number {
   const store = useDocumentStore.getState()
-  const layer = store.doc.layers.find((l) => l.id === layerId)
-  if (!layer) return false
-
   const last = lastFrame()
-  const hasRange =
-    typeof layer.inFrame === 'number' &&
-    typeof layer.outFrame === 'number' &&
-    Number.isFinite(layer.inFrame) &&
-    Number.isFinite(layer.outFrame)
-  const span = hasRange
-    ? Math.max(1, layer.outFrame! - layer.inFrame! + 1)
-    : defaultRangeFrames(last + 1)
+  const entries: { layerId: string; inFrame: number; outFrame: number }[] = []
 
-  const start = clamp(Math.round(frame), 0, Math.max(0, last - span + 1))
-  store.setLayerRanges(
-    [{ layerId, inFrame: start, outFrame: Math.min(last, start + span - 1) }],
-    '타임라인에 놓기',
-  )
-  return true
+  for (const layerId of layerIds) {
+    const layer = store.doc.layers.find((l) => l.id === layerId)
+    if (!layer) continue
+    const hasRange =
+      typeof layer.inFrame === 'number' &&
+      typeof layer.outFrame === 'number' &&
+      Number.isFinite(layer.inFrame) &&
+      Number.isFinite(layer.outFrame)
+    const span = hasRange
+      ? Math.max(1, layer.outFrame! - layer.inFrame! + 1)
+      : defaultRangeFrames(last + 1)
+    const start = clamp(Math.round(frame), 0, Math.max(0, last - span + 1))
+    entries.push({ layerId, inFrame: start, outFrame: Math.min(last, start + span - 1) })
+  }
+
+  if (entries.length === 0) return 0
+  store.setLayerRanges(entries, '타임라인에 놓기')
+  return entries.length
 }
